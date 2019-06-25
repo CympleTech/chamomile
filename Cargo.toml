@@ -1,0 +1,21 @@
+[package]
+name = "chamomile"
+version = "0.1.0"
+authors = ["sun"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bytes = "0.4"
+
+# crypto
+rsa = "0.1"
+ed25519-dalek = "1.0.0-pre.0"
+libsecp256k1 = "0.2"
+
+# serializtion
+
+# transport
+
+# rpc
