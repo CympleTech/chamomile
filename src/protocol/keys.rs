@@ -1,5 +1,7 @@
 use bytes::Bytes;
 
+use crate::core::peer_id::PeerID;
+
 pub enum KeyType {
     RSA,       //RSA = 0,
     Ed25519,   //Ed25519 = 1;
@@ -15,4 +17,10 @@ pub struct PublicKey {
 pub struct PrivateKey {
     key_type: KeyType,
     data: Bytes,
+}
+
+impl PublicKey {
+    pub fn peer_id(&self) -> PeerID {
+        Default::default()
+    }
 }
