@@ -1,4 +1,7 @@
-use bytes::Bytes;
+use serde_derive::{Deserialize, Serialize};
 
-#[derive(Clone, Default, Debug)]
-pub struct PeerID(Bytes); // Multihash peer id
+//use crate::core::primitives::PEER_ID_LENGTH;
+//use bytes::Bytes;
+
+#[derive(Clone, Default, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
+pub struct PeerID(Vec<u8>); // Multihash peer id TODO Bytes or u8 array

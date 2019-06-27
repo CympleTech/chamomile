@@ -10,12 +10,15 @@ keywords = ["distributed", "blockchain", "infrastructure", "p2p", "libp2p"]
 license = "MIT/Apache-2.0"
 
 [dependencies]
+serde = "1"
+serde_derive = "1"
 bytes = "0.4"
 
 # tokio
 tokio = "0.1"
 futures = "0.1"
 actix = "0.8"
+rckad = "0.0.3"
 
 # crypto
 rsa = "0.1"
