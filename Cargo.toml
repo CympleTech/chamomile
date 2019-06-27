@@ -18,7 +18,13 @@ bytes = "0.4"
 tokio = "0.1"
 futures = "0.1"
 actix = "0.8"
+yamux = { git = "https://github.com/paritytech/yamux", version = "0.2.1" }
+
 rckad = "0.0.3"
+
+
+# Protocol Lab
+multiaddr = "*"
 
 # crypto
 rsa = "0.1"

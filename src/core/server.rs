@@ -1,4 +1,5 @@
 use actix::prelude::*;
+use multiaddr::Multiaddr;
 use rckad::KadTree;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -7,19 +8,21 @@ use std::path::PathBuf;
 use super::message::*;
 use super::session::{SessionActor, SessionClose, SessionOpen, SessionReceive, SessionSend};
 use crate::core::peer_id::PeerID;
+use crate::transports::TransportType;
 
-pub struct ActorServer {
+pub struct ServerActor {
     peer_id: PeerID,
     recipient_p2p: Recipient<P2PMessage>,
     recipient_peer_join: Recipient<PeerJoin>,
     recipient_peer_leave: Recipient<PeerLeave>,
     sessions: HashMap<PeerID, Addr<SessionActor>>,
-    dht: KadTree<PeerID, SocketAddr>,
+    dht: KadTree<PeerID, Multiaddr>,
 }
 
-impl ActorServer {
+impl ServerActor {
     pub fn load(
         socket: SocketAddr,
+        transport_type: TransportType,
         path: PathBuf,
         recipient_p2p: Recipient<P2PMessage>,
         recipient_peer_join: Recipient<PeerJoin>,
@@ -27,9 +30,9 @@ impl ActorServer {
     ) -> Self {
         let peer_id = PeerID::default();
         let sessions = HashMap::new();
-        let dht = KadTree::new(peer_id.clone(), socket.clone());
+        let dht = KadTree::new(peer_id.clone(), transport_type.to_multiaddr(&socket));
 
-        ActorServer {
+        ServerActor {
             peer_id,
             recipient_p2p,
             recipient_peer_join,
@@ -44,11 +47,11 @@ impl ActorServer {
     }
 }
 
-impl Actor for ActorServer {
+impl Actor for ServerActor {
     type Context = Context<Self>;
 }
 
-impl Handler<P2PMessage> for ActorServer {
+impl Handler<P2PMessage> for ServerActor {
     type Result = ();
 
     fn handle(&mut self, msg: P2PMessage, _ctx: &mut Context<Self>) {
@@ -56,7 +59,7 @@ impl Handler<P2PMessage> for ActorServer {
     }
 }
 
-impl Handler<PeerJoinResult> for ActorServer {
+impl Handler<PeerJoinResult> for ServerActor {
     type Result = ();
 
     fn handle(&mut self, msg: PeerJoinResult, _ctx: &mut Context<Self>) {
@@ -64,7 +67,7 @@ impl Handler<PeerJoinResult> for ActorServer {
     }
 }
 
-impl Handler<SessionOpen> for ActorServer {
+impl Handler<SessionOpen> for ServerActor {
     type Result = ();
 
     fn handle(&mut self, msg: SessionOpen, _ctx: &mut Context<Self>) {
@@ -72,7 +75,7 @@ impl Handler<SessionOpen> for ActorServer {
     }
 }
 
-impl Handler<SessionClose> for ActorServer {
+impl Handler<SessionClose> for ServerActor {
     type Result = ();
 
     fn handle(&mut self, msg: SessionClose, _ctx: &mut Context<Self>) {
@@ -80,7 +83,7 @@ impl Handler<SessionClose> for ActorServer {
     }
 }
 
-impl Handler<SessionReceive> for ActorServer {
+impl Handler<SessionReceive> for ServerActor {
     type Result = ();
 
     fn handle(&mut self, msg: SessionReceive, _ctx: &mut Context<Self>) {
