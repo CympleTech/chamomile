@@ -14,15 +14,10 @@ serde = "1"
 serde_derive = "1"
 bytes = "0.4"
 
-# tokio
+# runtime
+actix = "0.8"
 tokio = "0.1"
 futures = "0.1"
-actix = "0.8"
-yamux = { git = "https://github.com/paritytech/yamux", version = "0.2.1" }
-#kcp = { path = "../kcp" }
-
-rckad = "0.0.3"
-
 
 # Protocol Lab
 multiaddr = "*"
@@ -31,10 +26,20 @@ multiaddr = "*"
 rsa = "0.1"
 ed25519-dalek = "1.0.0-pre.0"
 libsecp256k1 = "0.2"
+rckad = "0.0.3"
 
 # serializtion
 
-# transport
+## transport
+# QUIC
+
+# TCP
+yamux = { git = "https://github.com/paritytech/yamux", version = "0.2.1" }
+
+# KCP
+#kcp = { path = "../kcp" }
+
+
 
 # rpc
 
