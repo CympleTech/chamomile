@@ -15,14 +15,14 @@ pub struct ServerActor {
     recipient_p2p: Recipient<P2PMessage>,
     recipient_peer_join: Recipient<PeerJoin>,
     recipient_peer_leave: Recipient<PeerLeave>,
-    sessions: HashMap<PeerID, Addr<SessionActor>>,
+    sessions: HashMap<PeerID, ()>,
     dht: KadTree<PeerID, Multiaddr>,
 }
 
 impl ServerActor {
     pub fn load(
-        socket: SocketAddr,
         transport_type: TransportType,
+        socket: SocketAddr,
         path: PathBuf,
         recipient_p2p: Recipient<P2PMessage>,
         recipient_peer_join: Recipient<PeerJoin>,

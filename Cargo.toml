@@ -19,6 +19,7 @@ tokio = "0.1"
 futures = "0.1"
 actix = "0.8"
 yamux = { git = "https://github.com/paritytech/yamux", version = "0.2.1" }
+#kcp = { path = "../kcp" }
 
 rckad = "0.0.3"
 

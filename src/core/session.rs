@@ -1,11 +1,18 @@
+use actix::io::FramedWrite;
+use actix::io::WriteHandler;
 use actix::prelude::*;
+use bytes::BytesMut;
+use futures::stream::Stream;
 use std::net::SocketAddr;
+use tokio::codec::BytesCodec;
+use tokio::io::AsyncWrite;
+use tokio::io::WriteHalf;
 
 use crate::core::peer_id::PeerID;
 use crate::protocol::keys::{PrivateKey, PublicKey};
-use crate::transport::BytesMessage;
+use crate::transports::BytesMessage;
 
-use super::server::ActorServer;
+use super::server::ServerActor;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SessionReceive(pub PeerID, pub Vec<u8>);
@@ -35,23 +42,25 @@ impl Message for SessionClose {
     type Result = ();
 }
 
-pub(crate) struct SessionActor {
+pub(crate) struct SessionActor<T: 'static + Stream + AsyncWrite> {
     self_peer_id: PeerID,
     self_pk: PublicKey,
     self_psk: PrivateKey,
     other_peer_id: PeerID,
     other_pk: PublicKey,
     socket: SocketAddr,
-    server_addr: Addr<ActorServer>,
+    server_addr: Addr<ServerActor>,
+    write_stream: FramedWrite<WriteHalf<T>, BytesCodec>,
 }
 
-impl SessionActor {
+impl<T: 'static + Stream + AsyncWrite> SessionActor<T> {
     pub fn new(
         self_peer_id: PeerID,
         self_pk: PublicKey,
         self_psk: PrivateKey,
-        server_addr: Addr<ActorServer>,
+        server_addr: Addr<ServerActor>,
         socket: SocketAddr,
+        write_stream: FramedWrite<WriteHalf<T>, BytesCodec>,
     ) -> Self {
         Self {
             self_peer_id: self_peer_id,
@@ -61,11 +70,12 @@ impl SessionActor {
             other_pk: Default::default(),
             socket: socket,
             server_addr: server_addr,
+            write_stream: write_stream,
         }
     }
 }
 
-impl Actor for SessionActor {
+impl<T: 'static + Stream + AsyncWrite> Actor for SessionActor<T> {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
@@ -81,11 +91,15 @@ impl Actor for SessionActor {
     }
 }
 
-impl StreamHandler<BytesMessage, std::io::Error> for SessionActor {
-    fn handle(&mut self, msg: BytesMessage, _ctx: &mut Context<Self>) {}
+impl<T: 'static + Stream + AsyncWrite> WriteHandler<std::io::Error> for SessionActor<T> {}
+
+impl<T: 'static + Stream + AsyncWrite> StreamHandler<BytesCodec, std::io::Error>
+    for SessionActor<T>
+{
+    fn handle(&mut self, msg: BytesCodec, _ctx: &mut Context<Self>) {}
 }
 
-impl Handler<SessionSend> for SessionActor {
+impl<T: 'static + Stream + AsyncWrite> Handler<SessionSend> for SessionActor<T> {
     type Result = ();
 
     fn handle(&mut self, msg: SessionSend, _ctx: &mut Context<Self>) {
@@ -93,7 +107,7 @@ impl Handler<SessionSend> for SessionActor {
     }
 }
 
-impl Handler<SessionClose> for SessionActor {
+impl<T: 'static + Stream + AsyncWrite> Handler<SessionClose> for SessionActor<T> {
     type Result = ();
 
     fn handle(&mut self, msg: SessionClose, ctx: &mut Context<Self>) {

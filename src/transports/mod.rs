@@ -1,8 +1,10 @@
+mod kcp;
 mod quic;
 mod tcp;
 mod udp;
 
-use actix::prelude::Addr;
+use actix::prelude::{Addr, Message};
+use bytes::Bytes;
 use multiaddr::{AddrComponent, Multiaddr};
 use std::net::SocketAddr;
 
@@ -14,6 +16,7 @@ pub enum TransportType {
     TCP,
     UDP,
     QUIC,
+    KCP,
 }
 
 impl TransportType {
@@ -31,6 +34,7 @@ impl TransportType {
             TCP => AddrComponent::TCP(port),
             UDP => AddrComponent::UDP(port),
             QUIC => AddrComponent::UDP(port),
+            KCP => AddrComponent::UDP(port),
         };
 
         multi_addr.append(proto_component);
@@ -49,7 +53,7 @@ pub(crate) fn listen_tcp(
     self_pk: PublicKey,
     self_psk: PrivateKey,
     server_addr: Addr<ServerActor>,
-    addr: &SocketAddr,
+    addr: SocketAddr,
 ) {
 
 }
@@ -59,7 +63,7 @@ pub(crate) fn listen_udp(
     self_pk: PublicKey,
     self_psk: PrivateKey,
     server_addr: Addr<ServerActor>,
-    addr: &SocketAddr,
+    addr: SocketAddr,
 ) {
 
 }
@@ -69,7 +73,23 @@ pub(crate) fn listen_quic(
     self_pk: PublicKey,
     self_psk: PrivateKey,
     server_addr: Addr<ServerActor>,
-    addr: &SocketAddr,
+    addr: SocketAddr,
 ) {
 
+}
+
+pub(crate) fn listen_kcp(
+    self_peer_id: PeerID,
+    self_pk: PublicKey,
+    self_psk: PrivateKey,
+    server_addr: Addr<ServerActor>,
+    addr: SocketAddr,
+) {
+
+}
+
+pub struct BytesMessage(pub Multiaddr, pub Bytes);
+
+impl Message for BytesMessage {
+    type Result = ();
 }
