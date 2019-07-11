@@ -8,11 +8,21 @@ use tokio::codec::BytesCodec;
 use tokio::io::AsyncWrite;
 use tokio::io::WriteHalf;
 
+use multiaddr::Multiaddr;
+
 use crate::core::peer_id::PeerID;
 use crate::protocol::keys::{PrivateKey, PublicKey};
 use crate::transports::BytesMessage;
 
 use super::server::ServerActor;
+
+#[derive(Clone, Debug)]
+pub(crate) struct SessionCreate(pub Multiaddr);
+
+impl Message for SessionCreate {
+    //type Result = Recipient<SessionSend>;
+    type Result = ();
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct SessionReceive(pub PeerID, pub Vec<u8>);
@@ -22,7 +32,7 @@ impl Message for SessionReceive {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct SessionSend(pub Vec<u8>);
+pub(crate) struct SessionSend(pub Vec<u8>, pub bool);
 
 impl Message for SessionSend {
     type Result = ();

@@ -53,7 +53,7 @@ fn main() -> std::io::Result<()> {
             let addr = ctx.address();
 
             let server = ServerActor::load(
-                TransportType::KCP,
+                TransportType::QUIC,
                 socket,
                 path,
                 addr.clone().recipient::<P2PMessage>(),

@@ -46,15 +46,13 @@ impl Handler<PeerLeave> for ChatServer {
 
 fn main() -> std::io::Result<()> {
     System::run(|| {
-        let socket: SocketAddr = "0.0.0.0:12345".parse().unwrap();
         let path: PathBuf = PathBuf::from("./tea");
 
         ChatServer::create(move |ctx| {
             let addr = ctx.address();
 
             let server = ServerActor::load(
-                TransportType::KCP,
-                socket,
+                TransportType::QUIC,
                 path,
                 addr.clone().recipient::<P2PMessage>(),
                 addr.clone().recipient::<PeerJoin>(),
