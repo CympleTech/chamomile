@@ -3,21 +3,54 @@ use bytes::Bytes;
 use crossbeam_channel as mpmc;
 use futures::future::ok;
 use quinn::{
-    Certificate, CertificateChain, ClientConfig, ClientConfigBuilder, Endpoint, EndpointDriver,
-    Incoming, PrivateKey, ServerConfig, ServerConfigBuilder, TransportConfig,
+    Certificate, CertificateChain, ClientConfig, ClientConfigBuilder, Connection, ConnectionDriver,
+    Endpoint, EndpointDriver, Incoming, IncomingStreams, PrivateKey, ServerConfig,
+    ServerConfigBuilder, TransportConfig,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crate::core::session::{SessionActor, SessionCreate, SessionSend};
+use crate::core::peer_id::PeerID;
+use crate::core::server::ServerActor;
+use crate::core::session::{SessionCreate, SessionSend};
+use crate::protocol::keys::{PrivateKey as PeerPrivateKey, PublicKey as PeerPublicKey};
+
+use super::session::{NewStream, QuicSession};
 
 pub(crate) struct QuicListener {
+    self_peer_id: PeerID,
+    server_addr: Addr<ServerActor>,
     socket: SocketAddr,
 }
 
 impl QuicListener {
-    pub fn new(socket: SocketAddr) -> Self {
-        QuicListener { socket }
+    pub fn new(self_peer_id: PeerID, server_addr: Addr<ServerActor>, socket: SocketAddr) -> Self {
+        QuicListener {
+            self_peer_id,
+            server_addr,
+            socket,
+        }
+    }
+}
+
+struct NewConnection(Connection, IncomingStreams);
+
+impl Message for NewConnection {
+    type Result = ();
+}
+
+impl Handler<NewConnection> for QuicListener {
+    type Result = ();
+
+    fn handle(&mut self, msg: NewConnection, ctx: &mut Context<Self>) -> Self::Result {
+        let (q_conn, incoming) = (msg.0, msg.1);
+        let self_peer_id = self.self_peer_id.clone();
+        let server_addr = self.server_addr.clone();
+
+        QuicSession::create(|ctx| {
+            ctx.add_message_stream(incoming.map_err(|_| ()).map(|stream| NewStream(stream)));
+            QuicSession::new(self_peer_id, server_addr, q_conn)
+        });
     }
 }
 
@@ -48,21 +81,20 @@ impl Actor for QuicListener {
         endpoint_builder.listen(server_config);
         let (driver, _endpoint, incoming) = endpoint_builder.bind(self.socket).unwrap();
 
-        incoming.for_each(move |(conn_driver, q_conn, incoming)| {
-            let peer_addr = q_conn.remote_address();
-            incoming.for_each(move |stream| {
-                match stream {
-                    quinn::NewStream::Bi(read_stream, write_stream) => {
-                        // Start SessionActor
-                    }
-                    quinn::NewStream::Uni(read_stream) => {
-                        // Return
-                    }
-                };
-                ok(())
-            });
-            ok(())
-        });
+        tokio::runtime::current_thread::spawn(
+            driver.map_err(|e| println!("Error in quinn Driver: {:?}", e)),
+        );
+
+        ctx.add_message_stream(
+            incoming
+                .map_err(|_| ())
+                .map(|(conn_driver, q_conn, incoming)| {
+                    tokio::runtime::current_thread::spawn(
+                        conn_driver.map_err(|e| println!("Error in quinn Driver: {:?}", e)),
+                    );
+                    NewConnection(q_conn, incoming)
+                }),
+        );
     }
 }
 

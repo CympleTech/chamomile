@@ -13,7 +13,6 @@ use tokio::io::AsyncRead;
 
 use crate::core::peer_id::PeerID;
 use crate::core::server::ServerActor;
-use crate::core::session::SessionActor;
 use crate::protocol::keys::{PrivateKey, PublicKey};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

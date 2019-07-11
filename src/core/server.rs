@@ -6,9 +6,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use super::message::*;
-use super::session::{
-    SessionActor, SessionClose, SessionCreate, SessionOpen, SessionReceive, SessionSend,
-};
+use super::session::{SessionClose, SessionCreate, SessionOpen, SessionReceive, SessionSend};
 use crate::core::peer_id::PeerID;
 use crate::protocol::keys::{PrivateKey, PublicKey};
 use crate::transports::TransportType;

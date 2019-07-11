@@ -70,12 +70,13 @@ impl TransportType {
 
 pub(crate) fn listen_quic(
     self_peer_id: PeerID,
-    self_pk: PublicKey,
-    self_psk: PrivateKey,
+    _self_pk: PublicKey,
+    _self_psk: PrivateKey,
     server_addr: Addr<ServerActor>,
     addr: SocketAddr,
 ) -> Recipient<SessionCreate> {
-    QuicListener::create(move |_ctx| QuicListener::new(addr)).recipient::<SessionCreate>()
+    QuicListener::create(move |_ctx| QuicListener::new(self_peer_id, server_addr, addr))
+        .recipient::<SessionCreate>()
 }
 
 pub(crate) fn listen_tcp(
@@ -85,7 +86,8 @@ pub(crate) fn listen_tcp(
     server_addr: Addr<ServerActor>,
     addr: SocketAddr,
 ) -> Recipient<SessionCreate> {
-    QuicListener::create(move |_ctx| QuicListener::new(addr)).recipient::<SessionCreate>()
+    QuicListener::create(move |_ctx| QuicListener::new(self_peer_id, server_addr, addr))
+        .recipient::<SessionCreate>()
 }
 
 pub(crate) fn listen_udp(
@@ -95,7 +97,8 @@ pub(crate) fn listen_udp(
     server_addr: Addr<ServerActor>,
     addr: SocketAddr,
 ) -> Recipient<SessionCreate> {
-    QuicListener::create(move |_ctx| QuicListener::new(addr)).recipient::<SessionCreate>()
+    QuicListener::create(move |_ctx| QuicListener::new(self_peer_id, server_addr, addr))
+        .recipient::<SessionCreate>()
 }
 
 pub(crate) fn listen_kcp(
@@ -105,7 +108,8 @@ pub(crate) fn listen_kcp(
     server_addr: Addr<ServerActor>,
     addr: SocketAddr,
 ) -> Recipient<SessionCreate> {
-    QuicListener::create(move |_ctx| QuicListener::new(addr)).recipient::<SessionCreate>()
+    QuicListener::create(move |_ctx| QuicListener::new(self_peer_id, server_addr, addr))
+        .recipient::<SessionCreate>()
 }
 
 pub struct BytesMessage(pub Multiaddr, pub Bytes);
