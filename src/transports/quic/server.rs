@@ -1,10 +1,7 @@
 use actix::prelude::*;
-use bytes::Bytes;
-use crossbeam_channel as mpmc;
-use futures::future::ok;
+
 use quinn::{
-    Certificate, CertificateChain, ClientConfig, ClientConfigBuilder, Connection, ConnectionDriver,
-    Endpoint, EndpointDriver, Incoming, IncomingStreams, PrivateKey, ServerConfig,
+    Certificate, CertificateChain, Connection, Endpoint, IncomingStreams, PrivateKey, ServerConfig,
     ServerConfigBuilder, TransportConfig,
 };
 use std::net::SocketAddr;
@@ -12,23 +9,24 @@ use std::sync::Arc;
 
 use crate::core::peer_id::PeerID;
 use crate::core::server::ServerActor;
-use crate::core::session::{SessionCreate, SessionSend};
-use crate::protocol::keys::{PrivateKey as PeerPrivateKey, PublicKey as PeerPublicKey};
+use crate::core::session::SessionCreate;
+//use crate::protocol::keys::{PrivateKey as PeerPrivateKey, PublicKey as PeerPublicKey};
 
+use super::super::TransportType;
 use super::session::{NewStream, QuicSession};
 
 pub(crate) struct QuicListener {
     self_peer_id: PeerID,
     server_addr: Addr<ServerActor>,
-    socket: SocketAddr,
+    endpoint: Endpoint,
 }
 
 impl QuicListener {
-    pub fn new(self_peer_id: PeerID, server_addr: Addr<ServerActor>, socket: SocketAddr) -> Self {
+    pub fn new(self_peer_id: PeerID, server_addr: Addr<ServerActor>, endpoint: Endpoint) -> Self {
         QuicListener {
             self_peer_id,
             server_addr,
-            socket,
+            endpoint,
         }
     }
 }
@@ -42,7 +40,7 @@ impl Message for NewConnection {
 impl Handler<NewConnection> for QuicListener {
     type Result = ();
 
-    fn handle(&mut self, msg: NewConnection, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: NewConnection, _ctx: &mut Context<Self>) -> Self::Result {
         let (q_conn, incoming) = (msg.0, msg.1);
         let self_peer_id = self.self_peer_id.clone();
         let server_addr = self.server_addr.clone();
@@ -56,8 +54,30 @@ impl Handler<NewConnection> for QuicListener {
 
 impl Actor for QuicListener {
     type Context = Context<Self>;
+}
 
-    fn started(&mut self, ctx: &mut Context<Self>) {
+impl Handler<SessionCreate> for QuicListener {
+    type Result = ();
+
+    fn handle(&mut self, msg: SessionCreate, _ctx: &mut Context<Self>) -> Self::Result {
+        let socket = TransportType::extract_socket(&msg.0);
+        let _ = self.endpoint.connect(&socket, "").map(|conn| {
+            let _ = conn.into_0rtt().map(|(conn_driver, q_conn, incoming)| {
+                tokio::runtime::current_thread::spawn(
+                    conn_driver.map_err(|e| println!("Error in quinn Driver: {:?}", e)),
+                );
+                NewConnection(q_conn, incoming)
+            });
+        });
+    }
+}
+
+pub(crate) fn start_quic(
+    self_peer_id: PeerID,
+    server_addr: Addr<ServerActor>,
+    addr: SocketAddr,
+) -> Recipient<SessionCreate> {
+    QuicListener::create(move |ctx| {
         let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
         let cert_der = cert.serialize_der().unwrap();
         let priv_key = cert.serialize_private_key_der();
@@ -76,10 +96,10 @@ impl Actor for QuicListener {
             .certificate(CertificateChain::from_certs(vec![cert]), priv_key)
             .unwrap();
 
-        let (server_config, server_cert) = (cfg_builder.build(), cert_der);
+        let (server_config, _server_cert) = (cfg_builder.build(), cert_der);
         let mut endpoint_builder = Endpoint::builder();
         endpoint_builder.listen(server_config);
-        let (driver, _endpoint, incoming) = endpoint_builder.bind(self.socket).unwrap();
+        let (driver, endpoint, incoming) = endpoint_builder.bind(addr).unwrap();
 
         tokio::runtime::current_thread::spawn(
             driver.map_err(|e| println!("Error in quinn Driver: {:?}", e)),
@@ -95,14 +115,7 @@ impl Actor for QuicListener {
                     NewConnection(q_conn, incoming)
                 }),
         );
-    }
-}
-
-impl Handler<SessionCreate> for QuicListener {
-    //type Result = Recipient<SessionSend>;
-    type Result = ();
-
-    fn handle(&mut self, msg: SessionCreate, ctx: &mut Context<Self>) -> Self::Result {
-        //SessionActor.start().recipient::<SessionSend>()
-    }
+        QuicListener::new(self_peer_id, server_addr, endpoint)
+    })
+    .recipient::<SessionCreate>()
 }
