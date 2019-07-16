@@ -13,7 +13,8 @@ use crate::core::server::ServerActor;
 use crate::core::session::SessionCreate;
 use crate::protocol::keys::{PrivateKey, PublicKey};
 
-use quic::server::start_quic;
+use quic::start_quic;
+use tcp::start_tcp;
 
 #[derive(Hash, Eq, PartialEq, Clone)]
 pub enum TransportType {
@@ -97,12 +98,12 @@ pub(crate) fn listen_quic(
 
 pub(crate) fn listen_tcp(
     self_peer_id: PeerID,
-    _self_pk: PublicKey,
-    _self_psk: PrivateKey,
+    self_pk: PublicKey,
+    self_psk: PrivateKey,
     server_addr: Addr<ServerActor>,
     addr: SocketAddr,
 ) -> Recipient<SessionCreate> {
-    start_quic(self_peer_id, server_addr, addr)
+    start_tcp(self_peer_id, self_pk, self_psk, server_addr, addr)
 }
 
 pub(crate) fn listen_udp(

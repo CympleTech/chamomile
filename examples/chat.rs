@@ -2,11 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use chamomile::actix::*;
-use chamomile::prelude::{
-    P2PMessage, PeerID, PeerJoin, PeerJoinResult, PeerLeave, ServerActor, SpecialP2PMessage,
-    TransportType,
+use chamomile::actor::{
+    actix::*, P2PMessage, PeerJoin, PeerJoinResult, PeerLeave, ServerActor, SpecialP2PMessage,
 };
+use chamomile::prelude::{PeerID, TransportType};
 
 /// Define tcp server that will accept incoming tcp connection and create
 /// chat actors.
@@ -52,7 +51,7 @@ fn main() -> std::io::Result<()> {
             let addr = ctx.address();
 
             let server = ServerActor::load(
-                TransportType::QUIC,
+                TransportType::TCP,
                 path,
                 addr.clone().recipient::<P2PMessage>(),
                 addr.clone().recipient::<PeerJoin>(),
@@ -70,7 +69,5 @@ fn main() -> std::io::Result<()> {
                 p2p_server: server_addr,
             }
         });
-
-        println!("Running chat server on 127.0.0.1:12345");
     })
 }

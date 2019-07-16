@@ -32,7 +32,7 @@ impl ServerActor {
         recipient_peer_join: Recipient<PeerJoin>,
         recipient_peer_leave: Recipient<PeerLeave>,
     ) -> Self {
-        let socket: SocketAddr = "0.0.0.0:12345".parse().unwrap();
+        let socket: SocketAddr = "127.0.0.1:8000".parse().unwrap();
         let peer_id = PeerID::default();
         let sessions = HashMap::new();
         let dht = KadTree::new(peer_id.clone(), main_transport_type.to_multiaddr(&socket));
@@ -63,7 +63,10 @@ impl Actor for ServerActor {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Context<Self>) {
-        let socket: SocketAddr = "0.0.0.0:12345".parse().unwrap();
+        let socket: SocketAddr = "127.0.0.1:8000".parse().unwrap();
+        let test_sock: SocketAddr = "127.0.0.1:8001".parse().unwrap();
+
+        println!("DEBUG: server listening: {}", socket);
         let session_create = self.main_transport_type.start_listener(
             self.peer_id.clone(),
             self.peer_pk.clone(),
@@ -71,6 +74,11 @@ impl Actor for ServerActor {
             ctx.address(),
             socket,
         );
+
+        let tt = TransportType::TCP;
+
+        let _ = session_create.do_send(SessionCreate(tt.to_multiaddr(&test_sock)));
+
         self.running_transports
             .insert(self.main_transport_type.clone(), session_create);
     }
@@ -96,15 +104,17 @@ impl Handler<SessionOpen> for ServerActor {
     type Result = ();
 
     fn handle(&mut self, msg: SessionOpen, _ctx: &mut Context<Self>) {
-        let (_peer_id, _socket) = (msg.0, msg.1);
+        let (_peer_id, multiaddr, writer) = (msg.0, msg.1, msg.2);
+        println!("DEBUG: ServerActor connect open: {}", multiaddr);
+        let _ = writer.do_send(SessionSend(vec![2, 4, 6, 8], false));
     }
 }
 
 impl Handler<SessionClose> for ServerActor {
     type Result = ();
 
-    fn handle(&mut self, msg: SessionClose, _ctx: &mut Context<Self>) {
-        let _peer_id = msg.0;
+    fn handle(&mut self, _msg: SessionClose, _ctx: &mut Context<Self>) {
+        println!("DEBUG: ServerActor connect close");
     }
 }
 

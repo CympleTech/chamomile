@@ -35,8 +35,11 @@ rckad = "0.0.3"
 # QUIC
 quinn = "~0.3.0"
 rcgen = "0.4"
+webpki = "0.19"
+rustls = { version = "0.15.2", features = ["quic", "dangerous_configuration"] }
 
 # TCP
+socket2 = "0.3"
 yamux = { git = "https://github.com/paritytech/yamux", version = "0.2.1" }
 
 # KCP
