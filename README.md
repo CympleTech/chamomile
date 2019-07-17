@@ -1,5 +1,5 @@
 ## Chamomile
-*Libp2p implement on Actor*
+*Another P2P implement*
 
 ### features cfg
 - serializtion abstrat: capnproto/protobuf/flatbuffer
@@ -10,7 +10,7 @@
 - Keys abstrat: RSA/Ed25519/Secp256k1/ECDSA
 
 ## 设计点
-1. 兼容libp2p和部分Protocol Lab协议
+1. 兼容部分libp2p与Protocol Lab协议
 2. 提供多种类型的features设置
 3. 手机和物联网设备与PC, 服务器均作为一等公民
 4. 能够适应各种复杂的网络环境的传输和穿透

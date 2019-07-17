@@ -1,8 +1,9 @@
 use bytes::Bytes;
+use serde_derive::{Deserialize, Serialize};
 
 use crate::core::peer_id::PeerID;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum KeyType {
     RSA,       //RSA = 0,
     Ed25519,   //Ed25519 = 1;
@@ -17,13 +18,13 @@ impl Default for KeyType {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 pub struct PublicKey {
     key_type: KeyType,
     data: Bytes,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 pub struct PrivateKey {
     key_type: KeyType,
     data: Bytes,

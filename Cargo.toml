@@ -10,10 +10,6 @@ keywords = ["distributed", "blockchain", "infrastructure", "p2p", "libp2p"]
 license = "MIT/Apache-2.0"
 
 [dependencies]
-serde = "1"
-serde_derive = "1"
-bytes = "0.4"
-
 # runtime
 actix = "0.8"
 tokio = "0.1"
@@ -30,6 +26,10 @@ libsecp256k1 = "0.2"
 rckad = "0.0.3"
 
 # serializtion
+bytes = { version = "0.4", features = ["serde"] }
+serde = "1"
+serde_derive = "1"
+bincode = "1"
 
 ## transport
 # QUIC

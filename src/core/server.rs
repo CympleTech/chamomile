@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use super::message::*;
+use super::peer_list::PeerList;
 use super::session::{SessionClose, SessionCreate, SessionOpen, SessionReceive, SessionSend};
 use crate::core::peer_id::PeerID;
 use crate::protocol::keys::{PrivateKey, PublicKey};
@@ -19,7 +20,7 @@ pub struct ServerActor {
     recipient_peer_join: Recipient<PeerJoin>,
     recipient_peer_leave: Recipient<PeerLeave>,
     sessions: HashMap<PeerID, Recipient<SessionSend>>,
-    dht: KadTree<PeerID, Multiaddr>,
+    peer_list: PeerList,
     main_transport_type: TransportType,
     running_transports: HashMap<TransportType, Recipient<SessionCreate>>,
 }
@@ -35,9 +36,9 @@ impl ServerActor {
         let socket: SocketAddr = "127.0.0.1:8000".parse().unwrap();
         let peer_id = PeerID::default();
         let sessions = HashMap::new();
-        let dht = KadTree::new(peer_id.clone(), main_transport_type.to_multiaddr(&socket));
         let peer_pk = Default::default();
         let peer_psk = Default::default();
+        let peer_list = PeerList::init(peer_id.clone(), main_transport_type.to_multiaddr(&socket));
         let running_transports = HashMap::new();
 
         ServerActor {
@@ -48,7 +49,7 @@ impl ServerActor {
             recipient_peer_join,
             recipient_peer_leave,
             sessions,
-            dht,
+            peer_list,
             main_transport_type,
             running_transports,
         }
@@ -63,8 +64,8 @@ impl Actor for ServerActor {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Context<Self>) {
-        let socket: SocketAddr = "127.0.0.1:8000".parse().unwrap();
-        let test_sock: SocketAddr = "127.0.0.1:8001".parse().unwrap();
+        let socket: SocketAddr = "127.0.0.1:8001".parse().unwrap();
+        let test_sock: SocketAddr = "127.0.0.1:8000".parse().unwrap();
 
         println!("DEBUG: server listening: {}", socket);
         let session_create = self.main_transport_type.start_listener(

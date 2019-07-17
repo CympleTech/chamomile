@@ -4,6 +4,7 @@ use std::str::FromStr;
 use actix::io::FramedWrite;
 use actix::prelude::*;
 use futures::Stream;
+use multiaddr::Multiaddr;
 use socket2::{Domain, Socket, Type};
 use tokio::codec::BytesCodec;
 use tokio::codec::FramedRead;
@@ -21,7 +22,10 @@ use super::session::TcpSessionActor;
 
 struct TcpListenActor {
     self_peer_id: PeerID,
+    self_pk: PublicKey,
+    self_psk: PrivateKey,
     self_socket: SocketAddr,
+    self_multiaddr: Multiaddr,
     server_addr: Addr<ServerActor>,
 }
 
@@ -43,12 +47,18 @@ impl Handler<TcpConnect> for TcpListenActor {
 
         let server_addr = self.server_addr.clone();
         let self_peer_id = self.self_peer_id.clone();
+        let self_pk = self.self_pk.clone();
+        let self_psk = self.self_psk.clone();
+        let self_multiaddr = self.self_multiaddr.clone();
 
         TcpSessionActor::create(move |ctx| {
             let (r, w) = msg.0.split();
             TcpSessionActor::add_stream(FramedRead::new(r, BytesCodec::new()), ctx);
             TcpSessionActor::new(
                 self_peer_id,
+                self_pk,
+                self_psk,
+                self_multiaddr,
                 server_addr,
                 FramedWrite::new(w, BytesCodec::new(), ctx),
                 msg.1,
@@ -87,12 +97,18 @@ impl Handler<SessionCreate> for TcpListenActor {
 
         let server_addr = self.server_addr.clone();
         let self_peer_id = self.self_peer_id.clone();
+        let self_pk = self.self_pk.clone();
+        let self_psk = self.self_psk.clone();
+        let self_multiaddr = self.self_multiaddr.clone();
 
         TcpSessionActor::create(move |ctx| {
             let (r, w) = stream.split();
             TcpSessionActor::add_stream(FramedRead::new(r, BytesCodec::new()), ctx);
             TcpSessionActor::new(
                 self_peer_id,
+                self_pk,
+                self_psk,
+                self_multiaddr,
                 server_addr,
                 FramedWrite::new(w, BytesCodec::new(), ctx),
                 remote_socket,
@@ -103,8 +119,8 @@ impl Handler<SessionCreate> for TcpListenActor {
 
 pub(crate) fn start_tcp(
     self_peer_id: PeerID,
-    _self_pk: PublicKey,
-    _self_psk: PrivateKey,
+    self_pk: PublicKey,
+    self_psk: PrivateKey,
     server_addr: Addr<ServerActor>,
     addr: SocketAddr,
 ) -> Recipient<SessionCreate> {
@@ -121,10 +137,16 @@ pub(crate) fn start_tcp(
             let addr = st.peer_addr().unwrap();
             TcpConnect(st, addr)
         }));
+
+        let self_multiaddr = TransportType::TCP.to_multiaddr(&addr);
+
         TcpListenActor {
             self_peer_id: self_peer_id,
             self_socket: addr,
+            self_pk: self_pk,
+            self_psk: self_psk,
             server_addr: server_addr,
+            self_multiaddr: self_multiaddr,
         }
     })
     .recipient::<SessionCreate>()

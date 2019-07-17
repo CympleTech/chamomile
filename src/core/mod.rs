@@ -1,5 +1,6 @@
 pub mod message;
 pub mod peer_id;
+pub mod peer_list;
 pub mod server;
 
 pub(crate) mod config;

@@ -12,6 +12,7 @@ use tokio::net::tcp::TcpStream;
 use multiaddr::Multiaddr;
 
 use crate::core::peer_id::PeerID;
+use crate::core::primitives::DataType;
 use crate::core::server::ServerActor;
 use crate::core::session::{SessionClose, SessionCreate, SessionOpen, SessionReceive, SessionSend};
 use crate::protocol::keys::{PrivateKey, PublicKey};
@@ -20,8 +21,11 @@ use super::super::TransportType;
 
 pub struct TcpSessionActor {
     self_peer_id: PeerID,
-    server_addr: Addr<ServerActor>,
+    self_psk: PrivateKey,
+    self_pk: PublicKey,
+    self_multiaddr: Multiaddr,
     remote_multiaddr: Multiaddr,
+    server_addr: Addr<ServerActor>,
     framed: FramedWrite<WriteHalf<TcpStream>, BytesCodec>,
 }
 
@@ -46,7 +50,23 @@ impl WriteHandler<std::io::Error> for TcpSessionActor {}
 
 impl StreamHandler<BytesMut, std::io::Error> for TcpSessionActor {
     fn handle(&mut self, msg: BytesMut, _ctx: &mut Self::Context) {
-        println!("DEBUG: SessionActor received data: {:?}", msg);
+        bincode::deserialize::<DataType>(&msg[..])
+            .map(|data_type| match data_type {
+                DataType::Identity(multiaddr, pk) => {}
+                DataType::DHT(multiaddrs) => {}
+                DataType::DH(_data) => {}
+                DataType::Hole(multiaddr) => {}
+                DataType::Ping => {
+                    println!("DEBUG: SessionActor receive ping");
+                    self.framed
+                        .write(bincode::serialize(&DataType::Pong).unwrap().into());
+                }
+                DataType::Pong => {
+                    println!("DEBUG: SessionActor receive pong");
+                }
+                DataType::RawData(_data) => {}
+            })
+            .map_err(|_| println!("DEBUG: SessionActor received unknown data"));
     }
 }
 
@@ -56,7 +76,8 @@ impl Handler<SessionSend> for TcpSessionActor {
     fn handle(&mut self, msg: SessionSend, _ctx: &mut Context<Self>) {
         println!("DEBUG: SessionActor send data: {:?}", msg.0);
 
-        self.framed.write(msg.0.into());
+        self.framed
+            .write(bincode::serialize(&DataType::Ping).unwrap().into());
     }
 }
 
@@ -71,6 +92,9 @@ impl Handler<SessionClose> for TcpSessionActor {
 impl TcpSessionActor {
     pub fn new(
         self_peer_id: PeerID,
+        self_pk: PublicKey,
+        self_psk: PrivateKey,
+        self_multiaddr: Multiaddr,
         server_addr: Addr<ServerActor>,
         framed: FramedWrite<WriteHalf<TcpStream>, BytesCodec>,
         remote_socket: SocketAddr,
@@ -79,6 +103,9 @@ impl TcpSessionActor {
 
         TcpSessionActor {
             self_peer_id,
+            self_pk,
+            self_psk,
+            self_multiaddr,
             server_addr,
             framed,
             remote_multiaddr,
