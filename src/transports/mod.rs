@@ -24,7 +24,26 @@ pub enum TransportType {
     KCP,
 }
 
+impl Default for TransportType {
+    fn default() -> Self {
+        TransportType::TCP
+    }
+}
+
 impl TransportType {
+    pub fn from_multiaddr(multiaddr: &Multiaddr) -> Self {
+        // TODO need improve
+        for v in multiaddr.iter() {
+            match v {
+                AddrComponent::TCP(p) => return TransportType::TCP,
+                AddrComponent::UDP(p) => return TransportType::UDP,
+                _ => {}
+            }
+        }
+
+        Default::default()
+    }
+
     pub fn to_multiaddr(&self, socket: &SocketAddr) -> Multiaddr {
         let port = socket.port();
 
@@ -75,8 +94,10 @@ impl TransportType {
         self_pk: PublicKey,
         self_psk: PrivateKey,
         server_addr: Addr<ServerActor>,
-        addr: SocketAddr,
+        multiaddr: &Multiaddr,
     ) -> Recipient<SessionCreate> {
+        let addr = Self::extract_socket(multiaddr);
+
         match self {
             TransportType::TCP => listen_tcp(self_peer_id, self_pk, self_psk, server_addr, addr),
             TransportType::UDP => listen_udp(self_peer_id, self_pk, self_psk, server_addr, addr),

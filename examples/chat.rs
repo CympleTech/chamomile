@@ -51,7 +51,6 @@ fn main() -> std::io::Result<()> {
             let addr = ctx.address();
 
             let server = ServerActor::load(
-                TransportType::TCP,
                 path,
                 addr.clone().recipient::<P2PMessage>(),
                 addr.clone().recipient::<PeerJoin>(),

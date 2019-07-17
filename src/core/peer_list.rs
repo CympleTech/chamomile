@@ -51,8 +51,7 @@ impl PeerList {
     }
 
     pub fn remove(&mut self, peer_id: &PeerID) -> Option<Multiaddr> {
-        self.peers.remove(peer_id);
-        None // TODO fix DHT remove add return Value
+        self.peers.remove(peer_id)
     }
 
     pub fn add_tmp_peer(&mut self, peer_id: PeerID, multiaddr: Multiaddr) {
