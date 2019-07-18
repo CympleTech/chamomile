@@ -1,11 +1,10 @@
 use actix::prelude::*;
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use super::config::Configure;
 use super::message::*;
-use super::peer_list::PeerList;
+use super::peer_list::{NodeAddr, PeerList};
 use super::session::{SessionClose, SessionCreate, SessionOpen, SessionReceive, SessionSend};
 use crate::core::peer_id::PeerID;
 use crate::protocol::keys::{PrivateKey, PublicKey};
@@ -18,7 +17,6 @@ pub struct ServerActor {
     recipient_p2p: Recipient<P2PMessage>,
     recipient_peer_join: Recipient<PeerJoin>,
     recipient_peer_leave: Recipient<PeerLeave>,
-    sessions: HashMap<PeerID, Recipient<SessionSend>>,
     peer_list: PeerList,
     transport_config: Configure,
     running_transports: HashMap<TransportType, Recipient<SessionCreate>>,
@@ -33,11 +31,10 @@ impl ServerActor {
     ) -> Self {
         let transport_config = Configure::load();
         let peer_id = PeerID::default();
-        let sessions = HashMap::new();
         let peer_pk = Default::default();
         let peer_psk = Default::default();
 
-        let peer_list = PeerList::init(peer_id.clone(), transport_config.main_multiaddr().clone());
+        let peer_list = PeerList::init(peer_id.clone());
         let running_transports = HashMap::new();
 
         ServerActor {
@@ -47,7 +44,6 @@ impl ServerActor {
             recipient_p2p,
             recipient_peer_join,
             recipient_peer_leave,
-            sessions,
             peer_list,
             transport_config,
             running_transports,
@@ -87,7 +83,12 @@ impl Handler<P2PMessage> for ServerActor {
     type Result = ();
 
     fn handle(&mut self, msg: P2PMessage, _ctx: &mut Context<Self>) {
-        let (_peer_id, _data) = (msg.0, msg.1);
+        let (peer_id, data) = (msg.0, msg.1);
+        self.peer_list.get(&peer_id).and_then(|node| {
+            node.session()
+                .do_send(SessionSend(peer_id, data, false))
+                .ok()
+        });
     }
 }
 
@@ -95,7 +96,10 @@ impl Handler<PeerJoinResult> for ServerActor {
     type Result = ();
 
     fn handle(&mut self, msg: PeerJoinResult, _ctx: &mut Context<Self>) {
-        let (_peer_id, _is_joined) = (msg.0, msg.1);
+        let (peer_id, is_joined) = (msg.0, msg.1);
+        if is_joined {
+            self.peer_list.stabilize_tmp_peer(peer_id);
+        }
     }
 }
 
@@ -103,17 +107,24 @@ impl Handler<SessionOpen> for ServerActor {
     type Result = ();
 
     fn handle(&mut self, msg: SessionOpen, _ctx: &mut Context<Self>) {
-        let (_peer_id, multiaddr, writer) = (msg.0, msg.1, msg.2);
+        let (peer_id, multiaddr, writer, join_data) = (msg.0, msg.1, msg.2, msg.3);
         println!("DEBUG: ServerActor connect open: {}", multiaddr);
-        let _ = writer.do_send(SessionSend(vec![2, 4, 6, 8], false));
+
+        self.peer_list
+            .add_tmp_peer(peer_id.clone(), NodeAddr::new(multiaddr, writer));
+
+        self.recipient_peer_join
+            .do_send(PeerJoin(peer_id, join_data));
     }
 }
 
 impl Handler<SessionClose> for ServerActor {
     type Result = ();
 
-    fn handle(&mut self, _msg: SessionClose, _ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: SessionClose, _ctx: &mut Context<Self>) {
         println!("DEBUG: ServerActor connect close");
+        self.peer_list.remove(&msg.0);
+        self.recipient_peer_leave.do_send(PeerLeave(msg.0));
     }
 }
 
@@ -121,6 +132,18 @@ impl Handler<SessionReceive> for ServerActor {
     type Result = ();
 
     fn handle(&mut self, msg: SessionReceive, _ctx: &mut Context<Self>) {
-        let (_peer_id, _data) = (msg.0, msg.1);
+        let (from, to, data) = (msg.0, msg.1, msg.2);
+        println!(
+            "DEBUG: ServerActor receive peer: {:?}, to: {:?}, data: {:?}",
+            from, to, data
+        );
+
+        if to == self.peer_id {
+            self.recipient_p2p.do_send(P2PMessage(from, data));
+        } else {
+            self.peer_list
+                .get(&to)
+                .and_then(|node| node.session().do_send(SessionSend(to, data, false)).ok());
+        }
     }
 }

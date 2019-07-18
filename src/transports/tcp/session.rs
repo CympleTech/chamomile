@@ -24,6 +24,7 @@ pub struct TcpSessionActor {
     self_psk: PrivateKey,
     self_pk: PublicKey,
     self_multiaddr: Multiaddr,
+    remote_peer_id: PeerID,
     remote_multiaddr: Multiaddr,
     server_addr: Addr<ServerActor>,
     framed: FramedWrite<WriteHalf<TcpStream>, BytesCodec>,
@@ -37,11 +38,13 @@ impl Actor for TcpSessionActor {
             self.self_peer_id.clone(),
             self.remote_multiaddr.clone(),
             ctx.address().recipient::<SessionSend>(),
+            vec![], // TODO when get peer's peer_id and then send to server
         ));
     }
 
     fn stopping(&mut self, _: &mut Self::Context) -> Running {
-        self.server_addr.do_send(SessionClose);
+        self.server_addr
+            .do_send(SessionClose(self.remote_peer_id.clone()));
         Running::Stop
     }
 }
@@ -64,7 +67,10 @@ impl StreamHandler<BytesMut, std::io::Error> for TcpSessionActor {
                 DataType::Pong => {
                     println!("DEBUG: SessionActor receive pong");
                 }
-                DataType::RawData(_data) => {}
+                DataType::RawData(to, data) => {
+                    self.server_addr
+                        .do_send(SessionReceive(self.remote_peer_id.clone(), to, data));
+                }
             })
             .map_err(|_| println!("DEBUG: SessionActor received unknown data"));
     }
@@ -74,10 +80,18 @@ impl Handler<SessionSend> for TcpSessionActor {
     type Result = ();
 
     fn handle(&mut self, msg: SessionSend, _ctx: &mut Context<Self>) {
-        println!("DEBUG: SessionActor send data: {:?}", msg.0);
+        println!("DEBUG: SessionActor send peer: {:?}", msg.0);
+        if !msg.1.is_empty() {
+            self.framed.write(
+                bincode::serialize(&DataType::RawData(msg.0, msg.1))
+                    .unwrap()
+                    .into(),
+            );
+        }
 
-        self.framed
-            .write(bincode::serialize(&DataType::Ping).unwrap().into());
+        if msg.2 {
+            self.framed.close()
+        }
     }
 }
 
@@ -99,6 +113,7 @@ impl TcpSessionActor {
         framed: FramedWrite<WriteHalf<TcpStream>, BytesCodec>,
         remote_socket: SocketAddr,
     ) -> TcpSessionActor {
+        let remote_peer_id = Default::default();
         let remote_multiaddr = TransportType::TCP.to_multiaddr(&remote_socket);
 
         TcpSessionActor {
@@ -108,6 +123,7 @@ impl TcpSessionActor {
             self_multiaddr,
             server_addr,
             framed,
+            remote_peer_id,
             remote_multiaddr,
         }
     }

@@ -63,7 +63,7 @@ impl Actor for QuicSessionActor {
 
         tokio::runtime::current_thread::spawn(driver.map_err(move |e| {
             println!("DEBUG: Error in connection Driver: {:?}", e);
-            self_addr.do_send(SessionClose);
+            self_addr.do_send(SessionClose(Default::default()));
         }));
 
         let comingers =
@@ -123,15 +123,14 @@ impl Actor for QuicSessionActor {
             self.self_peer_id.clone(),
             self.remote_addr(),
             ctx.address().recipient::<SessionSend>(),
+            vec![],
         ));
 
         self.heartbeat(ctx);
     }
 
     fn stopping(&mut self, _: &mut Self::Context) -> Running {
-        println!("here");
-        self.server_addr.do_send(SessionClose);
-        println!("heretwo");
+        self.server_addr.do_send(SessionClose(Default::default()));
 
         Running::Stop
     }
@@ -179,7 +178,7 @@ impl Handler<SessionSend> for QuicSessionActor {
     type Result = ();
 
     fn handle(&mut self, msg: SessionSend, _ctx: &mut Context<Self>) {
-        let data = msg.0;
+        let data = msg.1;
         println!("receive need send data: {:?}", data);
         let writer = self
             .conn

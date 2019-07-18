@@ -28,8 +28,11 @@ impl Actor for ReaderStream {
 impl StreamHandler<BytesMut, std::io::Error> for ReaderStream {
     fn handle(&mut self, msg: BytesMut, ctx: &mut Context<Self>) {
         println!("value: {:?}", msg);
-        self.server_addr
-            .do_send(SessionReceive(self.peer_id.clone(), msg.to_vec()));
+        self.server_addr.do_send(SessionReceive(
+            self.peer_id.clone(),
+            self.peer_id.clone(),
+            msg.to_vec(),
+        ));
 
         self.stopping(ctx);
     }

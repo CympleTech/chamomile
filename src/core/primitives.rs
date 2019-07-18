@@ -49,8 +49,8 @@ pub enum DataType {
     Identity(String, PublicKey), //String -> Multiaddr
     DHT(Vec<(PeerID, String)>),  // String -> Multiaddr
     DH(Vec<u8>),
-    RawData(Vec<u8>),
-    Hole(String), // String -> Multiaddr
+    RawData(PeerID, Vec<u8>), // to_peer_id, data
+    Hole(String),             // String -> Multiaddr
     Ping,
     Pong,
 }
