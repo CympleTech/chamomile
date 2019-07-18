@@ -16,7 +16,7 @@ use crate::protocol::keys::{PrivateKey, PublicKey};
 use quic::start_quic;
 use tcp::start_tcp;
 
-#[derive(Hash, Eq, PartialEq, Clone)]
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum TransportType {
     TCP,
     UDP,
