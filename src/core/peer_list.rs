@@ -2,6 +2,7 @@ use actix::prelude::Recipient;
 use multiaddr::Multiaddr;
 use rckad::KadTree;
 use std::collections::HashMap;
+use std::iter::Iterator;
 
 use super::session::SessionSend;
 use crate::core::peer_id::PeerID;
@@ -43,7 +44,15 @@ impl PeerList {
 
     pub(crate) fn load() {}
 
-    pub fn all(&self) {}
+    pub fn all(&self) -> Vec<(PeerID, Recipient<SessionSend>)> {
+        let keys = self.peers.keys();
+        keys.into_iter()
+            .map(|key| {
+                let node = self.get(&key).unwrap().session().clone();
+                (key, node)
+            })
+            .collect()
+    }
 
     /// get in DHT, DHT closest.
     pub fn get(&self, peer_id: &PeerID) -> Option<&NodeAddr> {

@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use chamomile::actor::{
-    actix::*, P2PMessage, PeerJoin, PeerJoinResult, PeerLeave, ServerActor, SpecialP2PMessage,
+    actix::*, DirectP2PMessage, PeerJoin, PeerJoinResult, PeerLeave, ServerActor, SpecialP2PMessage,
 };
 use chamomile::prelude::{PeerID, TransportType};
 
@@ -19,10 +19,10 @@ impl Actor for ChatServer {
     type Context = Context<Self>;
 }
 
-impl Handler<P2PMessage> for ChatServer {
+impl Handler<DirectP2PMessage> for ChatServer {
     type Result = ();
 
-    fn handle(&mut self, msg: P2PMessage, _ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: DirectP2PMessage, _ctx: &mut Context<Self>) {
         let (peer_id, data) = (msg.0, msg.1);
     }
 }
@@ -52,7 +52,7 @@ fn main() -> std::io::Result<()> {
 
             let server = ServerActor::load(
                 path,
-                addr.clone().recipient::<P2PMessage>(),
+                addr.clone().recipient::<DirectP2PMessage>(),
                 addr.clone().recipient::<PeerJoin>(),
                 addr.recipient::<PeerLeave>(),
             );

@@ -4,9 +4,16 @@ use std::net::SocketAddr;
 use crate::core::peer_id::PeerID;
 
 #[derive(Clone, Debug)]
-pub struct P2PMessage(pub PeerID, pub Vec<u8>);
+pub struct DirectP2PMessage(pub PeerID, pub Vec<u8>);
 
-impl Message for P2PMessage {
+impl Message for DirectP2PMessage {
+    type Result = ();
+}
+
+#[derive(Clone, Debug)]
+pub struct BroadcastP2PMessage(pub Vec<u8>);
+
+impl Message for BroadcastP2PMessage {
     type Result = ();
 }
 

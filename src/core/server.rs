@@ -14,7 +14,7 @@ pub struct ServerActor {
     peer_id: PeerID,
     peer_pk: PublicKey,
     peer_psk: PrivateKey,
-    recipient_p2p: Recipient<P2PMessage>,
+    recipient_p2p: Recipient<DirectP2PMessage>,
     recipient_peer_join: Recipient<PeerJoin>,
     recipient_peer_leave: Recipient<PeerLeave>,
     peer_list: PeerList,
@@ -25,7 +25,7 @@ pub struct ServerActor {
 impl ServerActor {
     pub fn load(
         path: PathBuf,
-        recipient_p2p: Recipient<P2PMessage>,
+        recipient_p2p: Recipient<DirectP2PMessage>,
         recipient_peer_join: Recipient<PeerJoin>,
         recipient_peer_leave: Recipient<PeerLeave>,
     ) -> Self {
@@ -79,14 +79,27 @@ impl Actor for ServerActor {
     }
 }
 
-impl Handler<P2PMessage> for ServerActor {
+impl Handler<DirectP2PMessage> for ServerActor {
     type Result = ();
 
-    fn handle(&mut self, msg: P2PMessage, _ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: DirectP2PMessage, _ctx: &mut Context<Self>) {
         let (peer_id, data) = (msg.0, msg.1);
         self.peer_list.get(&peer_id).and_then(|node| {
             node.session()
                 .do_send(SessionSend(peer_id, data, false))
+                .ok()
+        });
+    }
+}
+
+impl Handler<BroadcastP2PMessage> for ServerActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: BroadcastP2PMessage, _ctx: &mut Context<Self>) {
+        let data = msg.0;
+        self.peer_list.all().into_iter().map(|(peer_id, session)| {
+            session
+                .do_send(SessionSend(peer_id, data.clone(), false))
                 .ok()
         });
     }
@@ -139,7 +152,7 @@ impl Handler<SessionReceive> for ServerActor {
         );
 
         if to == self.peer_id {
-            self.recipient_p2p.do_send(P2PMessage(from, data));
+            self.recipient_p2p.do_send(DirectP2PMessage(from, data));
         } else {
             self.peer_list
                 .get(&to)

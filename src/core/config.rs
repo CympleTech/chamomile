@@ -21,7 +21,7 @@ impl ConfigureRow {
 
         let mut transports_socket = DEFAULT_TRANSPORT_SOCKET.clone();
         transports_socket.insert(main_transport.clone(), main_multiaddr);
-        let mut default_transports_socket: Vec<(TransportType, Multiaddr)> = self
+        let default_transports_socket: Vec<(TransportType, Multiaddr)> = self
             .p2p_default_listens
             .iter()
             .filter_map(|p| {
@@ -31,10 +31,9 @@ impl ConfigureRow {
             })
             .collect();
 
-        while !default_transports_socket.is_empty() {
-            let (t, m) = default_transports_socket.pop().unwrap();
+        default_transports_socket.into_iter().map(|(t, m)| {
             transports_socket.insert(t, m);
-        }
+        });
 
         let bootstraps = self
             .p2p_bootstraps
