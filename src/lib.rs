@@ -8,7 +8,7 @@ extern crate lazy_static;
 mod core;
 mod keys;
 mod protocol;
-mod secio;
+mod security;
 mod serialization;
 mod transports;
 
