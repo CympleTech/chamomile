@@ -3,8 +3,7 @@
 
 ### features
 - serializtion abstrat: capnproto
-- transport abstrat: QUIC/TCP
-- RPC abstrat: JSONRPC
+- transport abstrat: UDP/TCP/UDP-Based Special Protocol
 
 ## Design point
 - Mobile phones, IoT devices, PC and servers are first-class citizens

@@ -1,19 +1,22 @@
 [package]
 name = "chamomile"
 version = "0.1.0"
-authors = ["Sun <huachuang20@gmail.com>"]
-edition = "2018"
+authors = ["Contact <contact@cypherlink.io>"]
 readme = "README.md"
-description = "p2p library"
-repository = "https://github.com/placefortea/chamomile"
+description = "Another P2P Library. Support IoT devices."
+repository = "https://github.com/cypherlink/chamomile"
 keywords = ["distributed", "blockchain", "infrastructure", "p2p", "libp2p"]
 license = "MIT/Apache-2.0"
+edition = "2018"
 
 [dependencies]
 lazy_static = "1.3"
 toml = "0.5"
 
-# runtime
+# async runtime and channel
+async_std = "0.99"
+crossbeam = "0.7"
+
 actix = "0.8"
 tokio = "0.1"
 futures = "0.1"
