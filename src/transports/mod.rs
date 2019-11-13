@@ -1,148 +1,150 @@
-mod kcp;
-mod quic;
-mod tcp;
-mod udp;
+// mod kcp;
+// mod quic;
+// mod tcp;
+// mod udp;
 
-use actix::prelude::{Addr, Message, Recipient};
-use bytes::Bytes;
-use multiaddr::{AddrComponent, Multiaddr};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+pub mod udp;
 
-use crate::core::peer_id::PeerID;
-use crate::core::server::ServerActor;
-use crate::core::session::SessionCreate;
-use crate::protocol::keys::{PrivateKey, PublicKey};
+// use actix::prelude::{Addr, Message, Recipient};
+// use bytes::Bytes;
+// use multiaddr::{AddrComponent, Multiaddr};
+// use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-use quic::start_quic;
-use tcp::start_tcp;
+// use crate::core::peer_id::PeerID;
+// use crate::core::server::ServerActor;
+// use crate::core::session::SessionCreate;
+// use crate::protocol::keys::{PrivateKey, PublicKey};
 
-#[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub enum TransportType {
-    TCP,
-    UDP,
-    QUIC,
-    KCP,
-}
+// use quic::start_quic;
+// use tcp::start_tcp;
 
-impl Default for TransportType {
-    fn default() -> Self {
-        TransportType::TCP
-    }
-}
+// #[derive(Hash, Eq, PartialEq, Clone, Debug)]
+// pub enum TransportType {
+//     TCP,
+//     UDP,
+//     QUIC,
+//     KCP,
+// }
 
-impl TransportType {
-    pub fn from_multiaddr(multiaddr: &Multiaddr) -> Self {
-        // TODO need improve
-        for v in multiaddr.iter() {
-            match v {
-                AddrComponent::TCP(p) => return TransportType::TCP,
-                AddrComponent::UDP(p) => return TransportType::UDP,
-                _ => {}
-            }
-        }
+// impl Default for TransportType {
+//     fn default() -> Self {
+//         TransportType::TCP
+//     }
+// }
 
-        Default::default()
-    }
+// impl TransportType {
+//     pub fn from_multiaddr(multiaddr: &Multiaddr) -> Self {
+//         // TODO need improve
+//         for v in multiaddr.iter() {
+//             match v {
+//                 AddrComponent::TCP(p) => return TransportType::TCP,
+//                 AddrComponent::UDP(p) => return TransportType::UDP,
+//                 _ => {}
+//             }
+//         }
 
-    pub fn to_multiaddr(&self, socket: &SocketAddr) -> Multiaddr {
-        let port = socket.port();
+//         Default::default()
+//     }
 
-        let ip_component = match socket {
-            SocketAddr::V4(v4_sock) => AddrComponent::IP4(v4_sock.ip().clone()),
-            SocketAddr::V6(v6_sock) => AddrComponent::IP6(v6_sock.ip().clone()),
-        };
+//     pub fn to_multiaddr(&self, socket: &SocketAddr) -> Multiaddr {
+//         let port = socket.port();
 
-        let mut multi_addr: Multiaddr = ip_component.into();
+//         let ip_component = match socket {
+//             SocketAddr::V4(v4_sock) => AddrComponent::IP4(v4_sock.ip().clone()),
+//             SocketAddr::V6(v6_sock) => AddrComponent::IP6(v6_sock.ip().clone()),
+//         };
 
-        let proto_component = match self {
-            TransportType::TCP => AddrComponent::TCP(port),
-            TransportType::UDP => AddrComponent::UDP(port),
-            TransportType::QUIC => AddrComponent::UDP(port),
-            TransportType::KCP => AddrComponent::UDP(port),
-        };
+//         let mut multi_addr: Multiaddr = ip_component.into();
 
-        multi_addr.append(proto_component);
+//         let proto_component = match self {
+//             TransportType::TCP => AddrComponent::TCP(port),
+//             TransportType::UDP => AddrComponent::UDP(port),
+//             TransportType::QUIC => AddrComponent::UDP(port),
+//             TransportType::KCP => AddrComponent::UDP(port),
+//         };
 
-        match self {
-            TransportType::QUIC => multi_addr.append(AddrComponent::QUIC),
-            _ => {}
-        }
+//         multi_addr.append(proto_component);
 
-        multi_addr
-    }
+//         match self {
+//             TransportType::QUIC => multi_addr.append(AddrComponent::QUIC),
+//             _ => {}
+//         }
 
-    pub fn extract_socket(addr: &Multiaddr) -> SocketAddr {
-        let mut ip_string: String = "0.0.0.0".to_owned();
-        let mut port: u16 = 0;
+//         multi_addr
+//     }
 
-        for v in addr.iter() {
-            match v {
-                AddrComponent::IP4(ip) => ip_string = format!("{}", ip),
-                AddrComponent::IP6(ip) => ip_string = format!("{}", ip),
-                AddrComponent::TCP(p) => port = p,
-                AddrComponent::UDP(p) => port = p,
-                _ => {}
-            }
-        }
+//     pub fn extract_socket(addr: &Multiaddr) -> SocketAddr {
+//         let mut ip_string: String = "0.0.0.0".to_owned();
+//         let mut port: u16 = 0;
 
-        SocketAddr::new(ip_string.parse().unwrap(), port)
-    }
+//         for v in addr.iter() {
+//             match v {
+//                 AddrComponent::IP4(ip) => ip_string = format!("{}", ip),
+//                 AddrComponent::IP6(ip) => ip_string = format!("{}", ip),
+//                 AddrComponent::TCP(p) => port = p,
+//                 AddrComponent::UDP(p) => port = p,
+//                 _ => {}
+//             }
+//         }
 
-    pub(crate) fn start_listener(
-        &self,
-        self_peer_id: PeerID,
-        self_pk: PublicKey,
-        self_psk: PrivateKey,
-        server_addr: Addr<ServerActor>,
-        multiaddr: &Multiaddr,
-    ) -> Recipient<SessionCreate> {
-        let addr = Self::extract_socket(multiaddr);
+//         SocketAddr::new(ip_string.parse().unwrap(), port)
+//     }
 
-        match self {
-            TransportType::TCP => listen_tcp(self_peer_id, self_pk, self_psk, server_addr, addr),
-            TransportType::UDP => listen_udp(self_peer_id, self_pk, self_psk, server_addr, addr),
-            TransportType::QUIC => listen_quic(self_peer_id, self_pk, self_psk, server_addr, addr),
-            TransportType::KCP => listen_kcp(self_peer_id, self_pk, self_psk, server_addr, addr),
-        }
-    }
-}
+//     pub(crate) fn start_listener(
+//         &self,
+//         self_peer_id: PeerID,
+//         self_pk: PublicKey,
+//         self_psk: PrivateKey,
+//         server_addr: Addr<ServerActor>,
+//         multiaddr: &Multiaddr,
+//     ) -> Recipient<SessionCreate> {
+//         let addr = Self::extract_socket(multiaddr);
 
-pub(crate) fn listen_quic(
-    self_peer_id: PeerID,
-    _self_pk: PublicKey,
-    _self_psk: PrivateKey,
-    server_addr: Addr<ServerActor>,
-    addr: SocketAddr,
-) -> Recipient<SessionCreate> {
-    start_quic(self_peer_id, server_addr, addr)
-}
+//         match self {
+//             TransportType::TCP => listen_tcp(self_peer_id, self_pk, self_psk, server_addr, addr),
+//             TransportType::UDP => listen_udp(self_peer_id, self_pk, self_psk, server_addr, addr),
+//             TransportType::QUIC => listen_quic(self_peer_id, self_pk, self_psk, server_addr, addr),
+//             TransportType::KCP => listen_kcp(self_peer_id, self_pk, self_psk, server_addr, addr),
+//         }
+//     }
+// }
 
-pub(crate) fn listen_tcp(
-    self_peer_id: PeerID,
-    self_pk: PublicKey,
-    self_psk: PrivateKey,
-    server_addr: Addr<ServerActor>,
-    addr: SocketAddr,
-) -> Recipient<SessionCreate> {
-    start_tcp(self_peer_id, self_pk, self_psk, server_addr, addr)
-}
+// pub(crate) fn listen_quic(
+//     self_peer_id: PeerID,
+//     _self_pk: PublicKey,
+//     _self_psk: PrivateKey,
+//     server_addr: Addr<ServerActor>,
+//     addr: SocketAddr,
+// ) -> Recipient<SessionCreate> {
+//     start_quic(self_peer_id, server_addr, addr)
+// }
 
-pub(crate) fn listen_udp(
-    self_peer_id: PeerID,
-    _self_pk: PublicKey,
-    _self_psk: PrivateKey,
-    server_addr: Addr<ServerActor>,
-    addr: SocketAddr,
-) -> Recipient<SessionCreate> {
-    start_quic(self_peer_id, server_addr, addr)
-}
+// pub(crate) fn listen_tcp(
+//     self_peer_id: PeerID,
+//     self_pk: PublicKey,
+//     self_psk: PrivateKey,
+//     server_addr: Addr<ServerActor>,
+//     addr: SocketAddr,
+// ) -> Recipient<SessionCreate> {
+//     start_tcp(self_peer_id, self_pk, self_psk, server_addr, addr)
+// }
 
-pub(crate) fn listen_kcp(
-    self_peer_id: PeerID,
-    _self_pk: PublicKey,
-    _self_psk: PrivateKey,
-    server_addr: Addr<ServerActor>,
-    addr: SocketAddr,
-) -> Recipient<SessionCreate> {
-    start_quic(self_peer_id, server_addr, addr)
-}
+// pub(crate) fn listen_udp(
+//     self_peer_id: PeerID,
+//     _self_pk: PublicKey,
+//     _self_psk: PrivateKey,
+//     server_addr: Addr<ServerActor>,
+//     addr: SocketAddr,
+// ) -> Recipient<SessionCreate> {
+//     start_quic(self_peer_id, server_addr, addr)
+// }
+
+// pub(crate) fn listen_kcp(
+//     self_peer_id: PeerID,
+//     _self_pk: PublicKey,
+//     _self_psk: PrivateKey,
+//     server_addr: Addr<ServerActor>,
+//     addr: SocketAddr,
+// ) -> Recipient<SessionCreate> {
+//     start_quic(self_peer_id, server_addr, addr)
+// }
