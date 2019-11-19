@@ -16,6 +16,7 @@ rand = "0.7"
 
 # async runtime and channel
 async-std = { version = "1", features = ["unstable"] }
+async-trait = "0.1"
 
 # Protocol Lab
 multiaddr = "*"

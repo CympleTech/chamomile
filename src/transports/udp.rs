@@ -1,40 +1,47 @@
 use async_std::net::UdpSocket;
-use async_std::net::ToSocketAddrs;
 use async_std::io::Result;
 use async_std::sync::{channel, Sender, Receiver};
 use async_std::task;
 use async_std::sync::Arc;
+use async_trait::async_trait;
 use std::net::SocketAddr;
 use std::collections::{HashMap, BTreeMap};
 use rand::{RngCore, thread_rng};
 
-/// max task capacity for udp to handle.
-pub const MAX_MESSAGE_CAPACITY: usize = 1024;
+use super::{Endpoint, EndpointMessage, MAX_MESSAGE_CAPACITY};
 
 /// 576(MTU) - 8(Head) - 20(IP) - 8(ID + Head) = 540
 const UDP_UINT: usize = 540;
 
-/// udp and outside message type.
-pub type MessageType = (Vec<u8>, SocketAddr);
-
 /// save splited messages buffers.
 type Buffers = HashMap<u32, (u32, BTreeMap<u32, Vec<u8>>)>;
 
-/// Init and run a UdpEndpoint object.
-/// You need send a socketaddr str and udp send message's addr,
-/// and receiver outside message addr.
-pub async fn start(socket_addr: impl ToSocketAddrs, out_send: Sender<MessageType>) -> Result<Sender<MessageType>>{
-    let socket: Arc<UdpSocket> = Arc::new(UdpSocket::bind(socket_addr).await?);
-    let (send, recv) = channel(MAX_MESSAGE_CAPACITY);
+/// UDP Endpoint.
+/// Provide a simple recombine and resend function.
+pub struct UdpEndpoint;
 
-    task::spawn(run_self_recv(socket.clone(), recv));
-    task::spawn(run_listen(socket, out_send));
-    Ok(send)
+#[async_trait]
+impl Endpoint for UdpEndpoint {
+    /// Init and run a UdpEndpoint object.
+    /// You need send a socketaddr str and udp send message's addr,
+    /// and receiver outside message addr.
+    async fn start(
+        socket_addr: SocketAddr,
+        out_send: Sender<EndpointMessage>
+    ) -> Result<Sender<EndpointMessage>>{
+        let socket: Arc<UdpSocket> = Arc::new(UdpSocket::bind(socket_addr).await?);
+        let (send, recv) = channel(MAX_MESSAGE_CAPACITY);
+
+        task::spawn(run_self_recv(socket.clone(), recv));
+        task::spawn(run_listen(socket, out_send));
+        Ok(send)
+    }
+
 }
 
 /// Listen for outside send job.
 /// Split message to buffers, if ok, send to remote.
-async fn run_self_recv(socket: Arc<UdpSocket>, recv: Receiver<MessageType>) -> Result<()> {
+async fn run_self_recv(socket: Arc<UdpSocket>, recv: Receiver<EndpointMessage>) -> Result<()> {
     let mut send_buffers = Buffers::new();
 
     while let Some((mut bytes, peer)) = recv.recv().await {
@@ -86,7 +93,7 @@ async fn run_self_recv(socket: Arc<UdpSocket>, recv: Receiver<MessageType>) -> R
 /// If not completed, save to buffers, and waiting.
 /// If timeout, send request to remote, call send again or drop it.
 /// If completed. send to outside.
-async fn run_listen(socket: Arc<UdpSocket>, send: Sender<MessageType>) -> Result<()> {
+async fn run_listen(socket: Arc<UdpSocket>, send: Sender<EndpointMessage>) -> Result<()> {
     let mut recv_buffers = Buffers::new();
 
     let mut buf = vec![0u8; 8 + UDP_UINT];

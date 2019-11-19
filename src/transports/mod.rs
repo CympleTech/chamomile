@@ -1,9 +1,37 @@
-// mod kcp;
-// mod quic;
-// mod tcp;
-// mod udp;
+use async_std::io::Result;
+use async_std::sync::Sender;
+use async_trait::async_trait;
+use std::net::SocketAddr;
 
-pub mod udp;
+mod udp;
+mod tcp;
+mod rtp;
+mod udt;
+
+/// max task capacity for udp to handle.
+pub const MAX_MESSAGE_CAPACITY: usize = 1024;
+
+/// Message Type for transport and outside.
+/// a tuple struct.
+pub type EndpointMessage = (Vec<u8>, SocketAddr);
+
+/// Transports trait, all transport protocol will implement this.
+#[async_trait]
+pub trait Endpoint {
+    /// Init and run a Endpoint object.
+    /// You need send a bind-socketaddr and received message's addr,
+    /// and return the endpoint's sender addr.
+    async fn start(
+        bind_addr: SocketAddr,
+        send_channel: Sender<EndpointMessage>,
+    ) -> Result<Sender<EndpointMessage>>;
+}
+
+pub use udp::UdpEndpoint;
+pub use tcp::TcpEndpoint;
+
+//TODO pub use rtp::RtpEndpoint;
+//TODO pub use udt::UdtEndpoint;
 
 // use actix::prelude::{Addr, Message, Recipient};
 // use bytes::Bytes;
