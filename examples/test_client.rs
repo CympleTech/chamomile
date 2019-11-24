@@ -1,17 +1,15 @@
-use chamomile::transports::UdpEndpoint;
-use chamomile::transports::Endpoint;
+use chamomile::{start, Config, Message, new_channel};
 use async_std::task;
-use async_std::sync::channel;
 
 fn main() {
     task::block_on(async {
-        let (out_send, out_recv) = channel(10);
-        let udp_send = UdpEndpoint::start("127.0.0.1:8001".parse().unwrap(), out_send).await.unwrap();
-        let peer = "127.0.0.1:8000";
-        udp_send.send((vec![1u8; 10000], peer.parse().unwrap())).await;
+        let (out_send, out_recv) = new_channel();
+        let send = start(out_send, Config::default("127.0.0.1:8001".parse().unwrap())).await.unwrap();
 
-        while let Some((bytes, peer)) = out_recv.recv().await {
-            println!("recv: {:?}, {:?}, len: {}", bytes, peer, bytes.len());
+        send.send(Message::Data(vec![1, 2, 3, 4])).await;
+
+        while let Some(message) = out_recv.recv().await {
+            println!("recv: {:?}", message);
         }
     });
 }
