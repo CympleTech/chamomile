@@ -1,6 +1,6 @@
 use async_std::net::UdpSocket;
 use async_std::io::Result;
-use async_std::sync::{channel, Sender, Receiver};
+use async_std::sync::{Sender, Receiver};
 use async_std::task;
 use async_std::sync::Arc;
 use async_trait::async_trait;
@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use std::collections::{HashMap, BTreeMap};
 use rand::{RngCore, thread_rng};
 
-use super::{Endpoint, EndpointMessage, MAX_MESSAGE_CAPACITY};
+use super::{Endpoint, EndpointMessage, new_channel};
 
 /// 576(MTU) - 8(Head) - 20(IP) - 8(ID + Head) = 540
 const UDP_UINT: usize = 540;
@@ -30,7 +30,7 @@ impl Endpoint for UdpEndpoint {
         out_send: Sender<EndpointMessage>
     ) -> Result<Sender<EndpointMessage>>{
         let socket: Arc<UdpSocket> = Arc::new(UdpSocket::bind(socket_addr).await?);
-        let (send, recv) = channel(MAX_MESSAGE_CAPACITY);
+        let (send, recv) = new_channel();
 
         task::spawn(run_self_recv(socket.clone(), recv));
         task::spawn(run_listen(socket, out_send));

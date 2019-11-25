@@ -1,5 +1,5 @@
 use async_std::io::Result;
-use async_std::sync::Sender;
+use async_std::sync::{channel, Sender, Receiver};
 use async_trait::async_trait;
 use std::net::SocketAddr;
 
@@ -14,6 +14,10 @@ pub const MAX_MESSAGE_CAPACITY: usize = 1024;
 /// Message Type for transport and outside.
 /// a tuple struct.
 pub type EndpointMessage = (Vec<u8>, SocketAddr);
+
+pub fn new_channel() -> (Sender<EndpointMessage>, Receiver<EndpointMessage>) {
+    channel(MAX_MESSAGE_CAPACITY)
+}
 
 /// Transports trait, all transport protocol will implement this.
 #[async_trait]

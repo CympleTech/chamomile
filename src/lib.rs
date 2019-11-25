@@ -19,7 +19,7 @@ pub enum Message {
     PeerLeave(PeerId),
     Connect(SocketAddr),
     DisConnect(SocketAddr),
-    Data(Vec<u8>),
+    Data(Vec<u8>, PeerId),
 }
 
 #[derive(Debug, Clone)]
@@ -60,10 +60,7 @@ pub fn new_channel() -> (Sender<Message>, Receiver<Message>) {
 pub async fn start(out_send: Sender<Message>, config: Config) -> Result<Sender<Message>> {
     let (send, recv) = new_channel();
 
-    task::spawn(async {
-        let server = Server::new(out_send, recv, config);
-        server.start().await
-    });
+    Server::start(Server::new(config), out_send, recv).await?;
 
     Ok(send)
 }
