@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use std::net::SocketAddr;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 
-//mod udp;
+mod udp;
 mod tcp;
 mod rtp;
 mod udt;
@@ -67,8 +67,7 @@ pub trait Endpoint: Send {
     ) -> Result<Sender<EndpointMessage>>;
 }
 
-//pub use udp::UdpEndpoint;
+pub use udp::UdpEndpoint;
 pub use tcp::TcpEndpoint;
-
 //TODO pub use rtp::RtpEndpoint;
 //TODO pub use udt::UdtEndpoint;

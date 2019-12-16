@@ -5,11 +5,9 @@ use async_std::task;
 use std::net::SocketAddr;
 use std::collections::HashMap;
 
-//use crate::transports::UdpEndpoint;
+use crate::transports::UdpEndpoint;
 use crate::transports::TcpEndpoint;
-use crate::transports::Endpoint;
-use crate::transports::EndpointMessage;
-use crate::transports::new_channel;
+use crate::transports::{Endpoint, EndpointMessage, new_channel};
 
 use crate::{PeerId, Message, Config};
 
@@ -64,7 +62,7 @@ impl Server {
         // mock
         let (send, recv) = new_channel();
         let transport_send = match server.default_transport {
-            Transport::UDP(addr) => TcpEndpoint::start(addr, server.peer_id.clone(), send).await?,
+            Transport::UDP(addr) => UdpEndpoint::start(addr, server.peer_id.clone(), send).await?,
             Transport::TCP(addr) => TcpEndpoint::start(addr, server.peer_id.clone(), send).await?,
         };
 
