@@ -15,6 +15,7 @@ toml = "0.5"
 rand = "0.7"
 
 # async runtime and channel
+futures = "0.3"
 async-std = { version = "1", features = ["unstable"] }
 async-trait = "0.1"
 

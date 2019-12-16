@@ -44,7 +44,14 @@ impl Endpoint for UdpEndpoint {
 async fn run_self_recv(socket: Arc<UdpSocket>, recv: Receiver<EndpointMessage>) -> Result<()> {
     let mut send_buffers = Buffers::new();
 
-    while let Some((mut bytes, peer)) = recv.recv().await {
+    while let Some(m) = recv.recv().await {
+        let peer = match m {
+            EndpointMessage::Connect(addr) => addr,
+            EndpointMessage::Disconnect(addr) => addr,
+            EndpointMessage::Connected(addr, _, _) => addr,
+        };
+        let mut bytes = vec![1]; // TODO
+
         let buffer_key = thread_rng().next_u32();
         let total_size = bytes.len();
         let mut new_buffer = BTreeMap::new();
@@ -125,8 +132,8 @@ async fn run_listen(socket: Arc<UdpSocket>, send: Sender<EndpointMessage>) -> Re
                 let data: Vec<Vec<u8>> = body.iter().map(|(_, v)| {
                     v
                 }).cloned().collect();
-
-                send.send((data.concat(), peer)).await;
+                let _date = data.concat(); // TODO
+                send.send(EndpointMessage::Connect(peer)).await;
             }
             continue;
         }
