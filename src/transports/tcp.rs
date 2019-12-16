@@ -1,27 +1,22 @@
-use async_std::net::{TcpListener, TcpStream};
-use async_std::io::{self, Result};
-use async_std::prelude::*;
-use async_std::sync::{Sender, Receiver, channel};
-use async_std::sync::{Arc, Mutex};
-use async_std::task;
-use async_std::stream::StreamExt;
+use async_std::{
+    prelude::*,
+    io::{BufReader, Result},
+    net::{TcpListener, TcpStream},
+    sync::{Sender, Receiver, Arc, Mutex},
+    task
+};
 use async_trait::async_trait;
 use std::net::SocketAddr;
 use std::collections::HashMap;
-use async_std::io::BufReader;
-
-use futures::select;
-use futures::FutureExt;
-//use rand::{RngCore, thread_rng};
-
+use futures::{FutureExt, select};
 
 use crate::PeerId;
-use super::{Endpoint, EndpointMessage, new_channel, MAX_MESSAGE_CAPACITY};
+use super::{Endpoint, EndpointMessage, StreamMessage, new_channel, new_stream_channel};
 
 /// TCP Endpoint.
 pub struct TcpEndpoint {
-    peer_id: PeerId,
-    //streams: HashMap<SocketAddr, (PeerId, Arc<TcpStream>)>
+    _peer_id: PeerId,
+    streams: HashMap<SocketAddr, Sender<StreamMessage>>
 }
 
 #[async_trait]
@@ -31,11 +26,11 @@ impl Endpoint for TcpEndpoint {
     /// and receiver outside message addr.
     async fn start(
         socket_addr: SocketAddr,
-        peer_id: PeerId,
+        _peer_id: PeerId,
         out_send: Sender<EndpointMessage>
     ) -> Result<Sender<EndpointMessage>> {
         let (send, recv) = new_channel();
-        let endpoint = TcpEndpoint { peer_id };
+        let endpoint = TcpEndpoint { _peer_id, streams: HashMap::new() };
 
         let m1 = Arc::new(Mutex::new(endpoint));
         let m2 = m1.clone();
@@ -59,7 +54,7 @@ async fn run_listen(
     let mut incoming = listener.incoming();
 
     while let Some(stream) = incoming.next().await {
-        task::spawn(process_stream(stream?, out_send.clone()));
+        task::spawn(process_stream(stream?, out_send.clone(), endpoint.clone()));
     }
 
     drop(incoming);
@@ -76,22 +71,30 @@ async fn run_self_recv(
         match m {
             EndpointMessage::Connect(addr) => {
                 let stream = TcpStream::connect(addr).await?;
-                task::spawn(process_stream(stream, out_send.clone()));
+                task::spawn(process_stream(stream, out_send.clone(), endpoint.clone()));
             },
+            EndpointMessage::Disconnect(ref addr) => {
+                let mut endpoint = endpoint.lock().await;
+                if let Some(sender) = endpoint.streams.remove(addr) {
+                    sender.send(StreamMessage::Close).await;
+                }
+            }
             _ => {}
         }
     }
     Ok(())
 }
 
-async fn process_stream(stream: TcpStream, sender: Sender<EndpointMessage>) -> Result<()> {
+async fn process_stream(stream: TcpStream, sender: Sender<EndpointMessage>, endpoint: Arc<Mutex<TcpEndpoint>>) -> Result<()> {
     let addr = stream.peer_addr()?;
     let (reader, mut writer) = (&stream, &stream);
 
-    let (self_sender, self_receiver) = channel(MAX_MESSAGE_CAPACITY);
-    let (out_sender, out_receiver) = channel(MAX_MESSAGE_CAPACITY);
-    sender.send(EndpointMessage::Connected(addr.clone(), out_receiver, self_sender)).await;
+    let (self_sender, self_receiver) = new_stream_channel();
+    let (out_sender, out_receiver) = new_stream_channel();
+
     let peer_id: PeerId = Default::default();
+    endpoint.lock().await.streams.entry(addr).and_modify(|s| *s = self_sender.clone()).or_insert(self_sender.clone());
+    sender.send(EndpointMessage::Connected(peer_id, out_receiver, self_sender)).await;
 
     let reader = BufReader::new(reader);
 
@@ -103,14 +106,21 @@ async fn process_stream(stream: TcpStream, sender: Sender<EndpointMessage>) -> R
             line = lines_from_stream.next().fuse() => match line {
                 Some(line) => {
                     let value = line?;
-                    out_sender.send(value.as_bytes().to_vec()).await;
+                    out_sender.send(StreamMessage::Bytes(value.as_bytes().to_vec())).await;
                 },
                 None => break,
             },
             line = lines_from_recv.next().fuse() => match line {
                 Some(line) => {
-                    writer.write_all(&line[..]).await;
-                    writer.write_all(b"\n").await;
+                    match line {
+                        StreamMessage::Bytes(bytes) => {
+                            writer.write_all(&bytes[..]).await?;
+                            writer.write_all(b"\n").await?;
+                        }
+                        StreamMessage::Close => {
+                            return Ok(())
+                        }
+                    }
                 },
                 None => break,
             },

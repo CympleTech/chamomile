@@ -10,7 +10,7 @@ use server::Server;
 
 pub const MAX_MESSAGE_CAPACITY: usize = 1024;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct PeerId;
 
 #[derive(Debug)]
