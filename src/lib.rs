@@ -1,12 +1,11 @@
-use async_std::io::Result;
-use async_std::sync::{channel, Receiver, Sender};
-use async_std::task;
+use async_std::{
+    io::Result,
+    sync::{channel, Receiver, Sender},
+};
 use std::net::SocketAddr;
 
-mod server;
+mod core;
 mod transports;
-
-use server::Server;
 
 pub const MAX_MESSAGE_CAPACITY: usize = 1024;
 
@@ -66,7 +65,7 @@ pub fn new_channel() -> (Sender<Message>, Receiver<Message>) {
 pub async fn start(out_send: Sender<Message>, config: Config) -> Result<Sender<Message>> {
     let (send, recv) = new_channel();
 
-    Server::start(Server::new(config), out_send, recv).await?;
+    core::server::Server::start(core::server::Server::new(config), out_send, recv).await?;
 
     Ok(send)
 }
