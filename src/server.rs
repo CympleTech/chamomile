@@ -1,15 +1,15 @@
 use async_std::io::Result;
-use async_std::sync::{Sender, Receiver};
 use async_std::sync::{Arc, Mutex};
+use async_std::sync::{Receiver, Sender};
 use async_std::task;
-use std::net::SocketAddr;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 
-use crate::transports::UdpEndpoint;
 use crate::transports::TcpEndpoint;
-use crate::transports::{Endpoint, EndpointMessage, new_channel};
+use crate::transports::UdpEndpoint;
+use crate::transports::{new_channel, Endpoint, EndpointMessage};
 
-use crate::{PeerId, Message, Config};
+use crate::{Config, Message, PeerId};
 
 #[derive(Debug)]
 struct PublicKey;
@@ -23,7 +23,7 @@ struct PeerList;
 #[derive(Debug, Hash)]
 enum Transport {
     UDP(SocketAddr), // 0u8
-    TCP(SocketAddr)  // 1u8
+    TCP(SocketAddr), // 1u8
 }
 
 impl Transport {
@@ -58,7 +58,11 @@ impl Server {
         }
     }
 
-    pub async fn start(server: Server, out_send: Sender<Message>, self_recv: Receiver<Message>) -> Result<()> {
+    pub async fn start(
+        server: Server,
+        out_send: Sender<Message>,
+        self_recv: Receiver<Message>,
+    ) -> Result<()> {
         // mock
         let (send, recv) = new_channel();
         let transport_send = match server.default_transport {
@@ -84,8 +88,12 @@ impl Server {
                 let server = m2.lock().await;
                 println!("Server: server: {:?}", server.peer_id);
                 match message {
-                    Message::Connect(addr) => transport_send.send(EndpointMessage::Connect(addr)).await,
-                    Message::DisConnect(addr) => transport_send.send(EndpointMessage::Disconnect(addr)).await,
+                    Message::Connect(addr) => {
+                        transport_send.send(EndpointMessage::Connect(addr)).await
+                    }
+                    Message::DisConnect(addr) => {
+                        transport_send.send(EndpointMessage::Disconnect(addr)).await
+                    }
                     _ => {}
                 }
             }

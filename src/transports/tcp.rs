@@ -1,23 +1,25 @@
 use async_std::{
-    prelude::*,
     io::{BufReader, Result},
     net::{TcpListener, TcpStream},
-    sync::{Sender, Receiver, Arc, Mutex},
-    task
+    prelude::*,
+    sync::{Arc, Mutex, Receiver, Sender},
+    task,
 };
 use async_trait::async_trait;
-use std::net::SocketAddr;
+use futures::{select, FutureExt};
 use std::collections::HashMap;
-use futures::{FutureExt, select};
+use std::net::SocketAddr;
 
+use super::{new_channel, new_stream_channel, Endpoint, EndpointMessage, StreamMessage};
 use crate::PeerId;
-use super::{Endpoint, EndpointMessage, StreamMessage, new_channel, new_stream_channel};
 
 /// TCP Endpoint.
 pub struct TcpEndpoint {
     _peer_id: PeerId,
-    streams: HashMap<SocketAddr, Sender<StreamMessage>>
+    streams: HashMap<SocketAddr, Sender<StreamMessage>>,
 }
+
+// TODO how to exchange peer_id
 
 #[async_trait]
 impl Endpoint for TcpEndpoint {
@@ -27,10 +29,13 @@ impl Endpoint for TcpEndpoint {
     async fn start(
         socket_addr: SocketAddr,
         _peer_id: PeerId,
-        out_send: Sender<EndpointMessage>
+        out_send: Sender<EndpointMessage>,
     ) -> Result<Sender<EndpointMessage>> {
         let (send, recv) = new_channel();
-        let endpoint = TcpEndpoint { _peer_id, streams: HashMap::new() };
+        let endpoint = TcpEndpoint {
+            _peer_id,
+            streams: HashMap::new(),
+        };
 
         let m1 = Arc::new(Mutex::new(endpoint));
         let m2 = m1.clone();
@@ -72,7 +77,7 @@ async fn run_self_recv(
             EndpointMessage::Connect(addr) => {
                 let stream = TcpStream::connect(addr).await?;
                 task::spawn(process_stream(stream, out_send.clone(), endpoint.clone()));
-            },
+            }
             EndpointMessage::Disconnect(ref addr) => {
                 let mut endpoint = endpoint.lock().await;
                 if let Some(sender) = endpoint.streams.remove(addr) {
@@ -85,7 +90,11 @@ async fn run_self_recv(
     Ok(())
 }
 
-async fn process_stream(stream: TcpStream, sender: Sender<EndpointMessage>, endpoint: Arc<Mutex<TcpEndpoint>>) -> Result<()> {
+async fn process_stream(
+    stream: TcpStream,
+    sender: Sender<EndpointMessage>,
+    endpoint: Arc<Mutex<TcpEndpoint>>,
+) -> Result<()> {
     let addr = stream.peer_addr()?;
     let (reader, mut writer) = (&stream, &stream);
 
@@ -93,8 +102,20 @@ async fn process_stream(stream: TcpStream, sender: Sender<EndpointMessage>, endp
     let (out_sender, out_receiver) = new_stream_channel();
 
     let peer_id: PeerId = Default::default();
-    endpoint.lock().await.streams.entry(addr).and_modify(|s| *s = self_sender.clone()).or_insert(self_sender.clone());
-    sender.send(EndpointMessage::Connected(peer_id, out_receiver, self_sender)).await;
+    endpoint
+        .lock()
+        .await
+        .streams
+        .entry(addr)
+        .and_modify(|s| *s = self_sender.clone())
+        .or_insert(self_sender.clone());
+    sender
+        .send(EndpointMessage::Connected(
+            peer_id,
+            out_receiver,
+            self_sender,
+        ))
+        .await;
 
     let reader = BufReader::new(reader);
 

@@ -1,17 +1,17 @@
 use async_std::{
-    prelude::*,
     io::Result,
     net::UdpSocket,
-    sync::{Sender, Receiver, Arc, Mutex},
-    task
+    prelude::*,
+    sync::{Arc, Mutex, Receiver, Sender},
+    task,
 };
 use async_trait::async_trait;
+use rand::{thread_rng, RngCore};
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
-use std::collections::{HashMap, BTreeMap};
-use rand::{RngCore, thread_rng};
 
+use super::{new_channel, new_stream_channel, Endpoint, EndpointMessage, StreamMessage};
 use crate::PeerId;
-use super::{Endpoint, EndpointMessage, StreamMessage, new_channel, new_stream_channel};
 
 /// 576(MTU) - 8(Head) - 20(IP) - 8(ID + Head) = 540
 const UDP_UINT: usize = 540;
@@ -25,6 +25,9 @@ pub struct UdpEndpoint {
     streams: HashMap<SocketAddr, Sender<StreamMessage>>,
 }
 
+// TODO how to connected
+// TODO how to connected verify
+
 #[async_trait]
 impl Endpoint for UdpEndpoint {
     /// Init and run a UdpEndpoint object.
@@ -33,11 +36,13 @@ impl Endpoint for UdpEndpoint {
     async fn start(
         socket_addr: SocketAddr,
         _peer_id: PeerId,
-        out_send: Sender<EndpointMessage>
-    ) -> Result<Sender<EndpointMessage>>{
+        out_send: Sender<EndpointMessage>,
+    ) -> Result<Sender<EndpointMessage>> {
         let socket: Arc<UdpSocket> = Arc::new(UdpSocket::bind(socket_addr).await?);
         let (send, recv) = new_channel();
-        let endpoint = UdpEndpoint { streams: HashMap::new() };
+        let endpoint = UdpEndpoint {
+            streams: HashMap::new(),
+        };
 
         let m1 = Arc::new(Mutex::new(endpoint));
         let m2 = m1.clone();
@@ -46,7 +51,6 @@ impl Endpoint for UdpEndpoint {
         task::spawn(run_listen(socket, out_send, m2));
         Ok(send)
     }
-
 }
 
 /// Listen for outside send job.
@@ -58,7 +62,7 @@ async fn run_self_recv(socket: Arc<UdpSocket>, recv: Receiver<EndpointMessage>) 
         let peer = match m {
             EndpointMessage::Connect(addr) => addr,
             EndpointMessage::Disconnect(addr) => addr,
-            _ => return Ok(())
+            _ => return Ok(()),
         };
         let mut bytes = vec![1]; // TODO
 
@@ -92,8 +96,8 @@ async fn run_self_recv(socket: Arc<UdpSocket>, recv: Receiver<EndpointMessage>) 
             let mut bytes = [0u8; 8 + UDP_UINT];
             bytes[0..4].copy_from_slice(&buffer_key_bytes);
             bytes[4..8].copy_from_slice(&k.to_be_bytes());
-            bytes[8..8+v.len()].copy_from_slice(v);
-            socket.send_to(&bytes[..8+v.len()], peer).await?;
+            bytes[8..8 + v.len()].copy_from_slice(v);
+            socket.send_to(&bytes[..8 + v.len()], peer).await?;
         }
 
         let mut tail_bytes = [255u8; 8];
@@ -110,7 +114,11 @@ async fn run_self_recv(socket: Arc<UdpSocket>, recv: Receiver<EndpointMessage>) 
 /// If not completed, save to buffers, and waiting.
 /// If timeout, send request to remote, call send again or drop it.
 /// If completed. send to outside.
-async fn run_listen(socket: Arc<UdpSocket>, send: Sender<EndpointMessage>, endpoint: Arc<Mutex<UdpEndpoint>>) -> Result<()> {
+async fn run_listen(
+    socket: Arc<UdpSocket>,
+    send: Sender<EndpointMessage>,
+    endpoint: Arc<Mutex<UdpEndpoint>>,
+) -> Result<()> {
     let mut recv_buffers = Buffers::new();
 
     let mut buf = vec![0u8; 8 + UDP_UINT];
@@ -128,9 +136,12 @@ async fn run_listen(socket: Arc<UdpSocket>, send: Sender<EndpointMessage>, endpo
             }
 
             let total_size = bytes_to_u32(&buf[8..12]);
-            recv_buffers.entry(id).and_modify(|(size, _)| {
-                *size = total_size;
-            }).or_insert((total_size, Default::default()));
+            recv_buffers
+                .entry(id)
+                .and_modify(|(size, _)| {
+                    *size = total_size;
+                })
+                .or_insert((total_size, Default::default()));
             continue;
         }
 
@@ -139,13 +150,16 @@ async fn run_listen(socket: Arc<UdpSocket>, send: Sender<EndpointMessage>, endpo
             // TODO check if all data received
 
             if let Some((_total_size, body)) = recv_buffers.remove(&id) {
-                let data: Vec<Vec<u8>> = body.iter().map(|(_, v)| {
-                    v
-                }).cloned().collect();
+                let data: Vec<Vec<u8>> = body.iter().map(|(_, v)| v).cloned().collect();
                 let data = data.concat();
                 let endpoint = endpoint.lock().await;
                 if endpoint.streams.contains_key(&peer) {
-                    endpoint.streams.get(&peer).unwrap().send(StreamMessage::Bytes(data)).await;
+                    endpoint
+                        .streams
+                        .get(&peer)
+                        .unwrap()
+                        .send(StreamMessage::Bytes(data))
+                        .await;
                 }
 
                 // clear buf
@@ -154,13 +168,16 @@ async fn run_listen(socket: Arc<UdpSocket>, send: Sender<EndpointMessage>, endpo
         }
 
         let no = bytes_to_u32(&buf[4..8]);
-        recv_buffers.entry(id).and_modify(|(_, body)| {
-            body.insert(no, buf[8..n].to_vec());
-        }).or_insert((0, {
-            let mut body = BTreeMap::new();
-            body.insert(no, buf[8..n].to_vec());
-            body
-        }));
+        recv_buffers
+            .entry(id)
+            .and_modify(|(_, body)| {
+                body.insert(no, buf[8..n].to_vec());
+            })
+            .or_insert((0, {
+                let mut body = BTreeMap::new();
+                body.insert(no, buf[8..n].to_vec());
+                body
+            }));
     }
 
     drop(recv_buffers);

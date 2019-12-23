@@ -1,12 +1,12 @@
 use async_std::io::Result;
-use async_std::sync::{channel, Sender, Receiver};
+use async_std::sync::{channel, Receiver, Sender};
 use async_trait::async_trait;
-use std::net::SocketAddr;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::net::SocketAddr;
 
-mod udp;
-mod tcp;
 mod rtp;
+mod tcp;
+mod udp;
 mod udt;
 
 use crate::PeerId;
@@ -24,14 +24,16 @@ pub enum EndpointMessage {
 /// StreamMessage use in out server and stream in channel.
 pub enum StreamMessage {
     Close,
-    Bytes(Vec<u8>)
+    Bytes(Vec<u8>),
 }
 
 impl Debug for EndpointMessage {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         match self {
             EndpointMessage::Connect(ref addr) => write!(f, "Endpoint start connect: {:?}", addr),
-            EndpointMessage::Connected(ref addr, _, _) => write!(f, "Endpoint connected: {:?}", addr),
+            EndpointMessage::Connected(ref addr, _, _) => {
+                write!(f, "Endpoint connected: {:?}", addr)
+            }
             EndpointMessage::Disconnect(ref addr) => write!(f, "Endpoint disconnected: {:?}", addr),
         }
     }
@@ -67,7 +69,7 @@ pub trait Endpoint: Send {
     ) -> Result<Sender<EndpointMessage>>;
 }
 
-pub use udp::UdpEndpoint;
 pub use tcp::TcpEndpoint;
+pub use udp::UdpEndpoint;
 //TODO pub use rtp::RtpEndpoint;
 //TODO pub use udt::UdtEndpoint;

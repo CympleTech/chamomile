@@ -1,7 +1,7 @@
-use std::net::SocketAddr;
-use async_std::sync::{channel, Sender, Receiver};
 use async_std::io::Result;
+use async_std::sync::{channel, Receiver, Sender};
 use async_std::task;
+use std::net::SocketAddr;
 
 mod server;
 mod transports;
@@ -38,7 +38,7 @@ impl Config {
             white_list: vec![],
             black_list: vec![],
             white_peer_list: vec![],
-            black_peer_list: vec![]
+            black_peer_list: vec![],
         }
     }
 
@@ -47,9 +47,15 @@ impl Config {
         white_list: Vec<SocketAddr>,
         black_list: Vec<SocketAddr>,
         white_peer_list: Vec<PeerId>,
-        black_peer_list: Vec<PeerId>
+        black_peer_list: Vec<PeerId>,
     ) -> Self {
-        Self { addr, white_list, black_list, white_peer_list, black_peer_list }
+        Self {
+            addr,
+            white_list,
+            black_list,
+            white_peer_list,
+            black_peer_list,
+        }
     }
 }
 
