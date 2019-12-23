@@ -10,13 +10,10 @@ use crate::transports::TcpEndpoint;
 use crate::transports::UdpEndpoint;
 use crate::transports::{new_channel, Endpoint, EndpointMessage};
 
-use crate::{Config, Message, PeerId};
+use super::keys::{KeyType, PrivateKey, PublicKey};
+use super::peer_id::PeerId;
 
-#[derive(Debug)]
-struct PublicKey;
-
-#[derive(Debug)]
-struct PrivateKey;
+use crate::{Config, Message};
 
 #[derive(Debug)]
 struct PeerList;
@@ -38,7 +35,8 @@ impl Transport {
 
 pub struct Server {
     peer_id: PeerId,
-    peer_psk: PrivateKey,
+    pk: PublicKey,
+    psk: PrivateKey,
     peer_list: PeerList,
     while_list: PeerList,
     black_list: PeerList,
@@ -47,10 +45,15 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(config: Config) -> Self {
+    fn new(config: Config) -> Self {
+        // load or generate keypair
+        let (psk, pk) = PrivateKey::generate(KeyType::Ed25519);
+        let peer_id = pk.peer_id();
+
         Self {
-            peer_id: PeerId,
-            peer_psk: PrivateKey,
+            peer_id,
+            pk,
+            psk,
             peer_list: PeerList,
             while_list: PeerList,
             black_list: PeerList,
@@ -60,10 +63,13 @@ impl Server {
     }
 
     pub async fn start(
-        server: Server,
+        config: Config,
         out_send: Sender<Message>,
         self_recv: Receiver<Message>,
     ) -> Result<()> {
+        let server = Self::new(config);
+        println!("server start peer id: {:?}", server.peer_id);
+
         // mock
         let (send, recv) = new_channel();
         let transport_send = match server.default_transport {
@@ -79,7 +85,9 @@ impl Server {
                 println!("Server: recv from transport: {:?}", message);
                 let server = m1.lock().await;
                 println!("Server: server: {:?}", server.peer_id);
-                out_send.send(Message::Data(vec![1, 2, 3, 4], PeerId)).await;
+                out_send
+                    .send(Message::Data(vec![1, 2, 3, 4], PeerId::default()))
+                    .await;
             }
         });
 

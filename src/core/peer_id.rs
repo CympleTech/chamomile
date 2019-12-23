@@ -1,7 +1,13 @@
 use serde_derive::{Deserialize, Serialize};
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 
-//use crate::core::primitives::PEER_ID_LENGTH;
-//use bytes::Bytes;
+#[derive(Clone, Default, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
+pub struct PeerId(pub [u8; 32]);
 
-#[derive(Clone, Default, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
-pub struct PeerID(Vec<u8>); // Multihash peer id TODO Bytes or u8 array
+impl Debug for PeerId {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        let mut hex = String::new();
+        hex.extend(self.0.iter().map(|byte| format!("{:02x?}", byte)));
+        write!(f, "0x{}", hex)
+    }
+}

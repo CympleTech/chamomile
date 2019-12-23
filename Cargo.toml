@@ -23,8 +23,9 @@ async-trait = "0.1"
 multiaddr = "*"
 
 # crypto
+sha3 = "0.8"
 #rsa = "0.1"
-ed25519-dalek = "1.0.0-pre.0"
+ed25519-dalek = "1.0.0-pre.3"
 #libsecp256k1 = "0.2"
 
 # DHT & NAT

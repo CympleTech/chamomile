@@ -7,10 +7,9 @@ use std::net::SocketAddr;
 mod core;
 mod transports;
 
-pub const MAX_MESSAGE_CAPACITY: usize = 1024;
+pub use self::core::peer_id::PeerId;
 
-#[derive(Debug, Clone, Default, Hash, Eq, PartialEq, Ord, PartialOrd)]
-pub struct PeerId;
+pub const MAX_MESSAGE_CAPACITY: usize = 1024;
 
 #[derive(Debug)]
 pub enum Message {
@@ -65,7 +64,7 @@ pub fn new_channel() -> (Sender<Message>, Receiver<Message>) {
 pub async fn start(out_send: Sender<Message>, config: Config) -> Result<Sender<Message>> {
     let (send, recv) = new_channel();
 
-    core::server::Server::start(core::server::Server::new(config), out_send, recv).await?;
+    core::server::Server::start(config, out_send, recv).await?;
 
     Ok(send)
 }
