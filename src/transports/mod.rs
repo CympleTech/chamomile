@@ -18,7 +18,12 @@ pub const MAX_MESSAGE_CAPACITY: usize = 1024;
 pub enum EndpointMessage {
     Connect(SocketAddr, Vec<u8>), // server to transport
     Disconnect(SocketAddr),       // server to transport
-    PreConnected(SocketAddr, Receiver<StreamMessage>, Sender<StreamMessage>), // transport to server
+    PreConnected(
+        SocketAddr,
+        Receiver<StreamMessage>,
+        Sender<StreamMessage>,
+        bool,
+    ), // transport to server
     Connected(PeerId, Sender<StreamMessage>), // session to server
     Close(PeerId),                // session to server
 }
@@ -37,7 +42,7 @@ impl Debug for EndpointMessage {
                 write!(f, "Endpoint start connect: {:?}", addr)
             }
             EndpointMessage::Disconnect(ref addr) => write!(f, "Endpoint disconnected: {:?}", addr),
-            EndpointMessage::PreConnected(ref addr, _, _) => {
+            EndpointMessage::PreConnected(ref addr, _, _, _) => {
                 write!(f, "Endpoint pre-connected: {:?}", addr)
             }
             EndpointMessage::Connected(ref addr, _) => write!(f, "Endpoint connected: {:?}", addr),

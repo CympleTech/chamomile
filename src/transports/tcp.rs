@@ -61,7 +61,12 @@ async fn run_listen(
     let mut incoming = listener.incoming();
 
     while let Some(stream) = incoming.next().await {
-        task::spawn(process_stream(stream?, out_send.clone(), endpoint.clone()));
+        task::spawn(process_stream(
+            stream?,
+            out_send.clone(),
+            endpoint.clone(),
+            false,
+        ));
     }
 
     drop(incoming);
@@ -81,7 +86,12 @@ async fn run_self_recv(
                 let len = bytes.len() as u32;
                 stream.write(&(len.to_be_bytes())).await?;
                 stream.write_all(&bytes[..]).await?;
-                task::spawn(process_stream(stream, out_send.clone(), endpoint.clone()));
+                task::spawn(process_stream(
+                    stream,
+                    out_send.clone(),
+                    endpoint.clone(),
+                    true,
+                ));
             }
             EndpointMessage::Disconnect(ref addr) => {
                 let mut endpoint = endpoint.lock().await;
@@ -99,6 +109,7 @@ async fn process_stream(
     stream: TcpStream,
     sender: Sender<EndpointMessage>,
     endpoint: Arc<Mutex<TcpEndpoint>>,
+    is_ok: bool,
 ) -> Result<()> {
     let addr = stream.peer_addr()?;
 
@@ -123,6 +134,7 @@ async fn process_stream(
             addr,
             out_receiver,
             self_sender,
+            is_ok,
         ))
         .await;
 

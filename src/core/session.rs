@@ -23,6 +23,7 @@ pub fn session_start(
     out_sender: Sender<Message>,
     self_peer_psk: PrivateKey,
     self_peer_pk: PublicKey,
+    mut is_ok: bool,
 ) {
     task::spawn(async move {
         // timeout 10s to read peer_id & public_key
@@ -56,7 +57,6 @@ pub fn session_start(
         }
         let remote_peer_pk = result.unwrap();
         let remote_peer_id = remote_peer_pk.peer_id();
-        let mut is_ok = false;
         let mut session_key: SessionKey =
             SessionKey::generate(&remote_peer_pk, &self_peer_pk, &self_peer_psk);
 
@@ -79,6 +79,7 @@ pub fn session_start(
                                 match SessionType::from_bytes(bytes) {
                                     Ok(t) => match t {
                                         SessionType::Key(bytes) => {
+                                            println!("receiver key: {:?}", bytes);
                                             if session_key.is_ok() {
                                                 continue;
                                             }
