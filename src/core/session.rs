@@ -6,12 +6,14 @@ use async_std::{
     task,
 };
 use futures::{select, FutureExt};
+use serde_derive::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use crate::transports::{new_stream_channel, EndpointMessage, StreamMessage};
 use crate::Message;
 
-use super::keys::{PrivateKey, PublicKey, Signature};
+use super::keys::{PrivateKey, PublicKey, SessionKey, Signature};
 use super::peer_id::PeerId;
 
 pub fn session_start(
@@ -19,7 +21,7 @@ pub fn session_start(
     transport_sender: Sender<StreamMessage>,
     server_sender: Sender<EndpointMessage>,
     out_sender: Sender<Message>,
-    _self_peer_psk: PrivateKey,
+    self_peer_psk: PrivateKey,
     self_peer_pk: PublicKey,
 ) {
     task::spawn(async move {
@@ -55,6 +57,9 @@ pub fn session_start(
         let remote_peer_pk = result.unwrap();
         let remote_peer_id = remote_peer_pk.peer_id();
         let mut is_ok = false;
+        let mut session_key: SessionKey =
+            SessionKey::generate(&remote_peer_pk, &self_peer_pk, &self_peer_psk);
+
         println!("Session connected: {:?}", remote_peer_id);
         let (sender, mut receiver) = new_stream_channel();
         server_sender
@@ -71,8 +76,57 @@ pub fn session_start(
 
                         match msg {
                             StreamMessage::Bytes(bytes) => {
-                                // TODO Decrypt
-                                out_sender.send(Message::Data(remote_peer_id, bytes)).await;
+                                match SessionType::from_bytes(bytes) {
+                                    Ok(t) => match t {
+                                        SessionType::Key(bytes) => {
+                                            if session_key.is_ok() {
+                                                continue;
+                                            }
+
+                                            if !session_key.in_bytes(bytes) {
+                                                server_sender
+                                                    .send(EndpointMessage::Close(remote_peer_id))
+                                                    .await;
+                                                transport_sender.send(StreamMessage::Close).await;
+                                                break;
+                                            }
+
+                                            transport_sender
+                                                .send(StreamMessage::Bytes(
+                                                    SessionType::Key(session_key.out_bytes())
+                                                        .to_bytes()
+                                                ))
+                                                .await;
+                                        }
+                                        SessionType::Data(e_data) => {
+                                            let d_data = session_key.decrypt(e_data);
+                                            if d_data.is_ok() {
+                                                out_sender
+                                                    .send(Message::Data(
+                                                        remote_peer_id,
+                                                        d_data.unwrap()
+                                                    )).await;
+                                            }
+                                        }
+                                        SessionType::DHT(_peers, _sign) => {
+                                            // TODO DHT Helper
+                                        }
+                                        SessionType::Relay(_peer_id, _data) => {
+                                            // TODO Relay send
+                                        }
+                                        SessionType::Ping => {
+                                            transport_sender
+                                                .send(StreamMessage::Bytes(
+                                                    SessionType::Pong.to_bytes()
+                                                ))
+                                                .await;
+                                        }
+                                        SessionType::Pong => {
+                                            // TODO Heartbeat Ping/Pong
+                                        }
+                                    }
+                                    Err(_) => {},
+                                }
                             },
                             StreamMessage::Close => {
                                 server_sender
@@ -89,9 +143,11 @@ pub fn session_start(
                     Some(msg) => {
                         match msg {
                             StreamMessage::Bytes(bytes) => {
-                                // TODO encrypt
+                                let d_data = SessionType::Data(bytes).to_bytes();
+                                let e_data = session_key.encrypt(d_data);
+
                                 transport_sender
-                                    .send(StreamMessage::Bytes(bytes))
+                                    .send(StreamMessage::Bytes(e_data))
                                     .await;
                             },
                             StreamMessage::Ok => {
@@ -99,9 +155,12 @@ pub fn session_start(
                                 transport_sender
                                     .send(StreamMessage::Bytes(self_peer_pk.to_bytes()))
                                     .await;
-                                println!("session send pk ok");
 
-                                // TODO start DH
+                                transport_sender
+                                    .send(StreamMessage::Bytes(
+                                        SessionType::Key(session_key.out_bytes()).to_bytes()
+                                    ))
+                                    .await;
                             },
                             StreamMessage::Close => {
                                 transport_sender.send(StreamMessage::Close).await;
@@ -114,4 +173,24 @@ pub fn session_start(
             }
         }
     });
+}
+
+#[derive(Deserialize, Serialize)]
+enum SessionType {
+    Key(Vec<u8>),
+    Data(Vec<u8>),
+    DHT(Vec<(PeerId, SocketAddr)>, Signature),
+    Relay(PeerId, Vec<u8>),
+    Ping,
+    Pong,
+}
+
+impl SessionType {
+    fn to_bytes(&self) -> Vec<u8> {
+        bincode::serialize(self).unwrap()
+    }
+
+    fn from_bytes(bytes: Vec<u8>) -> Result<Self, ()> {
+        bincode::deserialize(&bytes[..]).map_err(|_e| ())
+    }
 }

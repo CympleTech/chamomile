@@ -35,6 +35,12 @@ pub struct Signature {
     data: Vec<u8>,
 }
 
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct SessionKey {
+    key_type: KeyType,
+    data: Vec<u8>,
+}
+
 impl PublicKey {
     pub fn peer_id(&self) -> PeerId {
         let mut sha = Sha3_256::new();
@@ -50,6 +56,10 @@ impl PublicKey {
 
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, ()> {
         bincode::deserialize(&bytes[..]).map_err(|_e| ())
+    }
+
+    pub fn verify(&self, msg: &Vec<u8>, sign: &Signature) -> bool {
+        true
     }
 }
 
@@ -90,5 +100,42 @@ impl PrivateKey {
                 },
             ),
         }
+    }
+
+    pub fn sign(&self, msg: &Vec<u8>) -> Signature {
+        Default::default()
+    }
+}
+
+impl SessionKey {
+    pub fn generate(
+        remote_pk: &PublicKey,
+        self_pk: &PublicKey,
+        self_psk: &PrivateKey,
+    ) -> SessionKey {
+        // TODO
+        Default::default()
+    }
+
+    pub fn is_ok(&self) -> bool {
+        true
+    }
+
+    pub fn in_bytes(&mut self, bytes: Vec<u8>) -> bool {
+        // TODO
+        true
+    }
+
+    pub fn out_bytes(&self) -> Vec<u8> {
+        // TODO
+        vec![]
+    }
+
+    pub fn encrypt(&self, msg: Vec<u8>) -> Vec<u8> {
+        msg
+    }
+
+    pub fn decrypt(&self, msg: Vec<u8>) -> Result<Vec<u8>, ()> {
+        Ok(msg)
     }
 }
