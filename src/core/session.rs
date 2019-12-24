@@ -99,6 +99,7 @@ pub fn session_start(
                                 transport_sender
                                     .send(StreamMessage::Bytes(self_peer_pk.to_bytes()))
                                     .await;
+                                println!("session send pk ok");
 
                                 // TODO start DH
                             },

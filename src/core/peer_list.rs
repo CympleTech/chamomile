@@ -76,9 +76,10 @@ impl PeerTable {
 
     /// get in DHT, DHT closest.
     pub fn get(&self, peer_id: &PeerId) -> Option<&Sender<StreamMessage>> {
-        self.peers
+        self.tmps.get(peer_id).or(self
+            .peers
             .search(peer_id)
-            .and_then(|(_k, ref v, _is_it)| v.as_ref())
+            .and_then(|(_k, ref v, _is_it)| v.as_ref()))
     }
 
     /// get in DHT (not closest).

@@ -144,11 +144,13 @@ impl Server {
                                     }
                                     Message::PeerJoinResult(peer_id, is_ok) => {
                                         let sender = server.peer_list.get(&peer_id);
+                                        println!("sender session: {}", sender.is_some());
                                         if sender.is_some() {
                                             let sender = sender.unwrap();
                                             if is_ok {
                                                 sender.send(StreamMessage::Ok).await;
                                                 server.peer_list.stabilize_tmp_peer(peer_id);
+                                                println!("join ok");
                                             } else {
                                                 sender.send(StreamMessage::Close).await;
                                                 server.peer_list.remove_tmp_peer(&peer_id);

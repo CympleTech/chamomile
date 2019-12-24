@@ -15,7 +15,18 @@ fn main() {
         println!("started connect to test");
 
         while let Some(message) = out_recv.recv().await {
-            println!("recv: {:?}", message);
+            match message {
+                Message::Data(peer_id, _bytes) => {
+                    println!("recv data from: {:?}", peer_id);
+                }
+                Message::PeerJoin(peer_id) => {
+                    println!("peer join: {:?}", peer_id);
+                }
+                Message::PeerLeave(peer_id) => {
+                    println!("peer_leave: {:?}", peer_id);
+                }
+                _ => break,
+            }
         }
     });
 }
