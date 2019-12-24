@@ -16,13 +16,16 @@ pub const MAX_MESSAGE_CAPACITY: usize = 1024;
 
 /// Message Type for transport and outside.
 pub enum EndpointMessage {
-    Connect(SocketAddr),
-    Disconnect(SocketAddr),
-    Connected(PeerId, Receiver<StreamMessage>, Sender<StreamMessage>),
+    Connect(SocketAddr, Vec<u8>), // server to transport
+    Disconnect(SocketAddr),       // server to transport
+    PreConnected(SocketAddr, Receiver<StreamMessage>, Sender<StreamMessage>), // transport to server
+    Connected(PeerId, Sender<StreamMessage>), // session to server
+    Close(PeerId),                // session to server
 }
 
 /// StreamMessage use in out server and stream in channel.
 pub enum StreamMessage {
+    Ok,
     Close,
     Bytes(Vec<u8>),
 }
@@ -30,11 +33,15 @@ pub enum StreamMessage {
 impl Debug for EndpointMessage {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         match self {
-            EndpointMessage::Connect(ref addr) => write!(f, "Endpoint start connect: {:?}", addr),
-            EndpointMessage::Connected(ref addr, _, _) => {
-                write!(f, "Endpoint connected: {:?}", addr)
+            EndpointMessage::Connect(ref addr, _) => {
+                write!(f, "Endpoint start connect: {:?}", addr)
             }
             EndpointMessage::Disconnect(ref addr) => write!(f, "Endpoint disconnected: {:?}", addr),
+            EndpointMessage::PreConnected(ref addr, _, _) => {
+                write!(f, "Endpoint pre-connected: {:?}", addr)
+            }
+            EndpointMessage::Connected(ref addr, _) => write!(f, "Endpoint connected: {:?}", addr),
+            EndpointMessage::Close(ref addr) => write!(f, "Endpoint losed: {:?}", addr),
         }
     }
 }
@@ -42,6 +49,7 @@ impl Debug for EndpointMessage {
 impl Debug for StreamMessage {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         match self {
+            StreamMessage::Ok => write!(f, "Stream is ok."),
             StreamMessage::Close => write!(f, "Stream need close."),
             StreamMessage::Bytes(ref bytes) => write!(f, "Stream Bytes: {:?}.", bytes),
         }

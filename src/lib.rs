@@ -1,3 +1,6 @@
+#![feature(vec_remove_item)]
+#![recursion_limit = "1024"]
+
 use async_std::{
     io::Result,
     sync::{channel, Receiver, Sender},
@@ -13,11 +16,12 @@ pub const MAX_MESSAGE_CAPACITY: usize = 1024;
 
 #[derive(Debug)]
 pub enum Message {
-    PeerJoin(PeerId),
-    PeerLeave(PeerId),
-    Connect(SocketAddr),
-    DisConnect(SocketAddr),
-    Data(Vec<u8>, PeerId),
+    PeerJoin(PeerId),             // server  to outside
+    PeerJoinResult(PeerId, bool), // outside to server
+    PeerLeave(PeerId),            // server  to outside
+    Connect(SocketAddr),          // outside to server
+    DisConnect(SocketAddr),       // outside to server
+    Data(PeerId, Vec<u8>),        // session & outside
 }
 
 #[derive(Debug, Clone)]
@@ -64,7 +68,7 @@ pub fn new_channel() -> (Sender<Message>, Receiver<Message>) {
 pub async fn start(out_send: Sender<Message>, config: Config) -> Result<Sender<Message>> {
     let (send, recv) = new_channel();
 
-    core::server::Server::start(config, out_send, recv).await?;
+    core::server::Server::start(config, out_send, recv);
 
     Ok(send)
 }

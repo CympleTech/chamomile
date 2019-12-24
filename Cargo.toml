@@ -19,23 +19,17 @@ futures = "0.3"
 async-std = { version = "1", features = ["unstable"] }
 async-trait = "0.1"
 
-# Protocol Lab
-multiaddr = "*"
-
 # crypto
 sha3 = "0.8"
-#rsa = "0.1"
 ed25519-dalek = "1.0.0-pre.3"
-#libsecp256k1 = "0.2"
 
 # DHT & NAT
 rckad = "0.0.5"
 
 # serializtion
-bytes = { version = "0.4", features = ["serde"] }
 serde = "1"
 serde_derive = "1"
-#bincode = "1"
+bincode = "1"
 
 ## transport
 # QUIC

@@ -55,7 +55,9 @@ async fn run_listen(
     out_send: Sender<EndpointMessage>,
     endpoint: Arc<Mutex<TcpEndpoint>>,
 ) -> Result<()> {
-    let listener = TcpListener::bind(socket_addr).await?;
+    let listener = TcpListener::bind(socket_addr)
+        .await
+        .expect("TCP listen failure!");
     let mut incoming = listener.incoming();
 
     while let Some(stream) = incoming.next().await {
@@ -74,8 +76,11 @@ async fn run_self_recv(
 ) -> Result<()> {
     while let Some(m) = recv.recv().await {
         match m {
-            EndpointMessage::Connect(addr) => {
-                let stream = TcpStream::connect(addr).await?;
+            EndpointMessage::Connect(addr, bytes) => {
+                let mut stream = TcpStream::connect(addr).await?;
+                let len = bytes.len() as u32;
+                stream.write(&(len.to_be_bytes())).await?;
+                stream.write_all(&bytes[..]).await?;
                 task::spawn(process_stream(stream, out_send.clone(), endpoint.clone()));
             }
             EndpointMessage::Disconnect(ref addr) => {
@@ -96,12 +101,16 @@ async fn process_stream(
     endpoint: Arc<Mutex<TcpEndpoint>>,
 ) -> Result<()> {
     let addr = stream.peer_addr()?;
-    let (reader, mut writer) = (&stream, &stream);
+
+    let (mut reader, mut writer) = &mut (&stream, &stream);
+
+    //let stream = Arc::new(stream);
+    //let mut reader = BufReader::new(&*stream);
+    //let writer = Arc::clone(&stream);
 
     let (self_sender, self_receiver) = new_stream_channel();
     let (out_sender, out_receiver) = new_stream_channel();
 
-    let peer_id: PeerId = Default::default();
     endpoint
         .lock()
         .await
@@ -110,43 +119,65 @@ async fn process_stream(
         .and_modify(|s| *s = self_sender.clone())
         .or_insert(self_sender.clone());
     sender
-        .send(EndpointMessage::Connected(
-            peer_id,
+        .send(EndpointMessage::PreConnected(
+            addr,
             out_receiver,
             self_sender,
         ))
         .await;
 
-    let reader = BufReader::new(reader);
-
-    let mut lines_from_stream = futures::StreamExt::fuse(reader.lines());
-    let mut lines_from_recv = futures::StreamExt::fuse(self_receiver);
+    let mut read_len = [0u8; 4];
 
     loop {
         select! {
-            line = lines_from_stream.next().fuse() => match line {
-                Some(line) => {
-                    let value = line?;
-                    out_sender.send(StreamMessage::Bytes(value.as_bytes().to_vec())).await;
-                },
-                None => break,
+            msg = reader.read(&mut read_len).fuse() => match msg {
+                Ok(size) => {
+                    if size == 0 {
+                        // when close or better when many Ok(0)
+                        out_sender.send(StreamMessage::Close).await;
+                        break;
+                    }
+
+                    let len: usize = u32::from_be_bytes(read_len) as usize;
+                    let mut read_bytes = vec![0u8; len];
+                    while let Ok(bytes_size) = reader.read(&mut read_bytes).await {
+                        if bytes_size != len {
+                            break;
+                        }
+
+                        out_sender
+                            .send(StreamMessage::Bytes(read_bytes.clone()))
+                            .await;
+                        break;
+                    }
+                    read_len = [0u8; 4];
+                }
+                Err(e) => {
+                    out_sender.send(StreamMessage::Close).await;
+                    break;
+                }
             },
-            line = lines_from_recv.next().fuse() => match line {
-                Some(line) => {
-                    match line {
+            msg = self_receiver.recv().fuse() => match msg {
+                Some(msg) => {
+                    match msg {
                         StreamMessage::Bytes(bytes) => {
+                            let len = bytes.len() as u32;
+                            writer.write(&(len.to_be_bytes())).await?;
                             writer.write_all(&bytes[..]).await?;
-                            writer.write_all(b"\n").await?;
                         }
-                        StreamMessage::Close => {
-                            return Ok(())
-                        }
+                        StreamMessage::Close => break,
+                        _ => break,
                     }
                 },
                 None => break,
-            },
+            }
         }
     }
+
+    endpoint.lock().await.streams.remove(&addr);
+    drop(self_receiver);
+    drop(out_sender);
+    println!("close stream: {}", addr);
 
     Ok(())
 }

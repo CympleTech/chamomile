@@ -29,6 +29,12 @@ pub struct PrivateKey {
     data: Vec<u8>,
 }
 
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct Signature {
+    key_type: KeyType,
+    data: Vec<u8>,
+}
+
 impl PublicKey {
     pub fn peer_id(&self) -> PeerId {
         let mut sha = Sha3_256::new();
@@ -36,6 +42,14 @@ impl PublicKey {
         let mut peer_bytes = [0u8; 32];
         peer_bytes.copy_from_slice(&sha.result()[..]);
         PeerId(peer_bytes)
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        bincode::serialize(self).unwrap()
+    }
+
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, ()> {
+        bincode::deserialize(&bytes[..]).map_err(|_e| ())
     }
 }
 

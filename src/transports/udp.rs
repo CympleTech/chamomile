@@ -60,7 +60,7 @@ async fn run_self_recv(socket: Arc<UdpSocket>, recv: Receiver<EndpointMessage>) 
 
     while let Some(m) = recv.recv().await {
         let peer = match m {
-            EndpointMessage::Connect(addr) => addr,
+            EndpointMessage::Connect(addr, _bytes) => addr, // TODO send connect bytes
             EndpointMessage::Disconnect(addr) => addr,
             _ => return Ok(()),
         };
