@@ -10,8 +10,8 @@ fn main() {
 
         while let Some(message) = out_recv.recv().await {
             match message {
-                Message::Data(peer_id, _bytes) => {
-                    println!("recv data from: {:?}", peer_id);
+                Message::Data(peer_id, bytes) => {
+                    println!("recv data from: {:?}, {:?}", peer_id, bytes);
                 }
                 Message::PeerJoin(peer_id) => {
                     println!("peer join: {:?}", peer_id);

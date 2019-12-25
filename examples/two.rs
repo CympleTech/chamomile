@@ -16,11 +16,12 @@ fn main() {
 
         while let Some(message) = out_recv.recv().await {
             match message {
-                Message::Data(peer_id, _bytes) => {
-                    println!("recv data from: {:?}", peer_id);
+                Message::Data(peer_id, bytes) => {
+                    println!("recv data from: {:?}, {:?}", peer_id, bytes);
                 }
                 Message::PeerJoin(peer_id) => {
                     println!("peer join: {:?}", peer_id);
+                    send.send(Message::Data(peer_id, vec![1, 2, 3, 4])).await;
                 }
                 Message::PeerLeave(peer_id) => {
                     println!("peer_leave: {:?}", peer_id);

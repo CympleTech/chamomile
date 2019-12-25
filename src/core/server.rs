@@ -154,7 +154,22 @@ impl Server {
                                             }
                                         }
                                     }
-                                    _ => {}
+                                    Message::Data(peer_id, data) => {
+                                        let sender = server.peer_list.get(&peer_id);
+                                        if sender.is_some() {
+                                            let sender = sender.unwrap();
+                                            sender.send(StreamMessage::Bytes(data)).await;
+                                        }
+                                    },
+                                    Message::PeerLeave(peer_id) => {
+                                        let sender = server.peer_list.get(&peer_id);
+                                        if sender.is_some() {
+                                            let sender = sender.unwrap();
+                                            sender.send(StreamMessage::Close).await;
+                                            server.peer_list.remove_tmp_peer(&peer_id);
+                                        }
+                                    },
+                                    Message::PeerJoin(_peer_id) => {},  // TODO search peer and join
                                 }
                         },
                         None => break,

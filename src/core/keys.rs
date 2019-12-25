@@ -1,9 +1,15 @@
+use aes_soft::{
+    block_cipher_trait::generic_array::GenericArray, block_cipher_trait::BlockCipher, Aes256,
+};
 use ed25519_dalek::{
-    Keypair, PublicKey as Ed25519_PublicKey, SecretKey as Ed25519_PrivateKey, PUBLIC_KEY_LENGTH,
-    SECRET_KEY_LENGTH, SIGNATURE_LENGTH,
+    Keypair, PublicKey as Ed25519_PublicKey, SecretKey as Ed25519_PrivateKey,
+    Signature as Ed25519_Signature, KEYPAIR_LENGTH, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH,
+    SIGNATURE_LENGTH,
 };
 use serde_derive::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
+use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::ops::Rem;
 
 use crate::core::peer_id::PeerId;
 
@@ -39,6 +45,41 @@ impl KeyType {
         match self {
             KeyType::Ed25519 => SIGNATURE_LENGTH,
             _ => 0,
+        }
+    }
+
+    fn sign(
+        &self,
+        psk: &PrivateKey,
+        msg: &Vec<u8>,
+    ) -> Result<Signature, Box<dyn std::error::Error>> {
+        match self {
+            KeyType::Ed25519 => {
+                let ed_psk = Ed25519_PrivateKey::from_bytes(&psk.data[..])?;
+                let ed_pk: Ed25519_PublicKey = (&ed_psk).into();
+
+                let mut keypair_bytes: [u8; KEYPAIR_LENGTH] = [0u8; KEYPAIR_LENGTH];
+                keypair_bytes[..SECRET_KEY_LENGTH].copy_from_slice(&ed_psk.to_bytes());
+                keypair_bytes[SECRET_KEY_LENGTH..].copy_from_slice(&ed_pk.to_bytes());
+                let keypair = Keypair::from_bytes(&keypair_bytes).unwrap();
+                Ok(Signature {
+                    key_type: *self,
+                    data: keypair.sign(msg).to_bytes().to_vec(),
+                })
+            }
+            _ => Ok(Default::default()),
+        }
+    }
+
+    fn verify(&self, pk: &PublicKey, msg: &Vec<u8>, sign: &Signature) -> bool {
+        match self {
+            KeyType::Ed25519 => {
+                let ed_pk = Ed25519_PublicKey::from_bytes(&pk.data[..]).unwrap();
+                ed_pk
+                    .verify(msg, &Ed25519_Signature::from_bytes(&sign.data[..]).unwrap())
+                    .is_ok()
+            }
+            _ => true,
         }
     }
 }
@@ -86,7 +127,7 @@ impl PublicKey {
     }
 
     pub fn verify(&self, msg: &Vec<u8>, sign: &Signature) -> bool {
-        true
+        self.key_type.verify(self, msg, sign)
     }
 }
 
@@ -129,8 +170,8 @@ impl PrivateKey {
         }
     }
 
-    pub fn sign(&self, msg: &Vec<u8>) -> Signature {
-        Default::default()
+    pub fn sign(&self, msg: &Vec<u8>) -> Result<Signature, ()> {
+        self.key_type.sign(self, msg).map_err(|_e| ())
     }
 
     pub fn dh(&self, pk: &PublicKey) -> Result<Vec<u8>, ()> {
@@ -178,10 +219,11 @@ impl SessionKey {
         match self_psk.key_type {
             KeyType::Ed25519 => {
                 let (mut tmp_psk, tmp_pk) = PrivateKey::generate(self_psk.key_type);
-                let mut data = tmp_pk.data; // tmp_pk
-                data.append(&mut self_psk.sign(&data).data); // tmp_sign
-                data.append(&mut tmp_psk.data); // tmp_psk
-                data.append(&mut remote_pk.data.clone()); // remote_pk
+                let mut data = tmp_pk.data; // tmp_pk 32
+                data.append(&mut self_psk.sign(&data).unwrap().data); // tmp_sign 64
+                data.append(&mut tmp_psk.data); // tmp_psk 32
+                data.append(&mut remote_pk.data.clone()); // remote_pk 32
+
                 SessionKey {
                     key_type: self_psk.key_type,
                     data: data,
@@ -232,6 +274,7 @@ impl SessionKey {
                 .map(|mut session_key| {
                     self.is_ok = true;
                     self.data.append(&mut session_key);
+                    println!("session key is ok: {:?}", self);
                 })
                 .is_ok()
         } else {
@@ -240,16 +283,94 @@ impl SessionKey {
     }
 
     pub fn out_bytes(&self) -> Vec<u8> {
-        let start = self.key_type.pk_len();
-        let end = start + self.key_type.sign_len();
-        self.data[start..end].to_vec()
+        let end = self.key_type.pk_len() + self.key_type.sign_len();
+        self.data[..end].to_vec()
     }
 
-    pub fn encrypt(&self, msg: Vec<u8>) -> Vec<u8> {
+    pub fn key(&self) -> GenericArray<u8, <Aes256 as BlockCipher>::KeySize> {
+        let mut key = [0u8; 32];
+        let start = self.key_type.pk_len()
+            + self.key_type.sign_len()
+            + self.key_type.psk_len()
+            + self.key_type.pk_len();
+        key.copy_from_slice(&self.data[start..]);
+        key.into()
+    }
+
+    pub fn encrypt(&self, mut msg: Vec<u8>) -> Vec<u8> {
+        let key = self.key();
+        let num = msg.len().rem(16);
+        if num != 0 {
+            msg.append(&mut vec![0; 16 - num])
+        }
+        block_encrypt(&key, &mut msg, 0);
         msg
     }
 
-    pub fn decrypt(&self, msg: Vec<u8>) -> Result<Vec<u8>, ()> {
-        Ok(msg)
+    pub fn decrypt(&self, mut msg: Vec<u8>) -> Result<Vec<u8>, ()> {
+        let key = self.key();
+        block_decrypt(&key, &mut msg, 0);
+
+        // TODO need better fill
+        let mut j = msg.len();
+        for i in 1..(j + 1) {
+            if msg[j - i] != 0u8 {
+                j = j - i;
+                break;
+            }
+        }
+
+        Ok(msg[0..(j + 1)].to_vec())
+    }
+}
+
+impl Debug for SessionKey {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        let start = self.key_type.pk_len() * 2 + self.key_type.sign_len() + self.key_type.psk_len();
+        let mut hex = String::new();
+        hex.extend(
+            self.data[start..]
+                .iter()
+                .map(|byte| format!("{:02x?}", byte)),
+        );
+        write!(f, "0x{}", hex)
+    }
+}
+
+fn block_encrypt(
+    key: &GenericArray<u8, <Aes256 as BlockCipher>::KeySize>,
+    plaintext: &mut Vec<u8>,
+    len: usize,
+) {
+    let cipher = Aes256::new(key);
+
+    let start = len * 16;
+    let p_len = plaintext.len() - start;
+
+    let block_len = if p_len > 16 { 16 } else { p_len };
+    let mut block = GenericArray::from_mut_slice(&mut plaintext[start..(start + block_len)]);
+    cipher.encrypt_block(&mut block);
+
+    if p_len > 16 {
+        block_encrypt(key, plaintext, len + 1);
+    }
+}
+
+fn block_decrypt(
+    key: &GenericArray<u8, <Aes256 as BlockCipher>::KeySize>,
+    ciphertext: &mut [u8],
+    len: usize,
+) {
+    let cipher = Aes256::new(key);
+
+    let start = len * 16;
+    let p_len = ciphertext.len() - start;
+
+    let block_len = if p_len > 16 { 16 } else { p_len };
+    let mut block = GenericArray::from_mut_slice(&mut ciphertext[start..(start + block_len)]);
+    cipher.decrypt_block(&mut block);
+
+    if p_len > 16 {
+        block_decrypt(key, ciphertext, len + 1);
     }
 }

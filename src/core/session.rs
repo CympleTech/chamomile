@@ -66,6 +66,9 @@ pub fn session_start(
             .send(EndpointMessage::Connected(remote_peer_id, sender))
             .await;
 
+        let mut buffers: Vec<Vec<u8>> = vec![];
+        let mut receiver_buffers: Vec<Vec<u8>> = vec![];
+
         loop {
             select! {
                 msg = transport_receiver.next().fuse() => match msg {
@@ -79,27 +82,51 @@ pub fn session_start(
                                 match SessionType::from_bytes(bytes) {
                                     Ok(t) => match t {
                                         SessionType::Key(bytes) => {
-                                            println!("receiver key: {:?}", bytes);
-                                            if session_key.is_ok() {
+                                            if !session_key.is_ok() {
+                                                if !session_key.in_bytes(bytes) {
+                                                    server_sender
+                                                        .send(EndpointMessage::Close(remote_peer_id))
+                                                        .await;
+                                                    transport_sender.send(StreamMessage::Close).await;
+                                                    break;
+                                                }
+
+                                                transport_sender
+                                                    .send(StreamMessage::Bytes(
+                                                        SessionType::Key(session_key.out_bytes())
+                                                            .to_bytes()
+                                                    ))
+                                                    .await;
+                                            }
+
+                                            while !buffers.is_empty() {
+                                                let bytes = buffers.pop().unwrap();
+                                                let e_data = session_key.encrypt(bytes);
+                                                let data = SessionType::Data(e_data).to_bytes();
+                                                transport_sender
+                                                    .send(StreamMessage::Bytes(data))
+                                                    .await;
+                                            }
+
+                                            while !receiver_buffers.is_empty() {
+                                                let e_data = buffers.pop().unwrap();
+                                                let d_data = session_key.decrypt(e_data);
+                                                if d_data.is_ok() {
+                                                    out_sender
+                                                        .send(Message::Data(
+                                                            remote_peer_id,
+                                                            d_data.unwrap()
+                                                        )).await;
+                                                }
+                                            }
+
+                                        }
+                                        SessionType::Data(e_data) => {
+                                            if !session_key.is_ok() {
+                                                receiver_buffers.push(e_data);
                                                 continue;
                                             }
 
-                                            if !session_key.in_bytes(bytes) {
-                                                server_sender
-                                                    .send(EndpointMessage::Close(remote_peer_id))
-                                                    .await;
-                                                transport_sender.send(StreamMessage::Close).await;
-                                                break;
-                                            }
-
-                                            transport_sender
-                                                .send(StreamMessage::Bytes(
-                                                    SessionType::Key(session_key.out_bytes())
-                                                        .to_bytes()
-                                                ))
-                                                .await;
-                                        }
-                                        SessionType::Data(e_data) => {
                                             let d_data = session_key.decrypt(e_data);
                                             if d_data.is_ok() {
                                                 out_sender
@@ -126,7 +153,9 @@ pub fn session_start(
                                             // TODO Heartbeat Ping/Pong
                                         }
                                     }
-                                    Err(_) => {},
+                                    Err(e) => {
+                                        println!("Error Serialize SessionType {:?}", e)
+                                    },
                                 }
                             },
                             StreamMessage::Close => {
@@ -144,12 +173,15 @@ pub fn session_start(
                     Some(msg) => {
                         match msg {
                             StreamMessage::Bytes(bytes) => {
-                                let d_data = SessionType::Data(bytes).to_bytes();
-                                let e_data = session_key.encrypt(d_data);
-
-                                transport_sender
-                                    .send(StreamMessage::Bytes(e_data))
-                                    .await;
+                                if session_key.is_ok() {
+                                    let e_data = session_key.encrypt(bytes);
+                                    let data = SessionType::Data(e_data).to_bytes();
+                                    transport_sender
+                                        .send(StreamMessage::Bytes(data))
+                                        .await;
+                                } else {
+                                    buffers.push(bytes);
+                                }
                             },
                             StreamMessage::Ok => {
                                 is_ok = true;
