@@ -13,7 +13,7 @@ use crate::transports::UdpEndpoint;
 use crate::transports::{new_channel, Endpoint, EndpointMessage, StreamMessage};
 use crate::{Config, Message};
 
-use super::keys::{KeyType, PrivateKey, PublicKey};
+use super::keys::{KeyType, Keypair};
 use super::peer_id::PeerId;
 use super::peer_list::{PeerList, PeerTable};
 use super::session::session_start;
@@ -35,8 +35,7 @@ impl Transport {
 
 pub struct Server {
     peer_id: PeerId,
-    pk: PublicKey,
-    psk: PrivateKey,
+    key: Keypair,
     peer_list: PeerTable,
     while_list: PeerList,
     black_list: PeerList,
@@ -47,15 +46,14 @@ pub struct Server {
 impl Server {
     fn new(config: Config) -> Self {
         // load or generate keypair
-        let (psk, pk) = PrivateKey::generate(KeyType::Ed25519);
-        let peer_id = pk.peer_id();
+        let key = KeyType::Ed25519.generate_kepair();
+        let peer_id = key.peer_id();
 
         // TODO load peers & merge config
 
         Self {
             peer_id,
-            pk,
-            psk,
+            key,
             peer_list: PeerTable::init(peer_id),
             while_list: PeerList::default(),
             black_list: PeerList::default(),
@@ -67,7 +65,8 @@ impl Server {
     pub fn start(config: Config, out_send: Sender<Message>, mut self_recv: Receiver<Message>) {
         task::spawn(async move {
             let server = Self::new(config);
-            println!("server start peer id: {:?}", server.peer_id);
+
+            println!("Debug: server start peer id: {:?}", server.peer_id);
 
             // mock
             let (send, mut recv) = new_channel();
@@ -104,8 +103,7 @@ impl Server {
                                             sender,
                                             send.clone(),
                                             out_send.clone(),
-                                            server.psk.clone(),
-                                            server.pk.clone(),
+                                            Arc::new(server.key.clone()),
                                             is_ok,
                                         )
                                     }
@@ -135,7 +133,7 @@ impl Server {
                                 match message {
                                     Message::Connect(addr) => {
                                         transport_send
-                                            .send(EndpointMessage::Connect(addr, server.pk.to_bytes()))
+                                            .send(EndpointMessage::Connect(addr, server.key.pk.clone()))
                                             .await;
                                     }
                                     Message::DisConnect(addr) => {

@@ -2,7 +2,7 @@ use async_std::{
     io,
     io::BufReader,
     prelude::*,
-    sync::{Receiver, Sender},
+    sync::{Arc, Receiver, Sender},
     task,
 };
 use futures::{select, FutureExt};
@@ -13,7 +13,7 @@ use std::time::Duration;
 use crate::transports::{new_stream_channel, EndpointMessage, StreamMessage};
 use crate::Message;
 
-use super::keys::{PrivateKey, PublicKey, SessionKey, Signature};
+use super::keys::{Keypair, SessionKey};
 use super::peer_id::PeerId;
 
 pub fn session_start(
@@ -21,19 +21,18 @@ pub fn session_start(
     transport_sender: Sender<StreamMessage>,
     server_sender: Sender<EndpointMessage>,
     out_sender: Sender<Message>,
-    self_peer_psk: PrivateKey,
-    self_peer_pk: PublicKey,
+    key: Arc<Keypair>,
     mut is_ok: bool,
 ) {
     task::spawn(async move {
         // timeout 10s to read peer_id & public_key
-        let result: io::Result<Option<PublicKey>> = io::timeout(Duration::from_secs(5), async {
+        let result: io::Result<Option<Keypair>> = io::timeout(Duration::from_secs(5), async {
             while let Some(msg) = transport_receiver.recv().await {
-                let remote_peer_pk = match msg {
-                    StreamMessage::Bytes(bytes) => PublicKey::from_bytes(bytes).ok(),
+                let remote_peer_key = match msg {
+                    StreamMessage::Bytes(bytes) => Keypair::from_pk(key.key, bytes).ok(),
                     _ => None,
                 };
-                return Ok(remote_peer_pk);
+                return Ok(remote_peer_key);
             }
 
             Ok(None)
@@ -41,7 +40,7 @@ pub fn session_start(
         .await;
 
         if result.is_err() {
-            println!("Session timeout");
+            println!("Debug: Session timeout");
             transport_sender.send(StreamMessage::Close).await;
             drop(transport_receiver);
             drop(transport_sender);
@@ -49,18 +48,17 @@ pub fn session_start(
         }
         let result = result.unwrap();
         if result.is_none() {
-            println!("Session invalid pk");
+            println!("Debug: Session invalid pk");
             transport_sender.send(StreamMessage::Close).await;
             drop(transport_receiver);
             drop(transport_sender);
             return;
         }
-        let remote_peer_pk = result.unwrap();
-        let remote_peer_id = remote_peer_pk.peer_id();
-        let mut session_key: SessionKey =
-            SessionKey::generate(&remote_peer_pk, &self_peer_pk, &self_peer_psk);
+        let remote_peer_key = result.unwrap();
+        let remote_peer_id = remote_peer_key.peer_id();
+        let mut session_key: SessionKey = key.key.session_key(&key, &remote_peer_key);
 
-        println!("Session connected: {:?}", remote_peer_id);
+        println!("Debug: Session connected: {:?}", remote_peer_id);
         let (sender, mut receiver) = new_stream_channel();
         server_sender
             .send(EndpointMessage::Connected(remote_peer_id, sender))
@@ -154,7 +152,7 @@ pub fn session_start(
                                         }
                                     }
                                     Err(e) => {
-                                        println!("Error Serialize SessionType {:?}", e)
+                                        println!("Debug: Error Serialize SessionType {:?}", e)
                                     },
                                 }
                             },
@@ -186,7 +184,7 @@ pub fn session_start(
                             StreamMessage::Ok => {
                                 is_ok = true;
                                 transport_sender
-                                    .send(StreamMessage::Bytes(self_peer_pk.to_bytes()))
+                                    .send(StreamMessage::Bytes(key.pk.clone()))
                                     .await;
 
                                 transport_sender
@@ -212,7 +210,7 @@ pub fn session_start(
 enum SessionType {
     Key(Vec<u8>),
     Data(Vec<u8>),
-    DHT(Vec<(PeerId, SocketAddr)>, Signature),
+    DHT(Vec<(PeerId, SocketAddr)>, Vec<u8>),
     Relay(PeerId, Vec<u8>),
     Ping,
     Pong,
