@@ -163,6 +163,14 @@ impl Keypair {
         PeerId(peer_bytes)
     }
 
+    pub fn public(&self) -> Self {
+        Keypair {
+            key: self.key,
+            sk: vec![],
+            pk: self.pk.clone(),
+        }
+    }
+
     pub fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, ()> {
         self.key.sign(&self, msg).map_err(|_e| ())
     }

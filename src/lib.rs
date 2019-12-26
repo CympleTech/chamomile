@@ -68,7 +68,7 @@ pub fn new_channel() -> (Sender<Message>, Receiver<Message>) {
 pub async fn start(out_send: Sender<Message>, config: Config) -> Result<Sender<Message>> {
     let (send, recv) = new_channel();
 
-    core::server::Server::start(config, out_send, recv);
+    core::server::start(config, out_send, recv).await?;
 
     Ok(send)
 }

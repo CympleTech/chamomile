@@ -9,6 +9,7 @@ mod tcp;
 mod udp;
 mod udt;
 
+use crate::core::transport::Transport;
 use crate::PeerId;
 
 /// max task capacity for udp to handle.
@@ -24,7 +25,7 @@ pub enum EndpointMessage {
         Sender<StreamMessage>,
         bool,
     ), // transport to server
-    Connected(PeerId, Sender<StreamMessage>), // session to server
+    Connected(PeerId, Sender<StreamMessage>, Transport), // session to server
     Close(PeerId),                // session to server
 }
 
@@ -45,7 +46,9 @@ impl Debug for EndpointMessage {
             EndpointMessage::PreConnected(ref addr, _, _, _) => {
                 write!(f, "Endpoint pre-connected: {:?}", addr)
             }
-            EndpointMessage::Connected(ref addr, _) => write!(f, "Endpoint connected: {:?}", addr),
+            EndpointMessage::Connected(ref addr, _, _) => {
+                write!(f, "Endpoint connected: {:?}", addr)
+            }
             EndpointMessage::Close(ref addr) => write!(f, "Endpoint losed: {:?}", addr),
         }
     }

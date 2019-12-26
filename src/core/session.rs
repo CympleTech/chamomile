@@ -13,23 +13,41 @@ use std::time::Duration;
 use crate::transports::{new_stream_channel, EndpointMessage, StreamMessage};
 use crate::Message;
 
-use super::keys::{Keypair, SessionKey};
+use super::hole_punching::nat;
+use super::keys::{KeyType, Keypair, SessionKey};
 use super::peer_id::PeerId;
+use super::transport::Transport;
 
-pub fn session_start(
+/// Rtemote Public Info, include local transport and public key bytes.
+#[derive(Deserialize, Serialize)]
+pub struct RemotePublic(pub Keypair, pub Transport);
+
+impl RemotePublic {
+    pub fn from_bytes(key: KeyType, bytes: Vec<u8>) -> Result<Self, ()> {
+        bincode::deserialize(&bytes).map_err(|_e| ())
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        bincode::serialize(self).unwrap()
+    }
+}
+
+pub fn start(
+    remote_addr: SocketAddr,
     mut transport_receiver: Receiver<StreamMessage>,
     transport_sender: Sender<StreamMessage>,
     server_sender: Sender<EndpointMessage>,
     out_sender: Sender<Message>,
     key: Arc<Keypair>,
+    self_transport: Transport,
     mut is_ok: bool,
 ) {
     task::spawn(async move {
         // timeout 10s to read peer_id & public_key
-        let result: io::Result<Option<Keypair>> = io::timeout(Duration::from_secs(5), async {
+        let result: io::Result<Option<RemotePublic>> = io::timeout(Duration::from_secs(5), async {
             while let Some(msg) = transport_receiver.recv().await {
                 let remote_peer_key = match msg {
-                    StreamMessage::Bytes(bytes) => Keypair::from_pk(key.key, bytes).ok(),
+                    StreamMessage::Bytes(bytes) => RemotePublic::from_bytes(key.key, bytes).ok(),
                     _ => None,
                 };
                 return Ok(remote_peer_key);
@@ -54,14 +72,19 @@ pub fn session_start(
             drop(transport_sender);
             return;
         }
-        let remote_peer_key = result.unwrap();
+        let RemotePublic(remote_peer_key, remote_local_addr) = result.unwrap();
         let remote_peer_id = remote_peer_key.peer_id();
         let mut session_key: SessionKey = key.key.session_key(&key, &remote_peer_key);
 
         println!("Debug: Session connected: {:?}", remote_peer_id);
         let (sender, mut receiver) = new_stream_channel();
+        let transport = nat(remote_addr, remote_local_addr);
         server_sender
-            .send(EndpointMessage::Connected(remote_peer_id, sender))
+            .send(EndpointMessage::Connected(
+                remote_peer_id,
+                sender,
+                transport,
+            ))
             .await;
 
         let mut buffers: Vec<Vec<u8>> = vec![];
@@ -136,6 +159,7 @@ pub fn session_start(
                                         }
                                         SessionType::DHT(_peers, _sign) => {
                                             // TODO DHT Helper
+                                            // remote_peer_key.verify()
                                         }
                                         SessionType::Relay(_peer_id, _data) => {
                                             // TODO Relay send
@@ -184,7 +208,7 @@ pub fn session_start(
                             StreamMessage::Ok => {
                                 is_ok = true;
                                 transport_sender
-                                    .send(StreamMessage::Bytes(key.pk.clone()))
+                                    .send(StreamMessage::Bytes(RemotePublic(key.public(), self_transport.clone()).to_bytes()))
                                     .await;
 
                                 transport_sender

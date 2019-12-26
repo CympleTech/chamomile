@@ -13,167 +13,135 @@ use crate::transports::UdpEndpoint;
 use crate::transports::{new_channel, Endpoint, EndpointMessage, StreamMessage};
 use crate::{Config, Message};
 
-use super::keys::{KeyType, Keypair};
-use super::peer_id::PeerId;
+use super::keys::KeyType;
 use super::peer_list::{PeerList, PeerTable};
-use super::session::session_start;
+use super::session::{start as session_start, RemotePublic};
+use super::transport::Transport;
 
-#[derive(Debug, Hash)]
-enum Transport {
-    UDP(SocketAddr), // 0u8
-    TCP(SocketAddr), // 1u8
-}
+/// start server
+pub async fn start(
+    config: Config,
+    out_send: Sender<Message>,
+    mut self_recv: Receiver<Message>,
+) -> Result<()> {
+    // TODO load or init config.
+    // load or generate keypair
+    let key = KeyType::Ed25519.generate_kepair();
+    let peer_id = key.peer_id();
+    let mut peer_list = PeerTable::init(peer_id);
+    let _while_list = PeerList::default();
+    let black_list = PeerList::default();
+    let default_transport = Transport::TCP(config.addr, true);
+    let _transports: HashMap<u8, Sender<EndpointMessage>> = HashMap::new();
 
-impl Transport {
-    fn symbol(&self) -> u8 {
-        match self {
-            &Transport::UDP(_) => 0u8,
-            &Transport::TCP(_) => 1u8,
-        }
-    }
-}
+    let (send, mut recv) = new_channel();
+    let transport_send = match default_transport {
+        Transport::UDP(addr, _) => UdpEndpoint::start(addr, peer_id.clone(), send.clone())
+            .await
+            .expect("UDP Transport binding failure!"),
+        Transport::TCP(addr, _) => TcpEndpoint::start(addr, peer_id.clone(), send.clone())
+            .await
+            .expect("TCP Transport binding failure!"),
+        _ => panic!("Not suppert, waiting"),
+    };
 
-pub struct Server {
-    peer_id: PeerId,
-    key: Keypair,
-    peer_list: PeerTable,
-    while_list: PeerList,
-    black_list: PeerList,
-    default_transport: Transport,
-    transports: HashMap<u8, Sender<EndpointMessage>>,
-}
+    println!("Debug: listening: {}", config.addr);
+    println!("Debug: peer id: {:?}", peer_id);
 
-impl Server {
-    fn new(config: Config) -> Self {
-        // load or generate keypair
-        let key = KeyType::Ed25519.generate_kepair();
-        let peer_id = key.peer_id();
+    task::spawn(async move {
+        //let m1 = Arc::new(Mutex::new(server));
+        //let m2 = m1.clone();
 
-        // TODO load peers & merge config
-
-        Self {
-            peer_id,
-            key,
-            peer_list: PeerTable::init(peer_id),
-            while_list: PeerList::default(),
-            black_list: PeerList::default(),
-            default_transport: Transport::TCP(config.addr),
-            transports: HashMap::new(),
-        }
-    }
-
-    pub fn start(config: Config, out_send: Sender<Message>, mut self_recv: Receiver<Message>) {
-        task::spawn(async move {
-            let server = Self::new(config);
-
-            println!("Debug: server start peer id: {:?}", server.peer_id);
-
-            // mock
-            let (send, mut recv) = new_channel();
-            let transport_send = match server.default_transport {
-                Transport::UDP(addr) => {
-                    UdpEndpoint::start(addr, server.peer_id.clone(), send.clone())
-                        .await
-                        .expect("UDP Transport binding failure!")
-                }
-                Transport::TCP(addr) => {
-                    TcpEndpoint::start(addr, server.peer_id.clone(), send.clone())
-                        .await
-                        .expect("TCP Transport binding failure!")
-                }
-            };
-
-            let m1 = Arc::new(Mutex::new(server));
-            let m2 = m1.clone();
-
-            loop {
-                select! {
-                    msg = recv.next().fuse() => match msg {
-                        Some(message) => {
-                            let mut server = m1.lock().await;
-
-                            match message {
-                                EndpointMessage::PreConnected(addr, receiver, sender, is_ok) => {
-                                    // check and start session
-                                    if server.black_list.contains_addr(&addr) {
-                                        sender.send(StreamMessage::Close).await;
-                                    } else {
-                                        session_start(
-                                            receiver,
-                                            sender,
-                                            send.clone(),
-                                            out_send.clone(),
-                                            Arc::new(server.key.clone()),
-                                            is_ok,
-                                        )
-                                    }
+        loop {
+            select! {
+                msg = recv.next().fuse() => match msg {
+                    Some(message) => {
+                        match message {
+                            EndpointMessage::PreConnected(addr, receiver, sender, is_ok) => {
+                                // check and start session
+                                if black_list.contains_addr(&addr) {
+                                    sender.send(StreamMessage::Close).await;
+                                } else {
+                                    session_start(
+                                        addr,
+                                        receiver,
+                                        sender,
+                                        send.clone(),
+                                        out_send.clone(),
+                                        Arc::new(key.clone()),
+                                        default_transport.clone(),
+                                        is_ok,
+                                    )
                                 }
-                                EndpointMessage::Connected(peer_id, sender) => {
-                                    // check and save tmp and save outside
-                                    if server.black_list.contains_peer(&peer_id) {
-                                        sender.send(StreamMessage::Close).await;
-                                    } else {
-                                        server.peer_list.add_tmp_peer(peer_id, sender);
-                                        out_send.send(Message::PeerJoin(peer_id)).await;
-                                    }
-                                }
-                                EndpointMessage::Close(peer_id) => {
-                                    server.peer_list.remove(&peer_id);
-                                    out_send.send(Message::PeerLeave(peer_id)).await;
-                                }
-                                _ => {}
                             }
-                        },
-                        None => break,
-                    },
-                    msg = self_recv.next().fuse() => match msg {
-                        Some(message) => {
-                                let mut server = m2.lock().await;
-
-                                match message {
-                                    Message::Connect(addr) => {
-                                        transport_send
-                                            .send(EndpointMessage::Connect(addr, server.key.pk.clone()))
-                                            .await;
-                                    }
-                                    Message::DisConnect(addr) => {
-                                        transport_send.send(EndpointMessage::Disconnect(addr)).await;
-                                    }
-                                    Message::PeerJoinResult(peer_id, is_ok) => {
-                                        let sender = server.peer_list.get(&peer_id);
-                                        if sender.is_some() {
-                                            let sender = sender.unwrap();
-                                            if is_ok {
-                                                sender.send(StreamMessage::Ok).await;
-                                                server.peer_list.stabilize_tmp_peer(peer_id);
-                                            } else {
-                                                sender.send(StreamMessage::Close).await;
-                                                server.peer_list.remove_tmp_peer(&peer_id);
-                                            }
-                                        }
-                                    }
-                                    Message::Data(peer_id, data) => {
-                                        let sender = server.peer_list.get(&peer_id);
-                                        if sender.is_some() {
-                                            let sender = sender.unwrap();
-                                            sender.send(StreamMessage::Bytes(data)).await;
-                                        }
-                                    },
-                                    Message::PeerLeave(peer_id) => {
-                                        let sender = server.peer_list.get(&peer_id);
-                                        if sender.is_some() {
-                                            let sender = sender.unwrap();
-                                            sender.send(StreamMessage::Close).await;
-                                            server.peer_list.remove_tmp_peer(&peer_id);
-                                        }
-                                    },
-                                    Message::PeerJoin(_peer_id) => {},  // TODO search peer and join
+                            EndpointMessage::Connected(peer_id, sender, transport) => {
+                                // check and save tmp and save outside
+                                if black_list.contains_peer(&peer_id) {
+                                    sender.send(StreamMessage::Close).await;
+                                } else {
+                                    peer_list.add_tmp_peer(peer_id, sender, transport);
+                                    out_send.send(Message::PeerJoin(peer_id)).await;
                                 }
-                        },
-                        None => break,
-                    }
+                            }
+                            EndpointMessage::Close(peer_id) => {
+                                peer_list.remove(&peer_id);
+                                out_send.send(Message::PeerLeave(peer_id)).await;
+                            }
+                            _ => {}
+                        }
+                    },
+                    None => break,
+                },
+                msg = self_recv.next().fuse() => match msg {
+                    Some(message) => {
+                        match message {
+                            Message::Connect(addr) => {
+                                transport_send
+                                    .send(EndpointMessage::Connect(
+                                        addr,
+                                        RemotePublic(key.public().clone(), default_transport.clone()).to_bytes()
+                                    ))
+                                    .await;
+                            }
+                            Message::DisConnect(addr) => {
+                                transport_send.send(EndpointMessage::Disconnect(addr)).await;
+                            }
+                            Message::PeerJoinResult(peer_id, is_ok) => {
+                                let sender = peer_list.get(&peer_id);
+                                if sender.is_some() {
+                                    let sender = sender.unwrap();
+                                    if is_ok {
+                                        sender.send(StreamMessage::Ok).await;
+                                        peer_list.stabilize_tmp_peer(peer_id);
+                                    } else {
+                                        sender.send(StreamMessage::Close).await;
+                                        peer_list.remove_tmp_peer(&peer_id);
+                                    }
+                                }
+                            }
+                            Message::Data(peer_id, data) => {
+                                let sender = peer_list.get(&peer_id);
+                                if sender.is_some() {
+                                    let sender = sender.unwrap();
+                                    sender.send(StreamMessage::Bytes(data)).await;
+                                }
+                            },
+                            Message::PeerLeave(peer_id) => {
+                                let sender = peer_list.get(&peer_id);
+                                if sender.is_some() {
+                                    let sender = sender.unwrap();
+                                    sender.send(StreamMessage::Close).await;
+                                    peer_list.remove_tmp_peer(&peer_id);
+                                }
+                            },
+                            Message::PeerJoin(_peer_id) => {},  // TODO search peer and join
+                        }
+                    },
+                    None => break,
                 }
             }
-        });
-    }
+        }
+    });
+
+    Ok(())
 }

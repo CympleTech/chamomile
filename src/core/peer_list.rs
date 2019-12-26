@@ -7,11 +7,12 @@ use std::net::SocketAddr;
 use crate::transports::StreamMessage;
 
 use super::peer_id::PeerId;
+use super::transport::Transport;
 
 /// PeerList
 /// use for while & Black list
 #[derive(Debug, Default)]
-pub(crate) struct PeerList(Vec<PeerId>, Vec<SocketAddr>);
+pub struct PeerList(Vec<PeerId>, Vec<SocketAddr>);
 
 impl PeerList {
     pub fn init(peers: Vec<PeerId>, addrs: Vec<SocketAddr>) -> Self {
@@ -49,9 +50,9 @@ impl PeerList {
 
 /// PeerTable
 /// contains: peers(DHT) & tmp_peers(HashMap)
-pub(crate) struct PeerTable {
-    peers: KadTree<PeerId, Option<Sender<StreamMessage>>>,
-    tmps: HashMap<PeerId, Sender<StreamMessage>>,
+pub struct PeerTable {
+    peers: KadTree<PeerId, Option<(Sender<StreamMessage>, Transport)>>,
+    tmps: HashMap<PeerId, (Sender<StreamMessage>, Transport)>,
 }
 
 impl PeerTable {
@@ -76,26 +77,33 @@ impl PeerTable {
 
     /// get in DHT, DHT closest.
     pub fn get(&self, peer_id: &PeerId) -> Option<&Sender<StreamMessage>> {
-        self.tmps.get(peer_id).or(self
-            .peers
-            .search(peer_id)
-            .and_then(|(_k, ref v, _is_it)| v.as_ref()))
+        self.tmps
+            .get(peer_id)
+            .or(self
+                .peers
+                .search(peer_id)
+                .and_then(|(_k, ref v, _is_it)| v.as_ref()))
+            .map(|s| &s.0)
     }
 
     /// get in DHT (not closest).
     pub fn get_it(&self, peer_id: &PeerId) -> Option<&Sender<StreamMessage>> {
-        self.peers
-            .search(peer_id)
-            .and_then(|(_k, v, is_it)| if is_it { v.as_ref() } else { None })
+        self.peers.search(peer_id).and_then(|(_k, v, is_it)| {
+            if is_it {
+                v.as_ref().map(|s| &s.0)
+            } else {
+                None
+            }
+        })
     }
 
     /// get in DHT, tmp_peers,  DHT closest
     pub fn get_all(&self, peer_id: &PeerId) -> Option<&Sender<StreamMessage>> {
-        self.peers.search(peer_id).and_then(|(k, v, is_it)| {
+        self.peers.search(peer_id).and_then(|(_k, v, is_it)| {
             if is_it {
-                v.as_ref()
+                v.as_ref().map(|s| &s.0)
             } else {
-                self.tmps.get(peer_id).or(v.as_ref())
+                self.tmps.get(peer_id).or(v.as_ref()).map(|s| &s.0)
             }
         })
     }
@@ -104,20 +112,28 @@ impl PeerTable {
         self.peers.contains(peer_id)
     }
 
-    pub fn remove(&mut self, peer_id: &PeerId) -> Option<Sender<StreamMessage>> {
+    pub fn remove(&mut self, peer_id: &PeerId) -> Option<(Sender<StreamMessage>, Transport)> {
         let r1 = self.peers.remove(peer_id).and_then(|v| v);
         let r2 = self.remove_tmp_peer(peer_id);
         r1.or(r2)
     }
 
-    pub fn add_tmp_peer(&mut self, peer_id: PeerId, sender: Sender<StreamMessage>) {
+    pub fn add_tmp_peer(
+        &mut self,
+        peer_id: PeerId,
+        sender: Sender<StreamMessage>,
+        transport: Transport,
+    ) {
         self.tmps
             .entry(peer_id)
-            .and_modify(|m| *m = sender.clone())
-            .or_insert(sender);
+            .and_modify(|m| *m = (sender.clone(), transport.clone()))
+            .or_insert((sender, transport));
     }
 
-    pub fn remove_tmp_peer(&mut self, peer_id: &PeerId) -> Option<Sender<StreamMessage>> {
+    pub fn remove_tmp_peer(
+        &mut self,
+        peer_id: &PeerId,
+    ) -> Option<(Sender<StreamMessage>, Transport)> {
         self.tmps.remove(peer_id)
     }
 
