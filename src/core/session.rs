@@ -78,12 +78,13 @@ pub fn start(
 
         println!("Debug: Session connected: {:?}", remote_peer_id);
         let (sender, mut receiver) = new_stream_channel();
-        let transport = nat(remote_addr, remote_local_addr);
+        let remote_transport = nat(remote_addr, remote_local_addr);
+        println!("Debug: NAT addr: {}", remote_transport.addr());
         server_sender
             .send(EndpointMessage::Connected(
                 remote_peer_id,
                 sender,
-                transport,
+                remote_transport,
             ))
             .await;
 

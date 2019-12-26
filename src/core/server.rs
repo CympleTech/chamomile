@@ -46,7 +46,7 @@ pub async fn start(
     };
 
     println!("Debug: listening: {}", config.addr);
-    println!("Debug: peer id: {:?}", peer_id);
+    println!("Debug: peer id: {}", peer_id.short_show());
 
     task::spawn(async move {
         //let m1 = Arc::new(Mutex::new(server));

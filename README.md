@@ -15,5 +15,5 @@
 - Compatible with part of libp2p and Protocol Lab
 
 ## Example
-- `cargo run --example one`
-- `cargo run --example two`
+- `cargo run --example test 0.0.0.0:8000`
+- `cargo run --example test 0.0.0.0:8001 0.0.0.0:8000`

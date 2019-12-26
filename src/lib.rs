@@ -1,6 +1,10 @@
 #![feature(vec_remove_item)]
 #![recursion_limit = "1024"]
-
+// TODO Debug
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_imports)]
+//
 use async_std::{
     io::Result,
     sync::{channel, Receiver, Sender},

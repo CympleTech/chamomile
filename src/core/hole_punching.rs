@@ -12,9 +12,9 @@ use crate::transports::StreamMessage;
 
 #[derive(Deserialize, Serialize)]
 pub enum HOLE {
-    STUN_ONE,
-    STUN_TWO,
-    HELP,
+    StunOne,
+    StunTwo,
+    Help,
 }
 
 pub fn nat(mut remote_addr: SocketAddr, local_addr: Transport) -> Transport {
@@ -32,13 +32,13 @@ pub fn nat(mut remote_addr: SocketAddr, local_addr: Transport) -> Transport {
 
 pub async fn handle(remote_peer: &PeerId, hole: HOLE, peers: &PeerTable) -> Result<()> {
     match hole {
-        HOLE::STUN_ONE => {
+        HOLE::StunOne => {
             // first test
         }
-        HOLE::STUN_TWO => {
+        HOLE::StunTwo => {
             // secound test
         }
-        HOLE::HELP => {
+        HOLE::Help => {
             // help hole
         }
     }
