@@ -8,15 +8,15 @@ use futures::{select, FutureExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
-use crate::transports::TcpEndpoint;
-use crate::transports::UdpEndpoint;
-use crate::transports::{new_channel, Endpoint, EndpointMessage, StreamMessage};
+use crate::transports::{
+    new_channel, start as transport_start, Endpoint, EndpointMessage, StreamMessage, TransportType,
+};
 use crate::{Config, Message};
 
 use super::keys::KeyType;
-use super::peer_list::{PeerList, PeerTable};
+use super::peer::Peer;
+use super::peer_list::PeerList;
 use super::session::{start as session_start, RemotePublic};
-use super::transport::Transport;
 
 /// start server
 pub async fn start(
@@ -27,23 +27,24 @@ pub async fn start(
     // TODO load or init config.
     // load or generate keypair
     let key = KeyType::Ed25519.generate_kepair();
+    let key = Arc::new(key);
+
     let peer_id = key.peer_id();
-    let mut peer_list = PeerTable::init(peer_id);
-    let _while_list = PeerList::default();
-    let black_list = PeerList::default();
-    let default_transport = Transport::TCP(config.addr, true);
+    let mut peer_list = PeerList::init(peer_id);
+    let peer = Peer::new(
+        key.peer_id(),
+        config.addr,
+        TransportType::from_str(&config.transport),
+        true,
+    );
+    let peer = Arc::new(peer);
+
     let _transports: HashMap<u8, Sender<EndpointMessage>> = HashMap::new();
 
     let (send, mut recv) = new_channel();
-    let transport_send = match default_transport {
-        Transport::UDP(addr, _) => UdpEndpoint::start(addr, peer_id.clone(), send.clone())
-            .await
-            .expect("UDP Transport binding failure!"),
-        Transport::TCP(addr, _) => TcpEndpoint::start(addr, peer_id.clone(), send.clone())
-            .await
-            .expect("TCP Transport binding failure!"),
-        _ => panic!("Not suppert, waiting"),
-    };
+    let transport_send = transport_start(peer.transport(), peer.addr(), send.clone())
+        .await
+        .expect("Transport binding failure!");
 
     println!("Debug: listening: {}", config.addr);
     println!("Debug: peer id: {}", peer_id.short_show());
@@ -59,7 +60,7 @@ pub async fn start(
                         match message {
                             EndpointMessage::PreConnected(addr, receiver, sender, is_ok) => {
                                 // check and start session
-                                if black_list.contains_addr(&addr) {
+                                if peer_list.is_black_addr(&addr) {
                                     sender.send(StreamMessage::Close).await;
                                 } else {
                                     session_start(
@@ -68,18 +69,18 @@ pub async fn start(
                                         sender,
                                         send.clone(),
                                         out_send.clone(),
-                                        Arc::new(key.clone()),
-                                        default_transport.clone(),
+                                        key.clone(),
+                                        peer.clone(),
                                         is_ok,
                                     )
                                 }
                             }
-                            EndpointMessage::Connected(peer_id, sender, transport) => {
+                            EndpointMessage::Connected(peer_id, sender, remote_peer) => {
                                 // check and save tmp and save outside
-                                if black_list.contains_peer(&peer_id) {
+                                if peer_list.is_black_peer(&peer_id) {
                                     sender.send(StreamMessage::Close).await;
                                 } else {
-                                    peer_list.add_tmp_peer(peer_id, sender, transport);
+                                    peer_list.add_tmp_peer(peer_id, sender, remote_peer);
                                     out_send.send(Message::PeerJoin(peer_id)).await;
                                 }
                             }
@@ -99,7 +100,7 @@ pub async fn start(
                                 transport_send
                                     .send(EndpointMessage::Connect(
                                         addr,
-                                        RemotePublic(key.public().clone(), default_transport.clone()).to_bytes()
+                                        RemotePublic(key.public().clone(), *peer.clone()).to_bytes()
                                     ))
                                     .await;
                             }
@@ -141,6 +142,7 @@ pub async fn start(
                 }
             }
         }
+        drop(send);
     });
 
     Ok(())

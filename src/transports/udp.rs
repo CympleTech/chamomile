@@ -35,7 +35,6 @@ impl Endpoint for UdpEndpoint {
     /// and receiver outside message addr.
     async fn start(
         socket_addr: SocketAddr,
-        _peer_id: PeerId,
         out_send: Sender<EndpointMessage>,
     ) -> Result<Sender<EndpointMessage>> {
         let socket: Arc<UdpSocket> = Arc::new(UdpSocket::bind(socket_addr).await?);

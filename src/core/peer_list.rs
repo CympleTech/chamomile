@@ -6,65 +6,89 @@ use std::net::SocketAddr;
 
 use crate::transports::StreamMessage;
 
-use super::peer_id::PeerId;
-use super::transport::Transport;
+use super::peer::{Peer, PeerId};
 
 /// PeerList
-/// use for while & Black list
-#[derive(Debug, Default)]
-pub struct PeerList(Vec<PeerId>, Vec<SocketAddr>);
+/// contains: peers(DHT) & tmp_peers(HashMap)
+pub struct PeerList {
+    peers: KadTree<PeerId, Option<(Sender<StreamMessage>, Peer)>>,
+    tmps: HashMap<PeerId, (Sender<StreamMessage>, Peer)>,
+    whites: (Vec<PeerId>, Vec<SocketAddr>),
+    blacks: (Vec<PeerId>, Vec<SocketAddr>),
+}
 
 impl PeerList {
-    pub fn init(peers: Vec<PeerId>, addrs: Vec<SocketAddr>) -> Self {
-        PeerList(peers, addrs)
-    }
-
-    pub fn contains_peer(&self, peer: &PeerId) -> bool {
-        self.0.contains(peer)
-    }
-
-    pub fn contains_addr(&self, addr: &SocketAddr) -> bool {
-        self.1.contains(addr)
-    }
-
-    pub fn add_peer(&mut self, peer: PeerId) {
-        if !self.contains_peer(&peer) {
-            self.0.push(peer)
-        }
-    }
-
-    pub fn add_addr(&mut self, addr: SocketAddr) {
-        if !self.contains_addr(&addr) {
-            self.1.push(addr)
-        }
-    }
-
-    pub fn remove_peer(&mut self, peer: &PeerId) -> Option<PeerId> {
-        self.0.remove_item(peer)
-    }
-
-    pub fn remove_addr(&mut self, addr: &SocketAddr) -> Option<SocketAddr> {
-        self.1.remove_item(addr)
-    }
-}
-
-/// PeerTable
-/// contains: peers(DHT) & tmp_peers(HashMap)
-pub struct PeerTable {
-    peers: KadTree<PeerId, Option<(Sender<StreamMessage>, Transport)>>,
-    tmps: HashMap<PeerId, (Sender<StreamMessage>, Transport)>,
-}
-
-impl PeerTable {
     pub fn init(self_peer_id: PeerId) -> Self {
-        PeerTable {
+        PeerList {
             peers: KadTree::new(self_peer_id, None),
             tmps: HashMap::new(),
+            whites: (vec![], vec![]),
+            blacks: (vec![], vec![]),
+        }
+    }
+}
+
+// Black and white list.
+impl PeerList {
+    pub fn is_white_peer(&self, peer: &PeerId) -> bool {
+        self.whites.0.contains(peer)
+    }
+
+    pub fn is_white_addr(&self, addr: &SocketAddr) -> bool {
+        self.whites.1.contains(addr)
+    }
+
+    pub fn add_white_peer(&mut self, peer: PeerId) {
+        if !self.whites.0.contains(&peer) {
+            self.whites.0.push(peer)
         }
     }
 
-    pub fn load() {}
+    pub fn add_white_addr(&mut self, addr: SocketAddr) {
+        if !self.whites.1.contains(&addr) {
+            self.whites.1.push(addr)
+        }
+    }
 
+    pub fn remove_white_peer(&mut self, peer: &PeerId) -> Option<PeerId> {
+        self.whites.0.remove_item(peer)
+    }
+
+    pub fn remove_white_addr(&mut self, addr: &SocketAddr) -> Option<SocketAddr> {
+        self.whites.1.remove_item(addr)
+    }
+
+    pub fn is_black_peer(&self, peer: &PeerId) -> bool {
+        self.blacks.0.contains(peer)
+    }
+
+    pub fn is_black_addr(&self, addr: &SocketAddr) -> bool {
+        self.blacks.1.contains(addr)
+    }
+
+    pub fn add_black_peer(&mut self, peer: PeerId) {
+        if !self.blacks.0.contains(&peer) {
+            self.blacks.0.push(peer)
+        }
+    }
+
+    pub fn add_black_addr(&mut self, addr: SocketAddr) {
+        if !self.blacks.1.contains(&addr) {
+            self.blacks.1.push(addr)
+        }
+    }
+
+    pub fn remove_black_peer(&mut self, peer: &PeerId) -> Option<PeerId> {
+        self.blacks.0.remove_item(peer)
+    }
+
+    pub fn remove_black_addr(&mut self, addr: &SocketAddr) -> Option<SocketAddr> {
+        self.blacks.1.remove_item(addr)
+    }
+}
+
+// DHT
+impl PeerList {
     pub fn all(&self) -> Vec<(PeerId, &Sender<StreamMessage>)> {
         let keys = self.peers.keys();
         keys.into_iter()
@@ -112,28 +136,20 @@ impl PeerTable {
         self.peers.contains(peer_id)
     }
 
-    pub fn remove(&mut self, peer_id: &PeerId) -> Option<(Sender<StreamMessage>, Transport)> {
+    pub fn remove(&mut self, peer_id: &PeerId) -> Option<(Sender<StreamMessage>, Peer)> {
         let r1 = self.peers.remove(peer_id).and_then(|v| v);
         let r2 = self.remove_tmp_peer(peer_id);
         r1.or(r2)
     }
 
-    pub fn add_tmp_peer(
-        &mut self,
-        peer_id: PeerId,
-        sender: Sender<StreamMessage>,
-        transport: Transport,
-    ) {
+    pub fn add_tmp_peer(&mut self, peer_id: PeerId, sender: Sender<StreamMessage>, peer: Peer) {
         self.tmps
             .entry(peer_id)
-            .and_modify(|m| *m = (sender.clone(), transport.clone()))
-            .or_insert((sender, transport));
+            .and_modify(|m| *m = (sender.clone(), peer.clone()))
+            .or_insert((sender, peer));
     }
 
-    pub fn remove_tmp_peer(
-        &mut self,
-        peer_id: &PeerId,
-    ) -> Option<(Sender<StreamMessage>, Transport)> {
+    pub fn remove_tmp_peer(&mut self, peer_id: &PeerId) -> Option<(Sender<StreamMessage>, Peer)> {
         self.tmps.remove(peer_id)
     }
 

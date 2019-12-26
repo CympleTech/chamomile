@@ -11,7 +11,7 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::ops::Rem;
 use x25519_dalek::{PublicKey as Ed25519_DH_Public, StaticSecret as Ed25519_DH_Secret};
 
-use crate::core::peer_id::PeerId;
+use crate::core::peer::PeerId;
 
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub enum KeyType {

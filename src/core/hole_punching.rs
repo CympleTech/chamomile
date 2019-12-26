@@ -5,40 +5,39 @@ use async_std::{
 use serde_derive::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
-use super::peer_id::PeerId;
-use super::peer_list::PeerTable;
-use super::transport::Transport;
-use crate::transports::StreamMessage;
+use super::peer::{Peer, PeerId};
+use super::peer_list::PeerList;
+use crate::transports::{StreamMessage, TransportType};
 
 #[derive(Deserialize, Serialize)]
-pub enum HOLE {
+pub enum Hole {
     StunOne,
     StunTwo,
     Help,
 }
 
-pub fn nat(mut remote_addr: SocketAddr, local_addr: Transport) -> Transport {
-    let is_pub = remote_addr.port() == local_addr.addr().port();
-    match local_addr {
-        Transport::UDP(_addr, pre) | Transport::UDT(_addr, pre) | Transport::RTP(_addr, pre) => {
-            Transport::UDP(remote_addr, pre && is_pub)
+pub fn nat(mut remote_addr: SocketAddr, mut local: Peer) -> Peer {
+    match local.transport() {
+        TransportType::TCP => {
+            remote_addr.set_port(local.addr().port()); // TODO TCP hole punching
         }
-        Transport::TCP(addr, pre) => {
-            remote_addr.set_port(addr.port());
-            Transport::TCP(remote_addr, pre && is_pub)
-        } // TODO TCP hole punching
+        _ => {}
     }
+
+    local.set_addr(remote_addr);
+    local.set_is_pub(remote_addr.port() == local.addr().port());
+    local
 }
 
-pub async fn handle(remote_peer: &PeerId, hole: HOLE, peers: &PeerTable) -> Result<()> {
+pub async fn handle(remote_peer: &PeerId, hole: Hole, peers: &PeerList) -> Result<()> {
     match hole {
-        HOLE::StunOne => {
+        Hole::StunOne => {
             // first test
         }
-        HOLE::StunTwo => {
+        Hole::StunTwo => {
             // secound test
         }
-        HOLE::Help => {
+        Hole::Help => {
             // help hole
         }
     }

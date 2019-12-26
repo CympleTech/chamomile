@@ -13,24 +13,9 @@ use std::time::Duration;
 use crate::transports::{new_stream_channel, EndpointMessage, StreamMessage};
 use crate::Message;
 
-use super::hole_punching::nat;
+use super::hole_punching::{nat, Hole};
 use super::keys::{KeyType, Keypair, SessionKey};
-use super::peer_id::PeerId;
-use super::transport::Transport;
-
-/// Rtemote Public Info, include local transport and public key bytes.
-#[derive(Deserialize, Serialize)]
-pub struct RemotePublic(pub Keypair, pub Transport);
-
-impl RemotePublic {
-    pub fn from_bytes(key: KeyType, bytes: Vec<u8>) -> Result<Self, ()> {
-        bincode::deserialize(&bytes).map_err(|_e| ())
-    }
-
-    pub fn to_bytes(&self) -> Vec<u8> {
-        bincode::serialize(self).unwrap()
-    }
-}
+use super::peer::{Peer, PeerId};
 
 pub fn start(
     remote_addr: SocketAddr,
@@ -39,7 +24,7 @@ pub fn start(
     server_sender: Sender<EndpointMessage>,
     out_sender: Sender<Message>,
     key: Arc<Keypair>,
-    self_transport: Transport,
+    peer: Arc<Peer>,
     mut is_ok: bool,
 ) {
     task::spawn(async move {
@@ -174,6 +159,9 @@ pub fn start(
                                         }
                                         SessionType::Pong => {
                                             // TODO Heartbeat Ping/Pong
+                                        },
+                                        _ => {
+                                            //TODO Hole
                                         }
                                     }
                                     Err(e) => {
@@ -209,7 +197,7 @@ pub fn start(
                             StreamMessage::Ok => {
                                 is_ok = true;
                                 transport_sender
-                                    .send(StreamMessage::Bytes(RemotePublic(key.public(), self_transport.clone()).to_bytes()))
+                                    .send(StreamMessage::Bytes(RemotePublic(key.public(), *peer.clone()).to_bytes()))
                                     .await;
 
                                 transport_sender
@@ -235,8 +223,10 @@ pub fn start(
 enum SessionType {
     Key(Vec<u8>),
     Data(Vec<u8>),
-    DHT(Vec<(PeerId, SocketAddr)>, Vec<u8>),
     Relay(PeerId, Vec<u8>),
+    DHT(Vec<(PeerId, SocketAddr)>, Vec<u8>),
+    Hole(Hole),
+    HoleConnect,
     Ping,
     Pong,
 }
@@ -248,5 +238,19 @@ impl SessionType {
 
     fn from_bytes(bytes: Vec<u8>) -> Result<Self, ()> {
         bincode::deserialize(&bytes[..]).map_err(|_e| ())
+    }
+}
+
+/// Rtemote Public Info, include local transport and public key bytes.
+#[derive(Deserialize, Serialize)]
+pub struct RemotePublic(pub Keypair, pub Peer);
+
+impl RemotePublic {
+    pub fn from_bytes(key: KeyType, bytes: Vec<u8>) -> Result<Self, ()> {
+        bincode::deserialize(&bytes).map_err(|_e| ())
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        bincode::serialize(self).unwrap()
     }
 }

@@ -3,9 +3,8 @@ mod keys;
 mod peer_list;
 mod session;
 
-pub mod peer_id;
+pub mod peer;
 pub mod server;
-pub mod transport;
 
 //pub(crate) mod config;
 //pub(crate) mod peer_list;

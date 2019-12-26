@@ -1,6 +1,7 @@
 use async_std::io::Result;
 use async_std::sync::{channel, Receiver, Sender};
 use async_trait::async_trait;
+use serde_derive::{Deserialize, Serialize};
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::net::SocketAddr;
 
@@ -9,11 +10,30 @@ mod tcp;
 mod udp;
 mod udt;
 
-use crate::core::transport::Transport;
-use crate::PeerId;
+use crate::core::peer::{Peer, PeerId};
 
 /// max task capacity for udp to handle.
 pub const MAX_MESSAGE_CAPACITY: usize = 1024;
+
+#[derive(Debug, Copy, Clone, Hash, Deserialize, Serialize)]
+pub enum TransportType {
+    UDP, // 0u8
+    TCP, // 1u8
+    RTP, // 2u8
+    UDT, // 3u8
+}
+
+impl TransportType {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "udp" => TransportType::UDP,
+            "tcp" => TransportType::TCP,
+            "rtp" => TransportType::RTP,
+            "udt" => TransportType::UDT,
+            _ => TransportType::UDP,
+        }
+    }
+}
 
 /// Message Type for transport and outside.
 pub enum EndpointMessage {
@@ -25,7 +45,7 @@ pub enum EndpointMessage {
         Sender<StreamMessage>,
         bool,
     ), // transport to server
-    Connected(PeerId, Sender<StreamMessage>, Transport), // session to server
+    Connected(PeerId, Sender<StreamMessage>, Peer), // session to server
     Close(PeerId),                // session to server
 }
 
@@ -80,12 +100,18 @@ pub trait Endpoint: Send {
     /// and return the endpoint's sender addr.
     async fn start(
         bind_addr: SocketAddr,
-        peer_id: PeerId,
         send_channel: Sender<EndpointMessage>,
     ) -> Result<Sender<EndpointMessage>>;
 }
 
-pub use tcp::TcpEndpoint;
-pub use udp::UdpEndpoint;
-//TODO pub use rtp::RtpEndpoint;
-//TODO pub use udt::UdtEndpoint;
+pub async fn start(
+    transport: &TransportType,
+    addr: &SocketAddr,
+    sender: Sender<EndpointMessage>,
+) -> Result<Sender<EndpointMessage>> {
+    match transport {
+        &TransportType::UDP => udp::UdpEndpoint::start(addr.clone(), sender).await,
+        &TransportType::TCP => tcp::TcpEndpoint::start(addr.clone(), sender).await,
+        _ => panic!("Not suppert, waiting"),
+    }
+}

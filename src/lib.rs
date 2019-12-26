@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 mod core;
 mod transports;
 
-pub use self::core::peer_id::PeerId;
+pub use self::core::peer::PeerId;
 
 pub const MAX_MESSAGE_CAPACITY: usize = 1024;
 
@@ -31,6 +31,7 @@ pub enum Message {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub addr: SocketAddr,
+    pub transport: String,
     pub white_list: Vec<SocketAddr>,
     pub black_list: Vec<SocketAddr>,
     pub white_peer_list: Vec<PeerId>,
@@ -41,6 +42,7 @@ impl Config {
     pub fn default(addr: SocketAddr) -> Self {
         Self {
             addr: addr,
+            transport: "tcp".to_owned(), // TODO Default
             white_list: vec![],
             black_list: vec![],
             white_peer_list: vec![],
@@ -50,6 +52,7 @@ impl Config {
 
     pub fn new(
         addr: SocketAddr,
+        transport: String,
         white_list: Vec<SocketAddr>,
         black_list: Vec<SocketAddr>,
         white_peer_list: Vec<PeerId>,
@@ -57,6 +60,7 @@ impl Config {
     ) -> Self {
         Self {
             addr,
+            transport,
             white_list,
             black_list,
             white_peer_list,

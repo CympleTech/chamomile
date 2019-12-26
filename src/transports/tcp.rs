@@ -11,11 +11,9 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use super::{new_channel, new_stream_channel, Endpoint, EndpointMessage, StreamMessage};
-use crate::PeerId;
 
 /// TCP Endpoint.
 pub struct TcpEndpoint {
-    _peer_id: PeerId,
     streams: HashMap<SocketAddr, Sender<StreamMessage>>,
 }
 
@@ -28,12 +26,10 @@ impl Endpoint for TcpEndpoint {
     /// and receiver outside message addr.
     async fn start(
         socket_addr: SocketAddr,
-        _peer_id: PeerId,
         out_send: Sender<EndpointMessage>,
     ) -> Result<Sender<EndpointMessage>> {
         let (send, recv) = new_channel();
         let endpoint = TcpEndpoint {
-            _peer_id,
             streams: HashMap::new(),
         };
 
