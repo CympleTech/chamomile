@@ -112,17 +112,22 @@ impl PeerList {
 
     /// get in DHT (not closest).
     pub fn get_it(&self, peer_id: &PeerId) -> Option<&Sender<StreamMessage>> {
-        self.peers.search(peer_id).and_then(|(_k, v, is_it)| {
-            if is_it {
-                v.as_ref().map(|s| &s.0)
-            } else {
-                None
-            }
-        })
+        self.tmps
+            .get(peer_id)
+            .or(self.peers.search(peer_id).and_then(
+                |(_k, v, is_it)| {
+                    if is_it {
+                        v.as_ref()
+                    } else {
+                        None
+                    }
+                },
+            ))
+            .map(|s| &s.0)
     }
 
     /// get in DHT help
-    pub fn get_dht_help(&self, _peer_id: &PeerId) -> Vec<Peer> {
+    pub fn get_dht_help(&self, peer_id: &PeerId) -> Vec<Peer> {
         // TODO closest peers
 
         let keys = self.peers.keys();
@@ -134,6 +139,7 @@ impl PeerList {
                     .map(|s| &s.1)
                     .unwrap()
             })
+            .filter(|p| p.id() != peer_id)
             .cloned()
             .collect()
     }

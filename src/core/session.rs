@@ -151,9 +151,8 @@ pub fn start(
                                             // remote_peer_key.verify()
 
                                             for p in peers {
-                                                if peer_list.read().await.get(p.id()).is_none() {
-                                                    println!("p: {:?}", p.id());
-                                                    server_sender.send(EndpointMessage::Connect(*peer.addr(), vec![])).await;
+                                                if p.id() != peer.id() && peer_list.read().await.get_it(p.id()).is_none() {
+                                                    server_sender.send(EndpointMessage::Connect(*p.addr(), vec![])).await;
                                                 }
                                             }
 
@@ -219,9 +218,10 @@ pub fn start(
                                     .await;
 
                                 let sign = vec![]; // TODO
+                                let peers = peer_list.read().await.get_dht_help(&remote_peer_id);
                                 transport_sender
                                     .send(StreamMessage::Bytes(
-                                        SessionType::DHT(DHT(peer_list.read().await.get_dht_help(&remote_peer_id)), sign).to_bytes()
+                                        SessionType::DHT(DHT(peers), sign).to_bytes()
                                     ))
                                     .await;
                             },

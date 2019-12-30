@@ -78,7 +78,7 @@ pub async fn start(
                             }
                             EndpointMessage::Connected(peer_id, sender, remote_peer) => {
                                 // check and save tmp and save outside
-                                if peer_list.read().await.is_black_peer(&peer_id) {
+                                if &peer_id == peer.id() || peer_list.read().await.is_black_peer(&peer_id) {
                                     sender.send(StreamMessage::Close).await;
                                 } else {
                                     peer_list.write().await.add_tmp_peer(peer_id, sender, remote_peer);
