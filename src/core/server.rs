@@ -1,7 +1,7 @@
 use async_std::{
     io::Result,
     prelude::*,
-    sync::{Arc, Mutex, Receiver, Sender},
+    sync::{Arc, Mutex, Receiver, RwLock, Sender},
     task,
 };
 use futures::{select, FutureExt};
@@ -13,6 +13,7 @@ use crate::transports::{
 };
 use crate::{Config, Message};
 
+use super::hole_punching::DHT;
 use super::keys::KeyType;
 use super::peer::Peer;
 use super::peer_list::PeerList;
@@ -27,17 +28,16 @@ pub async fn start(
     // TODO load or init config.
     // load or generate keypair
     let key = KeyType::Ed25519.generate_kepair();
-    let key = Arc::new(key);
 
     let peer_id = key.peer_id();
-    let mut peer_list = PeerList::init(peer_id);
+    let peer_list = Arc::new(RwLock::new(PeerList::init(peer_id)));
+
     let peer = Peer::new(
         key.peer_id(),
         config.addr,
         TransportType::from_str(&config.transport),
         true,
     );
-    let peer = Arc::new(peer);
 
     let _transports: HashMap<u8, Sender<EndpointMessage>> = HashMap::new();
 
@@ -50,8 +50,8 @@ pub async fn start(
     println!("Debug: peer id: {}", peer_id.short_show());
 
     task::spawn(async move {
-        //let m1 = Arc::new(Mutex::new(server));
-        //let m2 = m1.clone();
+        let peer = Arc::new(peer);
+        let key = Arc::new(key);
 
         loop {
             select! {
@@ -60,7 +60,7 @@ pub async fn start(
                         match message {
                             EndpointMessage::PreConnected(addr, receiver, sender, is_ok) => {
                                 // check and start session
-                                if peer_list.is_black_addr(&addr) {
+                                if peer_list.read().await.is_black_addr(&addr) {
                                     sender.send(StreamMessage::Close).await;
                                 } else {
                                     session_start(
@@ -71,22 +71,32 @@ pub async fn start(
                                         out_send.clone(),
                                         key.clone(),
                                         peer.clone(),
+                                        peer_list.clone(),
                                         is_ok,
                                     )
                                 }
                             }
                             EndpointMessage::Connected(peer_id, sender, remote_peer) => {
                                 // check and save tmp and save outside
-                                if peer_list.is_black_peer(&peer_id) {
+                                if peer_list.read().await.is_black_peer(&peer_id) {
                                     sender.send(StreamMessage::Close).await;
                                 } else {
-                                    peer_list.add_tmp_peer(peer_id, sender, remote_peer);
+                                    peer_list.write().await.add_tmp_peer(peer_id, sender, remote_peer);
                                     out_send.send(Message::PeerJoin(peer_id)).await;
                                 }
                             }
                             EndpointMessage::Close(peer_id) => {
-                                peer_list.remove(&peer_id);
+                                peer_list.write().await.remove(&peer_id);
                                 out_send.send(Message::PeerLeave(peer_id)).await;
+                            }
+                            EndpointMessage::Connect(addr, _empty) => {
+                                // DHT Helper's peers
+                                transport_send
+                                    .send(EndpointMessage::Connect(
+                                        addr,
+                                        RemotePublic(key.public().clone(), *peer.clone()).to_bytes()
+                                    ))
+                                    .await;
                             }
                             _ => {}
                         }
@@ -108,31 +118,34 @@ pub async fn start(
                                 transport_send.send(EndpointMessage::Disconnect(addr)).await;
                             }
                             Message::PeerJoinResult(peer_id, is_ok) => {
-                                let sender = peer_list.get(&peer_id);
+                                let mut peer_list_lock = peer_list.write().await;
+                                let sender = peer_list_lock.get(&peer_id);
                                 if sender.is_some() {
                                     let sender = sender.unwrap();
                                     if is_ok {
                                         sender.send(StreamMessage::Ok).await;
-                                        peer_list.stabilize_tmp_peer(peer_id);
+                                        peer_list_lock.stabilize_tmp_peer(peer_id);
                                     } else {
                                         sender.send(StreamMessage::Close).await;
-                                        peer_list.remove_tmp_peer(&peer_id);
+                                        peer_list_lock.remove_tmp_peer(&peer_id);
                                     }
                                 }
                             }
                             Message::Data(peer_id, data) => {
-                                let sender = peer_list.get(&peer_id);
+                                let peer_list_lock = peer_list.read().await;
+                                let sender = peer_list_lock.get(&peer_id);
                                 if sender.is_some() {
                                     let sender = sender.unwrap();
                                     sender.send(StreamMessage::Bytes(data)).await;
                                 }
                             },
                             Message::PeerLeave(peer_id) => {
-                                let sender = peer_list.get(&peer_id);
+                                let mut peer_list_lock = peer_list.write().await;
+                                let sender = peer_list_lock.get(&peer_id);
                                 if sender.is_some() {
                                     let sender = sender.unwrap();
                                     sender.send(StreamMessage::Close).await;
-                                    peer_list.remove_tmp_peer(&peer_id);
+                                    peer_list_lock.remove_tmp_peer(&peer_id);
                                 }
                             },
                             Message::PeerJoin(_peer_id) => {},  // TODO search peer and join

@@ -99,7 +99,7 @@ impl PeerList {
             .collect()
     }
 
-    /// get in DHT, DHT closest.
+    /// get in tmps, DHT, DHT closest.
     pub fn get(&self, peer_id: &PeerId) -> Option<&Sender<StreamMessage>> {
         self.tmps
             .get(peer_id)
@@ -121,15 +121,21 @@ impl PeerList {
         })
     }
 
-    /// get in DHT, tmp_peers,  DHT closest
-    pub fn get_all(&self, peer_id: &PeerId) -> Option<&Sender<StreamMessage>> {
-        self.peers.search(peer_id).and_then(|(_k, v, is_it)| {
-            if is_it {
-                v.as_ref().map(|s| &s.0)
-            } else {
-                self.tmps.get(peer_id).or(v.as_ref()).map(|s| &s.0)
-            }
-        })
+    /// get in DHT help
+    pub fn get_dht_help(&self, _peer_id: &PeerId) -> Vec<Peer> {
+        // TODO closest peers
+
+        let keys = self.peers.keys();
+        keys.into_iter()
+            .map(|key| {
+                self.peers
+                    .search(&key)
+                    .and_then(|(_k, ref v, _is_it)| v.as_ref())
+                    .map(|s| &s.1)
+                    .unwrap()
+            })
+            .cloned()
+            .collect()
     }
 
     pub fn contains(&self, peer_id: &PeerId) -> bool {

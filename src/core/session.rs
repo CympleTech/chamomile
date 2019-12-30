@@ -2,7 +2,7 @@ use async_std::{
     io,
     io::BufReader,
     prelude::*,
-    sync::{Arc, Receiver, Sender},
+    sync::{Arc, Receiver, RwLock, Sender},
     task,
 };
 use futures::{select, FutureExt};
@@ -13,9 +13,10 @@ use std::time::Duration;
 use crate::transports::{new_stream_channel, EndpointMessage, StreamMessage};
 use crate::Message;
 
-use super::hole_punching::{nat, Hole};
+use super::hole_punching::{nat, Hole, DHT};
 use super::keys::{KeyType, Keypair, SessionKey};
 use super::peer::{Peer, PeerId};
+use super::peer_list::PeerList;
 
 pub fn start(
     remote_addr: SocketAddr,
@@ -25,6 +26,7 @@ pub fn start(
     out_sender: Sender<Message>,
     key: Arc<Keypair>,
     peer: Arc<Peer>,
+    peer_list: Arc<RwLock<PeerList>>,
     mut is_ok: bool,
 ) {
     task::spawn(async move {
@@ -143,9 +145,18 @@ pub fn start(
                                                     )).await;
                                             }
                                         }
-                                        SessionType::DHT(_peers, _sign) => {
+                                        SessionType::DHT(peers, _sign) => {
+                                            let DHT(peers) = peers;
                                             // TODO DHT Helper
                                             // remote_peer_key.verify()
+
+                                            for p in peers {
+                                                if peer_list.read().await.get(p.id()).is_none() {
+                                                    println!("p: {:?}", p.id());
+                                                    server_sender.send(EndpointMessage::Connect(*peer.addr(), vec![])).await;
+                                                }
+                                            }
+
                                         }
                                         SessionType::Relay(_peer_id, _data) => {
                                             // TODO Relay send
@@ -196,6 +207,7 @@ pub fn start(
                             },
                             StreamMessage::Ok => {
                                 is_ok = true;
+
                                 transport_sender
                                     .send(StreamMessage::Bytes(RemotePublic(key.public(), *peer.clone()).to_bytes()))
                                     .await;
@@ -203,6 +215,13 @@ pub fn start(
                                 transport_sender
                                     .send(StreamMessage::Bytes(
                                         SessionType::Key(session_key.out_bytes()).to_bytes()
+                                    ))
+                                    .await;
+
+                                let sign = vec![]; // TODO
+                                transport_sender
+                                    .send(StreamMessage::Bytes(
+                                        SessionType::DHT(DHT(peer_list.read().await.get_dht_help(&remote_peer_id)), sign).to_bytes()
                                     ))
                                     .await;
                             },
@@ -224,7 +243,7 @@ enum SessionType {
     Key(Vec<u8>),
     Data(Vec<u8>),
     Relay(PeerId, Vec<u8>),
-    DHT(Vec<(PeerId, SocketAddr)>, Vec<u8>),
+    DHT(DHT, Vec<u8>),
     Hole(Hole),
     HoleConnect,
     Ping,

@@ -16,6 +16,9 @@ pub enum Hole {
     Help,
 }
 
+#[derive(Deserialize, Serialize)]
+pub struct DHT(pub Vec<Peer>);
+
 pub fn nat(mut remote_addr: SocketAddr, mut local: Peer) -> Peer {
     match local.transport() {
         TransportType::TCP => {
