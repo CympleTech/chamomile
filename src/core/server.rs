@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use crate::transports::{
-    new_channel, start as transport_start, Endpoint, EndpointMessage, StreamMessage, TransportType,
+    new_channel, start as transport_start, EndpointMessage, StreamMessage, TransportType,
 };
 use crate::{Config, Message};
 

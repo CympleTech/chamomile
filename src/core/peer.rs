@@ -65,6 +65,28 @@ impl PeerId {
         new_hex.push_str(&hex[hex.len() - 5..]);
         new_hex
     }
+
+    pub fn from_hex(s: impl ToString) -> Result<PeerId, ()> {
+        let s = s.to_string();
+        if s.len() != 64 {
+            return Err(());
+        }
+
+        let mut value = [0u8; 32];
+
+        for i in 0..(s.len() / 2) {
+            let res = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).map_err(|_e| ())?;
+            value[i] = res;
+        }
+
+        Ok(PeerId(value))
+    }
+
+    pub fn to_hex(&self) -> String {
+        let mut hex = String::new();
+        hex.extend(self.0.iter().map(|byte| format!("{:02x?}", byte)));
+        hex
+    }
 }
 
 impl Debug for PeerId {

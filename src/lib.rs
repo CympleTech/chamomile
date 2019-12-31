@@ -12,7 +12,7 @@ use async_std::{
 use std::net::SocketAddr;
 
 mod core;
-mod transports;
+pub mod transports;
 
 pub use self::core::peer::PeerId;
 
