@@ -59,11 +59,11 @@ pub fn start(
             drop(transport_sender);
             return;
         }
-        let RemotePublic(remote_peer_key, remote_local_addr) = result.unwrap();
+        let RemotePublic(remote_peer_key, remote_local_addr, remote_join_data) = result.unwrap();
         let remote_peer_id = remote_peer_key.peer_id();
         let mut session_key: SessionKey = key.key.session_key(&key, &remote_peer_key);
 
-        println!("Debug: Session connected: {:?}", remote_peer_id);
+        println!("Debug: Session connected: {}", remote_peer_id.short_show());
         let (sender, mut receiver) = new_stream_channel();
         let remote_transport = nat(remote_addr, remote_local_addr);
         println!("Debug: NAT addr: {}", remote_transport.addr());
@@ -72,6 +72,7 @@ pub fn start(
                 remote_peer_id,
                 sender,
                 remote_transport,
+                remote_join_data,
             ))
             .await;
 
@@ -204,11 +205,11 @@ pub fn start(
                                     buffers.push(bytes);
                                 }
                             },
-                            StreamMessage::Ok => {
+                            StreamMessage::Ok(data) => {
                                 is_ok = true;
 
                                 transport_sender
-                                    .send(StreamMessage::Bytes(RemotePublic(key.public(), *peer.clone()).to_bytes()))
+                                    .send(StreamMessage::Bytes(RemotePublic(key.public(), *peer.clone(), data).to_bytes()))
                                     .await;
 
                                 transport_sender
@@ -262,7 +263,7 @@ impl SessionType {
 
 /// Rtemote Public Info, include local transport and public key bytes.
 #[derive(Deserialize, Serialize)]
-pub struct RemotePublic(pub Keypair, pub Peer);
+pub struct RemotePublic(pub Keypair, pub Peer, pub Vec<u8>);
 
 impl RemotePublic {
     pub fn from_bytes(key: KeyType, bytes: Vec<u8>) -> Result<Self, ()> {

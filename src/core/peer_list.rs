@@ -18,18 +18,26 @@ pub struct PeerList {
 }
 
 impl PeerList {
-    pub fn init(self_peer_id: PeerId) -> Self {
+    pub fn init(
+        self_peer_id: PeerId,
+        whites: (Vec<PeerId>, Vec<SocketAddr>),
+        blacks: (Vec<PeerId>, Vec<SocketAddr>),
+    ) -> Self {
         PeerList {
             peers: KadTree::new(self_peer_id, None),
             tmps: HashMap::new(),
-            whites: (vec![], vec![]),
-            blacks: (vec![], vec![]),
+            whites: whites,
+            blacks: blacks,
         }
     }
 }
 
 // Black and white list.
 impl PeerList {
+    pub fn bootstrap(&self) -> &Vec<SocketAddr> {
+        &self.whites.1
+    }
+
     pub fn is_white_peer(&self, peer: &PeerId) -> bool {
         self.whites.0.contains(peer)
     }

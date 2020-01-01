@@ -20,17 +20,18 @@ pub const MAX_MESSAGE_CAPACITY: usize = 1024;
 
 #[derive(Debug)]
 pub enum Message {
-    PeerJoin(PeerId),             // server  to outside
-    PeerJoinResult(PeerId, bool), // outside to server
-    PeerLeave(PeerId),            // server  to outside
-    Connect(SocketAddr),          // outside to server
-    DisConnect(SocketAddr),       // outside to server
-    Data(PeerId, Vec<u8>),        // session & outside
+    PeerJoin(PeerId, Vec<u8>),             // server  to outside
+    PeerJoinResult(PeerId, bool, Vec<u8>), // outside to server
+    PeerLeave(PeerId),                     // server  to outside
+    Connect(SocketAddr, Option<Vec<u8>>),  // outside to server
+    DisConnect(SocketAddr),                // outside to server
+    Data(PeerId, Vec<u8>),                 // session & outside
 }
 
 #[derive(Debug, Clone)]
 pub struct Config {
     pub addr: SocketAddr,
+    pub join_data: Vec<u8>,
     pub transport: String,
     pub white_list: Vec<SocketAddr>,
     pub black_list: Vec<SocketAddr>,
@@ -42,6 +43,7 @@ impl Config {
     pub fn default(addr: SocketAddr) -> Self {
         Self {
             addr: addr,
+            join_data: vec![],
             transport: "tcp".to_owned(), // TODO Default
             white_list: vec![],
             black_list: vec![],
@@ -52,6 +54,7 @@ impl Config {
 
     pub fn new(
         addr: SocketAddr,
+        join_data: Vec<u8>,
         transport: String,
         white_list: Vec<SocketAddr>,
         black_list: Vec<SocketAddr>,
@@ -60,6 +63,7 @@ impl Config {
     ) -> Self {
         Self {
             addr,
+            join_data,
             transport,
             white_list,
             black_list,

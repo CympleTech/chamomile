@@ -17,7 +17,8 @@ fn main() {
         if args().nth(2).is_some() {
             let remote_addr: SocketAddr = args().nth(2).unwrap().parse().expect("invalid addr");
             println!("start connect to remote: {}", remote_addr);
-            send.send(Message::Connect(remote_addr)).await;
+            send.send(Message::Connect(remote_addr, Some(vec![1])))
+                .await;
         }
 
         while let Some(message) = out_recv.recv().await {
@@ -25,9 +26,10 @@ fn main() {
                 Message::Data(peer_id, bytes) => {
                     println!("recv data from: {}, {:?}", peer_id.short_show(), bytes);
                 }
-                Message::PeerJoin(peer_id) => {
-                    println!("peer join: {:?}", peer_id);
-                    send.send(Message::PeerJoinResult(peer_id, true)).await;
+                Message::PeerJoin(peer_id, join_data) => {
+                    println!("peer join: {:?}, join data: {:?}", peer_id, join_data);
+                    send.send(Message::PeerJoinResult(peer_id, true, vec![1]))
+                        .await;
                     println!("Debug: when join send message test: {:?}", vec![1, 2, 3, 4]);
                     send.send(Message::Data(peer_id, vec![1, 2, 3, 4])).await;
                 }

@@ -45,13 +45,13 @@ pub enum EndpointMessage {
         Sender<StreamMessage>,
         bool,
     ), // transport to server
-    Connected(PeerId, Sender<StreamMessage>, Peer), // session to server
+    Connected(PeerId, Sender<StreamMessage>, Peer, Vec<u8>), // session to server
     Close(PeerId),                // session to server
 }
 
 /// StreamMessage use in out server and stream in channel.
 pub enum StreamMessage {
-    Ok,
+    Ok(Vec<u8>),
     Close,
     Bytes(Vec<u8>),
 }
@@ -66,7 +66,7 @@ impl Debug for EndpointMessage {
             EndpointMessage::PreConnected(ref addr, _, _, _) => {
                 write!(f, "Endpoint pre-connected: {:?}", addr)
             }
-            EndpointMessage::Connected(ref addr, _, _) => {
+            EndpointMessage::Connected(ref addr, _, _, _) => {
                 write!(f, "Endpoint connected: {:?}", addr)
             }
             EndpointMessage::Close(ref addr) => write!(f, "Endpoint losed: {:?}", addr),
@@ -77,7 +77,7 @@ impl Debug for EndpointMessage {
 impl Debug for StreamMessage {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         match self {
-            StreamMessage::Ok => write!(f, "Stream is ok."),
+            StreamMessage::Ok(_bytes) => write!(f, "Stream is ok."),
             StreamMessage::Close => write!(f, "Stream need close."),
             StreamMessage::Bytes(ref bytes) => write!(f, "Stream Bytes: {:?}.", bytes),
         }
