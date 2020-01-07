@@ -105,8 +105,9 @@ pub async fn start(
                                 if &peer_id == peer.id() || peer_list.read().await.is_black_peer(&peer_id) {
                                     sender.send(StreamMessage::Close).await;
                                 } else {
+                                    let addr = remote_peer.addr().clone();
                                     peer_list.write().await.add_tmp_peer(peer_id, sender, remote_peer);
-                                    out_send.send(Message::PeerJoin(peer_id, data)).await;
+                                    out_send.send(Message::PeerJoin(peer_id, addr, data)).await;
                                 }
                             }
                             EndpointMessage::Close(peer_id) => {
@@ -178,7 +179,7 @@ pub async fn start(
                                     peer_list_lock.remove_tmp_peer(&peer_id);
                                 }
                             },
-                            Message::PeerJoin(_peer_id, _data) => {},  // TODO search peer and join
+                            Message::PeerJoin(_peer_id, _addr,_data) => {},  // TODO search peer and join
                         }
                     },
                     None => break,

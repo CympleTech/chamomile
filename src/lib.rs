@@ -20,7 +20,7 @@ pub const MAX_MESSAGE_CAPACITY: usize = 1024;
 
 #[derive(Debug)]
 pub enum Message {
-    PeerJoin(PeerId, Vec<u8>),             // server  to outside
+    PeerJoin(PeerId, SocketAddr, Vec<u8>), // server  to outside
     PeerJoinResult(PeerId, bool, Vec<u8>), // outside to server
     PeerLeave(PeerId),                     // server  to outside
     Connect(SocketAddr, Option<Vec<u8>>),  // outside to server
