@@ -60,7 +60,6 @@ pub async fn start(
         .await
         .expect("Transport binding failure!");
 
-    println!("Debug: listening: {}", addr);
     println!("Debug: peer id: {}", peer_id.short_show());
 
     task::spawn(async move {
@@ -82,7 +81,7 @@ pub async fn start(
                 msg = recv.next().fuse() => match msg {
                     Some(message) => {
                         match message {
-                            EndpointMessage::PreConnected(addr, receiver, sender, is_ok) => {
+                            EndpointMessage::PreConnected(addr, receiver, sender, is_by_self) => {
                                 // check and start session
                                 if peer_list.read().await.is_black_addr(&addr) {
                                     sender.send(StreamMessage::Close).await;
@@ -96,7 +95,7 @@ pub async fn start(
                                         key.clone(),
                                         peer.clone(),
                                         peer_list.clone(),
-                                        is_ok,
+                                        is_by_self,
                                     )
                                 }
                             }

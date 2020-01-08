@@ -40,10 +40,10 @@ pub enum EndpointMessage {
     Connect(SocketAddr, Vec<u8>), // server to transport
     Disconnect(SocketAddr),       // server to transport
     PreConnected(
-        SocketAddr,
-        Receiver<StreamMessage>,
-        Sender<StreamMessage>,
-        bool,
+        SocketAddr,              // connect addr.
+        Receiver<StreamMessage>, // receive stream message channel.
+        Sender<StreamMessage>,   // send stream message channel.
+        bool,                    // is self started.
     ), // transport to server
     Connected(PeerId, Sender<StreamMessage>, Peer, Vec<u8>), // session to server
     Close(PeerId),                // session to server
