@@ -9,7 +9,7 @@ use async_std::{
     io::Result,
     sync::{channel, Receiver, Sender},
 };
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 mod core;
 pub mod transports;
@@ -34,7 +34,7 @@ pub struct Config {
     pub join_data: Vec<u8>,
     pub transport: String,
     pub white_list: Vec<SocketAddr>,
-    pub black_list: Vec<SocketAddr>,
+    pub black_list: Vec<IpAddr>,
     pub white_peer_list: Vec<PeerId>,
     pub black_peer_list: Vec<PeerId>,
 }
@@ -57,7 +57,7 @@ impl Config {
         join_data: Vec<u8>,
         transport: String,
         white_list: Vec<SocketAddr>,
-        black_list: Vec<SocketAddr>,
+        black_list: Vec<IpAddr>,
         white_peer_list: Vec<PeerId>,
         black_peer_list: Vec<PeerId>,
     ) -> Self {

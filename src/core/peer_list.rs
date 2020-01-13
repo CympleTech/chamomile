@@ -2,7 +2,7 @@ use async_std::sync::Sender;
 use rckad::KadTree;
 use std::collections::HashMap;
 use std::iter::Iterator;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use crate::transports::StreamMessage;
 
@@ -14,14 +14,14 @@ pub struct PeerList {
     peers: KadTree<PeerId, Option<(Sender<StreamMessage>, Peer)>>,
     tmps: HashMap<PeerId, (Sender<StreamMessage>, Peer)>,
     whites: (Vec<PeerId>, Vec<SocketAddr>),
-    blacks: (Vec<PeerId>, Vec<SocketAddr>),
+    blacks: (Vec<PeerId>, Vec<IpAddr>),
 }
 
 impl PeerList {
     pub fn init(
         self_peer_id: PeerId,
         whites: (Vec<PeerId>, Vec<SocketAddr>),
-        blacks: (Vec<PeerId>, Vec<SocketAddr>),
+        blacks: (Vec<PeerId>, Vec<IpAddr>),
     ) -> Self {
         PeerList {
             peers: KadTree::new(self_peer_id, None),
@@ -71,7 +71,7 @@ impl PeerList {
     }
 
     pub fn is_black_addr(&self, addr: &SocketAddr) -> bool {
-        self.blacks.1.contains(addr)
+        self.blacks.1.contains(&addr.ip())
     }
 
     pub fn add_black_peer(&mut self, peer: PeerId) {
@@ -81,8 +81,8 @@ impl PeerList {
     }
 
     pub fn add_black_addr(&mut self, addr: SocketAddr) {
-        if !self.blacks.1.contains(&addr) {
-            self.blacks.1.push(addr)
+        if !self.blacks.1.contains(&addr.ip()) {
+            self.blacks.1.push(addr.ip())
         }
     }
 
@@ -90,8 +90,8 @@ impl PeerList {
         self.blacks.0.remove_item(peer)
     }
 
-    pub fn remove_black_addr(&mut self, addr: &SocketAddr) -> Option<SocketAddr> {
-        self.blacks.1.remove_item(addr)
+    pub fn remove_black_addr(&mut self, addr: &SocketAddr) -> Option<IpAddr> {
+        self.blacks.1.remove_item(&addr.ip())
     }
 }
 
