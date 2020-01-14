@@ -240,6 +240,12 @@ impl SessionKey {
     pub fn encrypt(&self, mut msg: Vec<u8>) -> Vec<u8> {
         // TODO append hash to it
 
+        let len_bytes = (msg.len() as u32).to_be_bytes();
+        msg.insert(0, len_bytes[3]);
+        msg.insert(0, len_bytes[2]);
+        msg.insert(0, len_bytes[1]);
+        msg.insert(0, len_bytes[0]);
+
         let num = msg.len().rem(16);
         if num != 0 {
             msg.append(&mut vec![0; 16 - num])
@@ -253,16 +259,10 @@ impl SessionKey {
 
         // TODO check hash
 
-        // TODO need better fill
-        let mut j = msg.len();
-        for i in 1..(j + 1) {
-            if msg[j - i] != 0u8 {
-                j = j - i;
-                break;
-            }
-        }
-
-        Ok(msg[0..(j + 1)].to_vec())
+        let mut len_bytes = [0u8; 4];
+        len_bytes.copy_from_slice(&msg[0..4]);
+        let len = u32::from_be_bytes(len_bytes) as usize;
+        Ok(msg[4..len + 4].to_vec())
     }
 }
 
