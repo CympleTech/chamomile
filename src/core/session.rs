@@ -208,7 +208,6 @@ pub fn start(
                             StreamMessage::Ok(data) => {
                                 is_ok = true;
 
-                                println!("data: {:?}", data);
                                 transport_sender
                                     .send(StreamMessage::Bytes(RemotePublic(key.public(), *peer.clone(), data).to_bytes()))
                                     .await;
