@@ -1,17 +1,22 @@
 use aes_soft::{
     block_cipher_trait::generic_array::GenericArray, block_cipher_trait::BlockCipher, Aes256,
 };
+use block_modes::block_padding::Pkcs7;
+use block_modes::{BlockMode, Cbc};
 use ed25519_dalek::{
     Keypair as Ed25519_Keypair, PublicKey as Ed25519_PublicKey, Signature as Ed25519_Signature,
     KEYPAIR_LENGTH, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH,
 };
 use serde_derive::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
+use sha3::{Digest, Sha3_256, Sha3_512};
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::ops::Rem;
 use x25519_dalek::{PublicKey as Ed25519_DH_Public, StaticSecret as Ed25519_DH_Secret};
 
 use crate::core::peer::PeerId;
+
+// create an alias for convenience
+type Aes256Cbc = Cbc<Aes256, Pkcs7>;
 
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub enum KeyType {
@@ -114,10 +119,12 @@ impl KeyType {
                     pk: alice_public,
                     sign: sign,
                     remote: remote_keypair.pk.clone(),
-                    ss: vec![],
+                    is_ok: false,
+                    ss: [0u8; 32],
+                    iv: [0u8; 16],
                 }
             }
-            _ => Default::default(), // TODO
+            _ => panic!("Not Support"),
         }
     }
 
@@ -144,14 +151,15 @@ pub struct Keypair {
     pub pk: Vec<u8>,
 }
 
-#[derive(Default, Clone, Serialize, Deserialize)]
 pub struct SessionKey {
     key: KeyType,
     sk: Vec<u8>,
     pk: Vec<u8>,
     sign: Vec<u8>,
     remote: Vec<u8>,
-    ss: Vec<u8>,
+    is_ok: bool,
+    ss: [u8; 32],
+    iv: [u8; 16],
 }
 
 impl Keypair {
@@ -208,7 +216,13 @@ impl Keypair {
 /// 4. get session key, and encrypt / decrypt message.
 impl SessionKey {
     pub fn is_ok(&self) -> bool {
-        !self.ss.is_empty()
+        self.is_ok
+    }
+
+    fn cipher(&self) -> Aes256Cbc {
+        Aes256Cbc::new_var(&self.ss, &self.iv)
+            .map_err(|e| println!("{:?}", e))
+            .unwrap()
     }
 
     pub fn in_bytes(&mut self, bytes: Vec<u8>) -> bool {
@@ -222,8 +236,15 @@ impl SessionKey {
             self.key
                 .dh(&self.sk, tmp_pk)
                 .map(|session_key| {
-                    self.ss = session_key.to_vec();
-                    println!("Debug: {:?}", self);
+                    let mut sha = Sha3_256::new();
+                    sha.input(session_key);
+                    let result = sha.result();
+                    self.ss.copy_from_slice(&result[..]);
+                    let mut n_sha = Sha3_256::new();
+                    n_sha.input(&result[..]);
+                    self.iv.copy_from_slice(&n_sha.result()[..16]);
+                    self.is_ok = true;
+                    println!("{:?}", self);
                 })
                 .is_ok()
         } else {
@@ -237,32 +258,12 @@ impl SessionKey {
         vec
     }
 
-    pub fn encrypt(&self, mut msg: Vec<u8>) -> Vec<u8> {
-        // TODO append hash to it
-
-        let len_bytes = (msg.len() as u32).to_be_bytes();
-        msg.insert(0, len_bytes[3]);
-        msg.insert(0, len_bytes[2]);
-        msg.insert(0, len_bytes[1]);
-        msg.insert(0, len_bytes[0]);
-
-        let num = msg.len().rem(16);
-        if num != 0 {
-            msg.append(&mut vec![0; 16 - num])
-        }
-        block_encrypt((&self.ss[..]).into(), &mut msg, 0);
-        msg
+    pub fn encrypt(&self, msg: Vec<u8>) -> Vec<u8> {
+        self.cipher().encrypt_vec(&msg)
     }
 
-    pub fn decrypt(&self, mut msg: Vec<u8>) -> Result<Vec<u8>, ()> {
-        block_decrypt((&self.ss[..]).into(), &mut msg, 0);
-
-        // TODO check hash
-
-        let mut len_bytes = [0u8; 4];
-        len_bytes.copy_from_slice(&msg[0..4]);
-        let len = u32::from_be_bytes(len_bytes) as usize;
-        Ok(msg[4..len + 4].to_vec())
+    pub fn decrypt(&self, msg: Vec<u8>) -> Result<Vec<u8>, ()> {
+        self.cipher().decrypt_vec(&msg).map_err(|_e| ())
     }
 }
 
@@ -271,43 +272,5 @@ impl Debug for SessionKey {
         let mut hex = String::new();
         hex.extend(self.ss.iter().map(|byte| format!("{:02x?}", byte)));
         write!(f, "Shared Secret: 0x{}", hex)
-    }
-}
-
-fn block_encrypt(
-    key: &GenericArray<u8, <Aes256 as BlockCipher>::KeySize>,
-    plaintext: &mut Vec<u8>,
-    len: usize,
-) {
-    let cipher = Aes256::new(key);
-
-    let start = len * 16;
-    let p_len = plaintext.len() - start;
-
-    let block_len = if p_len > 16 { 16 } else { p_len };
-    let mut block = GenericArray::from_mut_slice(&mut plaintext[start..(start + block_len)]);
-    cipher.encrypt_block(&mut block);
-
-    if p_len > 16 {
-        block_encrypt(key, plaintext, len + 1);
-    }
-}
-
-fn block_decrypt(
-    key: &GenericArray<u8, <Aes256 as BlockCipher>::KeySize>,
-    ciphertext: &mut [u8],
-    len: usize,
-) {
-    let cipher = Aes256::new(key);
-
-    let start = len * 16;
-    let p_len = ciphertext.len() - start;
-
-    let block_len = if p_len > 16 { 16 } else { p_len };
-    let mut block = GenericArray::from_mut_slice(&mut ciphertext[start..(start + block_len)]);
-    cipher.decrypt_block(&mut block);
-
-    if p_len > 16 {
-        block_decrypt(key, ciphertext, len + 1);
     }
 }

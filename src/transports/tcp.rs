@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use futures::{select, FutureExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::ops::Div;
 
 use super::{new_channel, new_stream_channel, Endpoint, EndpointMessage, StreamMessage};
 
@@ -147,10 +148,16 @@ async fn process_stream(
                     }
 
                     let len: usize = u32::from_be_bytes(read_len) as usize;
+                    let mut received: usize = 0;
                     let mut read_bytes = vec![0u8; len];
                     while let Ok(bytes_size) = reader.read(&mut read_bytes).await {
-                        if bytes_size != len {
+                        received += bytes_size;
+                        if received > len {
                             break;
+                        }
+
+                        if received != len {
+                            continue;
                         }
 
                         out_sender
@@ -159,6 +166,7 @@ async fn process_stream(
                         break;
                     }
                     read_len = [0u8; 4];
+                    received = 0;
                 }
                 Err(e) => {
                     out_sender.send(StreamMessage::Close).await;
