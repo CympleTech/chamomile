@@ -4,19 +4,23 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![allow(unused_imports)]
-//
+
+mod core;
+mod primitives;
+
+pub mod transports;
+
 use async_std::{
     io::Result,
     sync::{channel, Receiver, Sender},
 };
+use primitives::MAX_MESSAGE_CAPACITY;
 use std::net::{IpAddr, SocketAddr};
-
-mod core;
-pub mod transports;
+use std::path::PathBuf;
 
 pub use self::core::peer::PeerId;
-
-pub const MAX_MESSAGE_CAPACITY: usize = 1024;
+// pub local db as default storage.
+pub use self::core::storage::LocalDB;
 
 #[derive(Debug)]
 pub enum Message {
@@ -30,6 +34,7 @@ pub enum Message {
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    pub db_dir: PathBuf,
     pub addr: SocketAddr,
     pub join_data: Vec<u8>,
     pub transport: String,
@@ -42,6 +47,7 @@ pub struct Config {
 impl Config {
     pub fn default(addr: SocketAddr) -> Self {
         Self {
+            db_dir: PathBuf::from("./"),
             addr: addr,
             join_data: vec![],
             transport: "tcp".to_owned(), // TODO Default
@@ -53,6 +59,7 @@ impl Config {
     }
 
     pub fn new(
+        db_dir: PathBuf,
         addr: SocketAddr,
         join_data: Vec<u8>,
         transport: String,
@@ -62,6 +69,7 @@ impl Config {
         black_peer_list: Vec<PeerId>,
     ) -> Self {
         Self {
+            db_dir,
             addr,
             join_data,
             transport,

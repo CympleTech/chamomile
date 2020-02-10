@@ -18,6 +18,7 @@ use super::keys::KeyType;
 use super::peer::Peer;
 use super::peer_list::PeerList;
 use super::session::{start as session_start, RemotePublic};
+use super::storage::LocalDB;
 
 /// start server
 pub async fn start(
@@ -25,8 +26,8 @@ pub async fn start(
     out_send: Sender<Message>,
     mut self_recv: Receiver<Message>,
 ) -> Result<()> {
-    // TODO load or init config.
     let Config {
+        mut db_dir,
         addr,
         join_data,
         transport,
@@ -35,6 +36,9 @@ pub async fn start(
         white_peer_list,
         black_peer_list,
     } = config;
+    db_dir.push("p2p");
+    let db = LocalDB::open_absolute(&db_dir)?;
+    // TODO load or init config.
 
     // load or generate keypair
     let key = KeyType::Ed25519.generate_kepair();

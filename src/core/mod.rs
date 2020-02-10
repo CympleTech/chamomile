@@ -5,6 +5,7 @@ mod session;
 
 pub mod peer;
 pub mod server;
+pub mod storage;
 
 //pub(crate) mod config;
 //pub(crate) mod peer_list;
