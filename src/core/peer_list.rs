@@ -1,5 +1,6 @@
 use async_std::sync::Sender;
 use rckad::KadTree;
+use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::iter::Iterator;
 use std::net::{IpAddr, SocketAddr};
@@ -7,14 +8,21 @@ use std::net::{IpAddr, SocketAddr};
 use crate::transports::StreamMessage;
 
 use super::peer::{Peer, PeerId};
+use super::storage::LocalDB;
 
 /// PeerList
 /// contains: peers(DHT) & tmp_peers(HashMap)
+#[derive(Deserialize, Serialize)]
 pub struct PeerList {
+    #[serde(skip)]
     peers: KadTree<PeerId, Option<(Sender<StreamMessage>, Peer)>>,
+    #[serde(skip)]
     tmps: HashMap<PeerId, (Sender<StreamMessage>, Peer)>,
+    #[serde(skip)]
     whites: (Vec<PeerId>, Vec<SocketAddr>),
+    #[serde(skip)]
     blacks: (Vec<PeerId>, Vec<IpAddr>),
+    bootstraps: Vec<SocketAddr>,
 }
 
 impl PeerList {
@@ -26,16 +34,39 @@ impl PeerList {
         PeerList {
             peers: KadTree::new(self_peer_id, None),
             tmps: HashMap::new(),
+            bootstraps: whites.1.clone(),
             whites: whites,
             blacks: blacks,
         }
+    }
+
+    pub fn merge(
+        &mut self,
+        peer_id: PeerId,
+        whites: (Vec<PeerId>, Vec<SocketAddr>),
+        blacks: (Vec<PeerId>, Vec<IpAddr>),
+    ) {
+        println!("{:?}", self.bootstraps);
+        for addr in &whites.1 {
+            self.add_bootstrap(*addr);
+        }
+
+        self.peers = KadTree::new(peer_id, None);
+        self.whites = whites;
+        self.blacks = blacks;
     }
 }
 
 // Black and white list.
 impl PeerList {
     pub fn bootstrap(&self) -> &Vec<SocketAddr> {
-        &self.whites.1
+        &self.bootstraps
+    }
+
+    pub fn add_bootstrap(&mut self, addr: SocketAddr) {
+        if !self.bootstraps.contains(&addr) {
+            self.bootstraps.push(addr)
+        }
     }
 
     pub fn is_white_peer(&self, peer: &PeerId) -> bool {
@@ -173,9 +204,13 @@ impl PeerList {
         self.tmps.remove(peer_id)
     }
 
-    pub fn stabilize_tmp_peer(&mut self, peer_id: PeerId) {
-        self.tmps
-            .remove(&peer_id)
-            .map(|m| self.peers.add(peer_id, Some(m)));
+    pub fn stabilize_tmp_peer(&mut self, peer_id: PeerId, key: &Vec<u8>, db: &mut LocalDB) {
+        self.tmps.remove(&peer_id).map(|m| {
+            if !self.bootstraps.contains(m.1.addr()) {
+                self.add_bootstrap(m.1.addr().clone());
+                let _ = db.update(key.clone(), self);
+            }
+            self.peers.add(peer_id, Some(m));
+        });
     }
 }

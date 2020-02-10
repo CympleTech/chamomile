@@ -14,11 +14,12 @@ use crate::transports::{
 use crate::{Config, Message};
 
 use super::hole_punching::DHT;
-use super::keys::KeyType;
+use super::keys::{KeyType, Keypair};
 use super::peer::Peer;
 use super::peer_list::PeerList;
 use super::session::{start as session_start, RemotePublic};
 use super::storage::LocalDB;
+use crate::primitives::{STORAGE_KEY_KEY, STORAGE_NAME};
 
 /// start server
 pub async fn start(
@@ -36,19 +37,36 @@ pub async fn start(
         white_peer_list,
         black_peer_list,
     } = config;
-    db_dir.push("p2p");
-    let db = LocalDB::open_absolute(&db_dir)?;
-    // TODO load or init config.
-
-    // load or generate keypair
-    let key = KeyType::Ed25519.generate_kepair();
+    db_dir.push(STORAGE_NAME);
+    let mut db = LocalDB::open_absolute(&db_dir)?;
+    let db_key_key = STORAGE_KEY_KEY.as_bytes().to_vec();
+    let key_result = db.read::<Keypair>(&db_key_key); // TODO KeyStore
+    let key = if key_result.is_none() {
+        let key = KeyType::Ed25519.generate_kepair();
+        db.write(db_key_key, &key)?;
+        key
+    } else {
+        key_result.unwrap()
+    };
 
     let peer_id = key.peer_id();
-    let peer_list = Arc::new(RwLock::new(PeerList::init(
-        peer_id,
-        (white_peer_list, white_list),
-        (black_peer_list, black_list),
-    )));
+    let db_peer_list_key = peer_id.0.to_vec();
+    let peer_list_result = db.read::<PeerList>(&db_peer_list_key);
+    let peer_list = if peer_list_result.is_none() {
+        Arc::new(RwLock::new(PeerList::init(
+            peer_id,
+            (white_peer_list, white_list),
+            (black_peer_list, black_list),
+        )))
+    } else {
+        let mut peer_list = peer_list_result.unwrap();
+        peer_list.merge(
+            peer_id,
+            (white_peer_list, white_list),
+            (black_peer_list, black_list),
+        );
+        Arc::new(RwLock::new(peer_list))
+    };
 
     let peer = Peer::new(
         key.peer_id(),
@@ -105,7 +123,9 @@ pub async fn start(
                             }
                             EndpointMessage::Connected(peer_id, sender, remote_peer, data) => {
                                 // check and save tmp and save outside
-                                if &peer_id == peer.id() || peer_list.read().await.is_black_peer(&peer_id) {
+                                if &peer_id == peer.id()
+                                    || peer_list.read().await.is_black_peer(&peer_id)
+                                {
                                     sender.send(StreamMessage::Close).await;
                                 } else {
                                     let addr = remote_peer.addr().clone();
@@ -122,7 +142,11 @@ pub async fn start(
                                 transport_send
                                     .send(EndpointMessage::Connect(
                                         addr,
-                                        RemotePublic(key.public().clone(), *peer.clone(), join_data.clone()).to_bytes()
+                                        RemotePublic(
+                                            key.public().clone(),
+                                            *peer.clone(),
+                                            join_data.clone()
+                                        ).to_bytes()
                                     ))
                                     .await;
                             }
@@ -144,7 +168,11 @@ pub async fn start(
                                 transport_send
                                     .send(EndpointMessage::Connect(
                                         addr,
-                                        RemotePublic(key.public().clone(), *peer.clone(), join).to_bytes()
+                                        RemotePublic(
+                                            key.public().clone(),
+                                            *peer.clone(),
+                                            join
+                                        ).to_bytes()
                                     ))
                                     .await;
                             }
@@ -158,7 +186,11 @@ pub async fn start(
                                     let sender = sender.unwrap();
                                     if is_ok {
                                         sender.send(StreamMessage::Ok(data)).await;
-                                        peer_list_lock.stabilize_tmp_peer(peer_id);
+                                        peer_list_lock.stabilize_tmp_peer(
+                                            peer_id,
+                                            &db_peer_list_key,
+                                            &mut db
+                                        );
                                     } else {
                                         sender.send(StreamMessage::Close).await;
                                         peer_list_lock.remove_tmp_peer(&peer_id);

@@ -26,7 +26,7 @@ fn main() {
                 Message::Data(peer_id, bytes) => {
                     println!("recv data from: {}, {:?}", peer_id.short_show(), bytes);
                 }
-                Message::PeerJoin(peer_id, join_data) => {
+                Message::PeerJoin(peer_id, _addr, join_data) => {
                     println!("peer join: {:?}, join data: {:?}", peer_id, join_data);
                     send.send(Message::PeerJoinResult(peer_id, true, vec![1]))
                         .await;

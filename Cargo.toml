@@ -28,7 +28,7 @@ aes-soft = "0.3"
 block-modes = "0.3"
 
 # DHT & NAT
-rckad = "0.0.5"
+rckad = "0.0.6"
 
 # serializtion
 serde = "1"

@@ -1,3 +1,4 @@
+use lazy_static::lazy_static;
 //use multiaddr::Multiaddr;
 //use serde_derive::{Deserialize, Serialize};
 //use std::collections::HashMap;
@@ -10,6 +11,10 @@
 pub const MAX_MESSAGE_CAPACITY: usize = 1024;
 
 pub const PEER_ID_LENGTH: usize = 42;
+
+pub const STORAGE_NAME: &'static str = "p2p";
+
+pub const STORAGE_KEY_KEY: &'static str = "key";
 
 // lazy_static! {
 //     pub static ref DEFAULT_TRANSPORT_SOCKET: HashMap<TransportType, Multiaddr> = {
