@@ -85,10 +85,10 @@ pub fn new_channel() -> (Sender<Message>, Receiver<Message>) {
     channel::<Message>(MAX_MESSAGE_CAPACITY)
 }
 
-pub async fn start(out_send: Sender<Message>, config: Config) -> Result<Sender<Message>> {
+pub async fn start(out_send: Sender<Message>, config: Config) -> Result<(PeerId, Sender<Message>)> {
     let (send, recv) = new_channel();
 
-    core::server::start(config, out_send, recv).await?;
+    let peer_id = core::server::start(config, out_send, recv).await?;
 
-    Ok(send)
+    Ok((peer_id, send))
 }

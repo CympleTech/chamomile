@@ -15,7 +15,7 @@ use crate::{Config, Message};
 
 use super::hole_punching::DHT;
 use super::keys::{KeyType, Keypair};
-use super::peer::Peer;
+use super::peer::{Peer, PeerId};
 use super::peer_list::PeerList;
 use super::session::{start as session_start, RemotePublic};
 use super::storage::LocalDB;
@@ -26,7 +26,7 @@ pub async fn start(
     config: Config,
     out_send: Sender<Message>,
     mut self_recv: Receiver<Message>,
-) -> Result<()> {
+) -> Result<PeerId> {
     let Config {
         mut db_dir,
         addr,
@@ -81,8 +81,6 @@ pub async fn start(
     let transport_send = transport_start(peer.transport(), peer.addr(), send.clone())
         .await
         .expect("Transport binding failure!");
-
-    println!("Debug: peer id: {}", peer_id.short_show());
 
     task::spawn(async move {
         // bootstrap white list.
@@ -224,5 +222,5 @@ pub async fn start(
         drop(send);
     });
 
-    Ok(())
+    Ok(peer_id)
 }

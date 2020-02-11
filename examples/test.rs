@@ -12,7 +12,8 @@ fn main() {
             .expect("invalid addr");
 
         let (out_send, out_recv) = new_channel();
-        let send = start(out_send, Config::default(self_addr)).await.unwrap();
+        let (peer_id, send) = start(out_send, Config::default(self_addr)).await.unwrap();
+        println!("peer id: {}", peer_id.short_show());
 
         if args().nth(2).is_some() {
             let remote_addr: SocketAddr = args().nth(2).unwrap().parse().expect("invalid addr");
