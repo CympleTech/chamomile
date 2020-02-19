@@ -2,8 +2,8 @@
 *Another P2P Library*
 
 ### features
-- serializtion abstrat: capnproto
-- transport abstrat: UDP/TCP/UDP-Based Special Protocol
+- DHT-based & Relay connection.
+- Diff transports: UDP/TCP/UDP-Based Special Protocol.
 
 ## Design point
 - Mobile phones, IoT devices, PC and servers are first-class citizens
