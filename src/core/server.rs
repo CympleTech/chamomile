@@ -177,12 +177,13 @@ pub async fn start(
                             Message::DisConnect(addr) => {
                                 transport_send.send(EndpointMessage::Disconnect(addr)).await;
                             }
-                            Message::PeerJoinResult(peer_id, is_ok, data) => {
+                            Message::PeerJoinResult(peer_id, is_ok, is_force, data) => {
                                 let mut peer_list_lock = peer_list.write().await;
                                 let sender = peer_list_lock.get(&peer_id);
                                 if sender.is_some() {
                                     let sender = sender.unwrap();
-                                    if is_ok {
+                                    // TODO is_ok, build two-channel to that peer.
+                                    if is_ok || !is_force {
                                         sender.send(StreamMessage::Ok(data)).await;
                                         peer_list_lock.stabilize_tmp_peer(
                                             peer_id,

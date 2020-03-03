@@ -25,7 +25,7 @@ pub use self::core::storage::LocalDB;
 #[derive(Debug)]
 pub enum Message {
     PeerJoin(PeerId, SocketAddr, Vec<u8>), // server  to outside
-    PeerJoinResult(PeerId, bool, Vec<u8>), // outside to server
+    PeerJoinResult(PeerId, bool, bool, Vec<u8>), // outside to server
     PeerLeave(PeerId),                     // server  to outside
     Connect(SocketAddr, Option<Vec<u8>>),  // outside to server
     DisConnect(SocketAddr),                // outside to server

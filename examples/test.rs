@@ -29,7 +29,7 @@ fn main() {
                 }
                 Message::PeerJoin(peer_id, _addr, join_data) => {
                     println!("peer join: {:?}, join data: {:?}", peer_id, join_data);
-                    send.send(Message::PeerJoinResult(peer_id, true, vec![1]))
+                    send.send(Message::PeerJoinResult(peer_id, true, false, vec![1]))
                         .await;
                     println!("Debug: when join send message test: {:?}", vec![1, 2, 3, 4]);
                     send.send(Message::Data(peer_id, vec![1, 2, 3, 4])).await;
