@@ -132,15 +132,19 @@ pub async fn start(
                             SessionReceiveMessage::Connected(peer_id, sender, remote_peer, data) => {
                                 // check and save tmp and save outside
                                 if &peer_id == peer.id()
-                                    || peer_list.read().await.is_black_peer(&peer_id)
-                                {
+                                    || peer_list.read().await.is_black_peer(&peer_id) {
                                     sender.send(SessionSendMessage::Close).await;
                                 } else {
                                     let addr = remote_peer.addr().clone();
-                                    peer_list.write().await.add_tmp_peer(peer_id, sender, remote_peer);
-                                    out_send.send(ReceiveMessage::PeerJoin(peer_id, addr, data)).await;
+                                    peer_list
+                                        .write()
+                                        .await
+                                        .add_tmp_peer(peer_id, sender, remote_peer);
+                                    out_send
+                                        .send(ReceiveMessage::PeerJoin(peer_id, addr, data))
+                                        .await;
                                 }
-                            },
+                            }
                             SessionReceiveMessage::Close(peer_id) => {
                                 peer_list.write().await.remove(&peer_id);
                                 out_send.send(ReceiveMessage::PeerLeave(peer_id)).await;
@@ -154,7 +158,7 @@ pub async fn start(
                                             key.public().clone(),
                                             *peer.clone(),
                                             join_data.clone()
-                                        ).to_bytes()
+                                        ).to_bytes(),
                                     ))
                                     .await;
                             }
@@ -205,14 +209,6 @@ pub async fn start(
                                     }
                                 }
                             }
-                            SendMessage::Data(peer_id, data) => {
-                                let peer_list_lock = peer_list.read().await;
-                                let sender = peer_list_lock.get(&peer_id);
-                                if sender.is_some() {
-                                    let sender = sender.unwrap();
-                                    sender.send(SessionSendMessage::Bytes(data)).await;
-                                }
-                            },
                             SendMessage::PeerClose(peer_id) => {
                                 let mut peer_list_lock = peer_list.write().await;
                                 let sender = peer_list_lock.get(&peer_id);
@@ -222,7 +218,16 @@ pub async fn start(
                                     peer_list_lock.remove_tmp_peer(&peer_id);
                                 }
                             },
-                            SendMessage::BroadCast(_broadcast, _data) => {
+                            SendMessage::Data(to, data) => {
+                                println!("data is send to: {}, {:?}", to.short_show(), data);
+                                let peer_list_lock = peer_list.read().await;
+                                let sender = peer_list_lock.get(&to);
+                                if sender.is_some() {
+                                    let sender = sender.unwrap();
+                                    sender.send(SessionSendMessage::Bytes(peer_id, to, data)).await;
+                                }
+                            },
+                            SendMessage::Broadcast(_broadcast, _data) => {
                                 // TODO
                             }
                         }

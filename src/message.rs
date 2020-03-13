@@ -46,5 +46,5 @@ pub enum SendMessage {
     /// when need broadcast a data to all network, chamomile support some
     /// common algorithm, use it, donnot worry.
     /// params is `broadcast_type` and `data_bytes`
-    BroadCast(Broadcast, Vec<u8>),
+    Broadcast(Broadcast, Vec<u8>),
 }

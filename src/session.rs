@@ -25,7 +25,7 @@ pub(crate) enum SessionSendMessage {
     /// when peer join failure or close by self.
     Close,
     /// send bytes to session what want to send to peer..
-    Bytes(Vec<u8>),
+    Bytes(PeerId, PeerId, Vec<u8>),
 }
 
 /// server receive from session message in channel.
@@ -113,8 +113,9 @@ pub(crate) fn start(
             ))
             .await;
 
-        let mut buffers: Vec<Vec<u8>> = vec![];
+        let mut buffers: Vec<(PeerId, Vec<u8>)> = vec![];
         let mut receiver_buffers: Vec<Vec<u8>> = vec![];
+        let my_peer_id = peer.id().clone();
 
         loop {
             select! {
@@ -149,16 +150,20 @@ pub(crate) fn start(
                                             }
 
                                             while !buffers.is_empty() {
-                                                let bytes = buffers.pop().unwrap();
+                                                let (peer_id, bytes) = buffers.pop().unwrap();
                                                 let e_data = session_key.encrypt(bytes);
-                                                let data = SessionType::Data(e_data).to_bytes();
+                                                let data = SessionType::Data(
+                                                    my_peer_id,
+                                                    peer_id,
+                                                    e_data
+                                                ).to_bytes();
                                                 endpoint_send
                                                     .send(EndpointStreamMessage::Bytes(data))
                                                     .await;
                                             }
 
                                             while !receiver_buffers.is_empty() {
-                                                let e_data = buffers.pop().unwrap();
+                                                let e_data = receiver_buffers.pop().unwrap();
                                                 let d_data = session_key.decrypt(e_data);
                                                 if d_data.is_ok() {
                                                     out_sender
@@ -170,19 +175,35 @@ pub(crate) fn start(
                                             }
 
                                         }
-                                        SessionType::Data(e_data) => {
+                                        SessionType::Data(from, to, e_data) => {
                                             if !session_key.is_ok() {
-                                                receiver_buffers.push(e_data);
                                                 continue;
                                             }
 
                                             let d_data = session_key.decrypt(e_data);
                                             if d_data.is_ok() {
-                                                out_sender
-                                                    .send(ReceiveMessage::Data(
-                                                        remote_peer_id,
-                                                        d_data.unwrap()
-                                                    )).await;
+                                                if to == my_peer_id {
+                                                    //println!("DEBUG: Directly: from: {} to: {}, me: {}, remote: {}", from.short_show(), to.short_show(), my_peer_id.short_show(), remote_peer_id.short_show());
+                                                    out_sender
+                                                        .send(ReceiveMessage::Data(
+                                                            from,
+                                                            d_data.unwrap()
+                                                        )).await;
+                                                } else {
+                                                    //println!("DEBUG: Relay: from: {} to: {}, me: {}, remote: {}", from.short_show(), to.short_show(),  my_peer_id.short_show(), remote_peer_id.short_show());
+                                                    // Relay
+                                                    let peer_list_lock = peer_list.read().await;
+                                                    let sender = peer_list_lock.get(&to);
+                                                    if sender.is_some() {
+                                                        let sender = sender.unwrap();
+                                                        sender.send(
+                                                            SessionSendMessage::Bytes(
+                                                                from,
+                                                                to,
+                                                                d_data.unwrap()
+                                                            )).await;
+                                                    }
+                                                }
                                             }
                                         }
                                         SessionType::DHT(peers, _sign) => {
@@ -202,24 +223,6 @@ pub(crate) fn start(
                                                 }
                                             }
 
-                                        }
-                                        SessionType::Relay(peer_id, e_data) => {
-                                            // TODO Relay send
-                                            if !session_key.is_ok() {
-                                                receiver_buffers.push(e_data);
-                                                continue;
-                                            }
-
-                                            let d_data = session_key.decrypt(e_data);
-                                            if d_data.is_ok() {
-                                                // TODO
-                                                // server_send.send(
-                                                //         EndpointMessage::Relay(
-                                                //             peer_id,
-                                                //             d_data.unwrap()
-                                                //         )).await;
-
-                                            }
                                         }
                                         SessionType::Ping => {
                                             endpoint_send
@@ -254,15 +257,15 @@ pub(crate) fn start(
                 out_msg = receiver.recv().fuse() => match out_msg {
                     Some(msg) => {
                         match msg {
-                            SessionSendMessage::Bytes(bytes) => {
+                            SessionSendMessage::Bytes(from, to, bytes) => {
                                 if session_key.is_ok() {
                                     let e_data = session_key.encrypt(bytes);
-                                    let data = SessionType::Data(e_data).to_bytes();
+                                    let data = SessionType::Data(from, to, e_data).to_bytes();
                                     endpoint_send
                                         .send(EndpointStreamMessage::Bytes(data))
                                         .await;
                                 } else {
-                                    buffers.push(bytes);
+                                    buffers.push((to, bytes));
                                 }
                             },
                             SessionSendMessage::Ok(data) => {
@@ -307,8 +310,7 @@ pub(crate) fn start(
 #[derive(Deserialize, Serialize)]
 enum SessionType {
     Key(Vec<u8>),
-    Data(Vec<u8>),
-    Relay(PeerId, Vec<u8>),
+    Data(PeerId, PeerId, Vec<u8>),
     DHT(DHT, Vec<u8>),
     Hole(Hole),
     HoleConnect,
