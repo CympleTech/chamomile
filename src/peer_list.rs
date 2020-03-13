@@ -5,19 +5,18 @@ use std::collections::HashMap;
 use std::iter::Iterator;
 use std::net::{IpAddr, SocketAddr};
 
-use crate::transports::StreamMessage;
-
-use super::peer::{Peer, PeerId};
-use super::storage::LocalDB;
+use crate::peer::{Peer, PeerId};
+use crate::session::SessionSendMessage;
+use crate::storage::LocalDB;
 
 /// PeerList
 /// contains: peers(DHT) & tmp_peers(HashMap)
 #[derive(Deserialize, Serialize)]
-pub struct PeerList {
+pub(crate) struct PeerList {
     #[serde(skip)]
-    peers: KadTree<PeerId, Option<(Sender<StreamMessage>, Peer)>>,
+    peers: KadTree<PeerId, Option<(Sender<SessionSendMessage>, Peer)>>,
     #[serde(skip)]
-    tmps: HashMap<PeerId, (Sender<StreamMessage>, Peer)>,
+    tmps: HashMap<PeerId, (Sender<SessionSendMessage>, Peer)>,
     #[serde(skip)]
     whites: (Vec<PeerId>, Vec<SocketAddr>),
     #[serde(skip)]
@@ -128,7 +127,7 @@ impl PeerList {
 
 // DHT
 impl PeerList {
-    pub fn all(&self) -> Vec<(PeerId, &Sender<StreamMessage>)> {
+    pub fn all(&self) -> Vec<(PeerId, &Sender<SessionSendMessage>)> {
         let keys = self.peers.keys();
         keys.into_iter()
             .map(|key| {
@@ -139,7 +138,7 @@ impl PeerList {
     }
 
     /// get in tmps, DHT, DHT closest.
-    pub fn get(&self, peer_id: &PeerId) -> Option<&Sender<StreamMessage>> {
+    pub fn get(&self, peer_id: &PeerId) -> Option<&Sender<SessionSendMessage>> {
         self.tmps
             .get(peer_id)
             .or(self
@@ -150,7 +149,7 @@ impl PeerList {
     }
 
     /// get in DHT (not closest).
-    pub fn get_it(&self, peer_id: &PeerId) -> Option<&Sender<StreamMessage>> {
+    pub fn get_it(&self, peer_id: &PeerId) -> Option<&Sender<SessionSendMessage>> {
         self.tmps
             .get(peer_id)
             .or(self.peers.search(peer_id).and_then(
@@ -187,20 +186,28 @@ impl PeerList {
         self.peers.contains(peer_id)
     }
 
-    pub fn remove(&mut self, peer_id: &PeerId) -> Option<(Sender<StreamMessage>, Peer)> {
+    pub fn remove(&mut self, peer_id: &PeerId) -> Option<(Sender<SessionSendMessage>, Peer)> {
         let r1 = self.peers.remove(peer_id).and_then(|v| v);
         let r2 = self.remove_tmp_peer(peer_id);
         r1.or(r2)
     }
 
-    pub fn add_tmp_peer(&mut self, peer_id: PeerId, sender: Sender<StreamMessage>, peer: Peer) {
+    pub fn add_tmp_peer(
+        &mut self,
+        peer_id: PeerId,
+        sender: Sender<SessionSendMessage>,
+        peer: Peer,
+    ) {
         self.tmps
             .entry(peer_id)
             .and_modify(|m| *m = (sender.clone(), peer.clone()))
             .or_insert((sender, peer));
     }
 
-    pub fn remove_tmp_peer(&mut self, peer_id: &PeerId) -> Option<(Sender<StreamMessage>, Peer)> {
+    pub fn remove_tmp_peer(
+        &mut self,
+        peer_id: &PeerId,
+    ) -> Option<(Sender<SessionSendMessage>, Peer)> {
         self.tmps.remove(peer_id)
     }
 

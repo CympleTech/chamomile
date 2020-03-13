@@ -7,17 +7,17 @@ use std::net::SocketAddr;
 
 use super::peer::{Peer, PeerId};
 use super::peer_list::PeerList;
-use crate::transports::{StreamMessage, TransportType};
+use crate::transports::TransportType;
 
 #[derive(Deserialize, Serialize)]
-pub enum Hole {
+pub(crate) enum Hole {
     StunOne,
     StunTwo,
     Help,
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct DHT(pub Vec<Peer>);
+pub(crate) struct DHT(pub Vec<Peer>);
 
 pub fn nat(mut remote_addr: SocketAddr, mut local: Peer) -> Peer {
     match local.transport() {
@@ -32,7 +32,7 @@ pub fn nat(mut remote_addr: SocketAddr, mut local: Peer) -> Peer {
     local
 }
 
-pub async fn handle(remote_peer: &PeerId, hole: Hole, peers: &PeerList) -> Result<()> {
+pub(crate) async fn handle(remote_peer: &PeerId, hole: Hole, peers: &PeerList) -> Result<()> {
     match hole {
         Hole::StunOne => {
             // first test

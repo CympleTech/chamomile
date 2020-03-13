@@ -11,14 +11,13 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::ops::Div;
 
-use super::{new_channel, new_stream_channel, Endpoint, EndpointMessage, StreamMessage};
+use super::message::{EndpointIncomingMessage, EndpointSendMessage, EndpointStreamMessage};
+use super::{new_endpoint_stream_channel, Endpoint};
 
 /// TCP Endpoint.
 pub struct TcpEndpoint {
-    streams: HashMap<SocketAddr, Sender<StreamMessage>>,
+    streams: HashMap<SocketAddr, Sender<EndpointStreamMessage>>,
 }
-
-// TODO how to exchange peer_id
 
 #[async_trait]
 impl Endpoint for TcpEndpoint {
@@ -26,10 +25,10 @@ impl Endpoint for TcpEndpoint {
     /// You need send a socketaddr str and udp send message's addr,
     /// and receiver outside message addr.
     async fn start(
-        socket_addr: SocketAddr,
-        out_send: Sender<EndpointMessage>,
-    ) -> Result<Sender<EndpointMessage>> {
-        let (send, recv) = new_channel();
+        bind_addr: SocketAddr,
+        send: Sender<EndpointIncomingMessage>,
+        recv: Receiver<EndpointSendMessage>,
+    ) -> Result<()> {
         let endpoint = TcpEndpoint {
             streams: HashMap::new(),
         };
@@ -38,18 +37,18 @@ impl Endpoint for TcpEndpoint {
         let m2 = m1.clone();
 
         // TCP listen
-        task::spawn(run_listen(socket_addr, out_send.clone(), m1));
+        task::spawn(run_listen(bind_addr, send.clone(), m1));
 
         // TCP listen from outside
-        task::spawn(run_self_recv(recv, out_send, m2));
+        task::spawn(run_self_recv(recv, send, m2));
 
-        Ok(send)
+        Ok(())
     }
 }
 
 async fn run_listen(
     socket_addr: SocketAddr,
-    out_send: Sender<EndpointMessage>,
+    out_send: Sender<EndpointIncomingMessage>,
     endpoint: Arc<Mutex<TcpEndpoint>>,
 ) -> Result<()> {
     let listener = TcpListener::bind(socket_addr)
@@ -72,13 +71,13 @@ async fn run_listen(
 }
 
 async fn run_self_recv(
-    recv: Receiver<EndpointMessage>,
-    out_send: Sender<EndpointMessage>,
+    recv: Receiver<EndpointSendMessage>,
+    out_send: Sender<EndpointIncomingMessage>,
     endpoint: Arc<Mutex<TcpEndpoint>>,
 ) -> Result<()> {
     while let Some(m) = recv.recv().await {
         match m {
-            EndpointMessage::Connect(addr, bytes) => {
+            EndpointSendMessage::Connect(addr, bytes) => {
                 let mut stream = TcpStream::connect(addr).await?;
                 let len = bytes.len() as u32;
                 stream.write(&(len.to_be_bytes())).await?;
@@ -90,13 +89,12 @@ async fn run_self_recv(
                     true,
                 ));
             }
-            EndpointMessage::Disconnect(ref addr) => {
+            EndpointSendMessage::Close(ref addr) => {
                 let mut endpoint = endpoint.lock().await;
                 if let Some(sender) = endpoint.streams.remove(addr) {
-                    sender.send(StreamMessage::Close).await;
+                    sender.send(EndpointStreamMessage::Close).await;
                 }
             }
-            _ => {}
         }
     }
     Ok(())
@@ -104,7 +102,7 @@ async fn run_self_recv(
 
 async fn process_stream(
     stream: TcpStream,
-    sender: Sender<EndpointMessage>,
+    sender: Sender<EndpointIncomingMessage>,
     endpoint: Arc<Mutex<TcpEndpoint>>,
     is_ok: bool,
 ) -> Result<()> {
@@ -116,8 +114,8 @@ async fn process_stream(
     //let mut reader = BufReader::new(&*stream);
     //let writer = Arc::clone(&stream);
 
-    let (self_sender, self_receiver) = new_stream_channel();
-    let (out_sender, out_receiver) = new_stream_channel();
+    let (self_sender, self_receiver) = new_endpoint_stream_channel();
+    let (out_sender, out_receiver) = new_endpoint_stream_channel();
 
     endpoint
         .lock()
@@ -127,7 +125,7 @@ async fn process_stream(
         .and_modify(|s| *s = self_sender.clone())
         .or_insert(self_sender.clone());
     sender
-        .send(EndpointMessage::PreConnected(
+        .send(EndpointIncomingMessage(
             addr,
             out_receiver,
             self_sender,
@@ -143,7 +141,7 @@ async fn process_stream(
                 Ok(size) => {
                     if size == 0 {
                         // when close or better when many Ok(0)
-                        out_sender.send(StreamMessage::Close).await;
+                        out_sender.send(EndpointStreamMessage::Close).await;
                         break;
                     }
 
@@ -161,7 +159,7 @@ async fn process_stream(
                         }
 
                         out_sender
-                            .send(StreamMessage::Bytes(read_bytes.clone()))
+                            .send(EndpointStreamMessage::Bytes(read_bytes.clone()))
                             .await;
                         break;
                     }
@@ -169,20 +167,19 @@ async fn process_stream(
                     received = 0;
                 }
                 Err(e) => {
-                    out_sender.send(StreamMessage::Close).await;
+                    out_sender.send(EndpointStreamMessage::Close).await;
                     break;
                 }
             },
             msg = self_receiver.recv().fuse() => match msg {
                 Some(msg) => {
                     match msg {
-                        StreamMessage::Bytes(bytes) => {
+                        EndpointStreamMessage::Bytes(bytes) => {
                             let len = bytes.len() as u32;
                             writer.write(&(len.to_be_bytes())).await?;
                             writer.write_all(&bytes[..]).await?;
                         }
-                        StreamMessage::Close => break,
-                        _ => break,
+                        EndpointStreamMessage::Close => break,
                     }
                 },
                 None => break,

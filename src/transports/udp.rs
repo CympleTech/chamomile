@@ -11,7 +11,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 
 use super::{new_channel, new_stream_channel, Endpoint, EndpointMessage, StreamMessage};
-use crate::PeerId;
 
 /// 576(MTU) - 8(Head) - 20(IP) - 8(ID + Head) = 540
 const UDP_UINT: usize = 540;

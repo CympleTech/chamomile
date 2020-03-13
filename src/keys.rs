@@ -13,7 +13,7 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::ops::Rem;
 use x25519_dalek::{PublicKey as Ed25519_DH_Public, StaticSecret as Ed25519_DH_Secret};
 
-use crate::core::peer::PeerId;
+use crate::peer::PeerId;
 
 // create an alias for convenience
 type Aes256Cbc = Cbc<Aes256, Pkcs7>;

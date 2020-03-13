@@ -1,7 +1,8 @@
 use async_std::task;
-use chamomile::{new_channel, start, Config, Message};
 use std::env::args;
 use std::net::SocketAddr;
+
+use chamomile::prelude::{start, Config, ReceiveMessage, SendMessage};
 
 fn main() {
     task::block_on(async {
@@ -11,33 +12,35 @@ fn main() {
             .parse()
             .expect("invalid addr");
 
-        let (out_send, out_recv) = new_channel();
-        let (peer_id, send) = start(out_send, Config::default(self_addr)).await.unwrap();
+        let (peer_id, send, recv) = start(Config::default(self_addr)).await.unwrap();
         println!("peer id: {}", peer_id.short_show());
 
         if args().nth(2).is_some() {
             let remote_addr: SocketAddr = args().nth(2).unwrap().parse().expect("invalid addr");
             println!("start connect to remote: {}", remote_addr);
-            send.send(Message::Connect(remote_addr, Some(vec![1])))
+            send.send(SendMessage::Connect(remote_addr, Some(vec![1])))
                 .await;
         }
 
-        while let Some(message) = out_recv.recv().await {
+        while let Some(message) = recv.recv().await {
             match message {
-                Message::Data(peer_id, bytes) => {
+                ReceiveMessage::Data(peer_id, bytes) => {
                     println!("recv data from: {}, {:?}", peer_id.short_show(), bytes);
                 }
-                Message::PeerJoin(peer_id, _addr, join_data) => {
-                    println!("peer join: {:?}, join data: {:?}", peer_id, join_data);
-                    send.send(Message::PeerJoinResult(peer_id, true, false, vec![1]))
+                ReceiveMessage::PeerJoin(peer_id, addr, join_data) => {
+                    println!(
+                        "peer join: {:?} {}, join data: {:?}",
+                        peer_id, addr, join_data
+                    );
+                    send.send(SendMessage::PeerJoinResult(peer_id, true, false, vec![1]))
                         .await;
                     println!("Debug: when join send message test: {:?}", vec![1, 2, 3, 4]);
-                    send.send(Message::Data(peer_id, vec![1, 2, 3, 4])).await;
+                    send.send(SendMessage::Data(peer_id, vec![1, 2, 3, 4]))
+                        .await;
                 }
-                Message::PeerLeave(peer_id) => {
+                ReceiveMessage::PeerLeave(peer_id) => {
                     println!("peer_leave: {:?}", peer_id);
                 }
-                _ => break,
             }
         }
     });

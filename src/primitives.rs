@@ -4,8 +4,7 @@ use lazy_static::lazy_static;
 //use std::collections::HashMap;
 //use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-//use crate::core::peer_id::PeerID;
-//use crate::protocol::keys::PublicKey;
+//use crate::peer_id::PeerID;
 //use crate::transports::TransportType;
 
 pub const MAX_MESSAGE_CAPACITY: usize = 1024;
