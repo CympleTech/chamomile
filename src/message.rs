@@ -9,6 +9,9 @@ pub enum ReceiveMessage {
     /// when peer join, send from chamomile to outside.
     /// params is `peer_id`, `socket_addr` and peer `join_info`.
     PeerJoin(PeerId, SocketAddr, Vec<u8>),
+    /// when peer get join result.
+    /// params is `peer_id`, `is_ok` and `result_data`.
+    PeerJoinResult(PeerId, bool, Vec<u8>),
     /// when peer leave, send from chamomile to outside.
     /// params is `peer_id`.
     PeerLeave(PeerId),
