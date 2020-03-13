@@ -169,6 +169,9 @@ pub async fn start(
                 msg = self_recv.recv().fuse() => match msg {
                     Some(message) => {
                         match message {
+                            SendMessage::PeerJoin(peer_id, socket, data) => {
+                                // TODO Add peer to directly connect.
+                            }
                             SendMessage::Connect(addr, data) => {
                                 let join = if data.is_none() {
                                     join_data.clone()
@@ -209,7 +212,7 @@ pub async fn start(
                                     }
                                 }
                             }
-                            SendMessage::PeerClose(peer_id) => {
+                            SendMessage::PeerLeave(peer_id) => {
                                 let mut peer_list_lock = peer_list.write().await;
                                 let sender = peer_list_lock.get(&peer_id);
                                 if sender.is_some() {

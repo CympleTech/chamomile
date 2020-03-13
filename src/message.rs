@@ -20,6 +20,12 @@ pub enum ReceiveMessage {
 /// main send message for outside channel, send from outside to chamomile.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum SendMessage {
+    /// when need add a peer, send to chamomile from outside.
+    /// params is `peer_id`, `socket_addr` and peer `join_info`.
+    PeerJoin(PeerId, SocketAddr, Vec<u8>),
+    /// when outside want to close a connectioned peer. use it force close.
+    /// params is `peer_id`.
+    PeerLeave(PeerId),
     /// when peer request for join, outside decide connect or not.
     /// params is `peer_id`, `is_connect`, `is_force_close`, `result info`.
     /// if `is_connect` is true, it will add to white directly list.
@@ -28,9 +34,6 @@ pub enum SendMessage {
     /// will use this peer to build our DHT for better connection.
     /// if false, we will force close it.
     PeerJoinResult(PeerId, bool, bool, Vec<u8>),
-    /// when outside want to close a connectioned peer. use it force close.
-    /// params is `peer_id`.
-    PeerClose(PeerId),
     /// when outside want to connect a peer. will try connect directly.
     /// if connected, chamomile will send PeerJoin back. if join_info is none,
     /// chamomile will use config's join_data as default.
