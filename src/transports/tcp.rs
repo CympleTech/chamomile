@@ -56,9 +56,9 @@ async fn run_listen(
         .expect("TCP listen failure!");
     let mut incoming = listener.incoming();
 
-    while let Some(stream) = incoming.next().await {
+    while let Some(Ok(stream)) = incoming.next().await {
         task::spawn(process_stream(
-            stream?,
+            stream,
             out_send.clone(),
             endpoint.clone(),
             false,
@@ -78,16 +78,17 @@ async fn run_self_recv(
     while let Some(m) = recv.recv().await {
         match m {
             EndpointSendMessage::Connect(addr, bytes) => {
-                let mut stream = TcpStream::connect(addr).await?;
-                let len = bytes.len() as u32;
-                stream.write(&(len.to_be_bytes())).await?;
-                stream.write_all(&bytes[..]).await?;
-                task::spawn(process_stream(
-                    stream,
-                    out_send.clone(),
-                    endpoint.clone(),
-                    true,
-                ));
+                if let Ok(mut stream) = TcpStream::connect(addr).await {
+                    let len = bytes.len() as u32;
+                    let _ = stream.write(&(len.to_be_bytes())).await;
+                    let _ = stream.write_all(&bytes[..]).await;
+                    task::spawn(process_stream(
+                        stream,
+                        out_send.clone(),
+                        endpoint.clone(),
+                        true,
+                    ));
+                }
             }
             EndpointSendMessage::Close(ref addr) => {
                 let mut endpoint = endpoint.lock().await;
@@ -97,6 +98,7 @@ async fn run_self_recv(
             }
         }
     }
+
     Ok(())
 }
 
