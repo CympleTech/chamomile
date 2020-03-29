@@ -16,7 +16,7 @@ impl LocalDB {
         Ok(LocalDB { tree })
     }
 
-    pub fn read<T: Serialize + DeserializeOwned>(&self, k: &Vec<u8>) -> Option<T> {
+    pub fn read<T: Serialize + DeserializeOwned>(&self, k: &[u8]) -> Option<T> {
         self.tree
             .get(k)
             .ok()
@@ -56,7 +56,7 @@ impl LocalDB {
             })
     }
 
-    pub fn delete<T: Serialize + DeserializeOwned>(&self, k: &Vec<u8>) -> Result<T, Error> {
+    pub fn delete<T: Serialize + DeserializeOwned>(&self, k: &[u8]) -> Result<T, Error> {
         let result = self.read::<T>(k);
         if result.is_some() {
             self.tree
