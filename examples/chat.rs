@@ -48,6 +48,7 @@ fn main() {
                 ReceiveMessage::PeerLeave(peer_id) => {
                     println!("peer_leave: {:?}", peer_id);
                 }
+                _ => {}
             }
         }
     });
