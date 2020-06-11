@@ -75,7 +75,7 @@ async fn run_self_recv(
     out_send: Sender<EndpointIncomingMessage>,
     endpoint: Arc<Mutex<TcpEndpoint>>,
 ) -> Result<()> {
-    while let Some(m) = recv.recv().await {
+    while let Ok(m) = recv.recv().await {
         match m {
             EndpointSendMessage::Connect(addr, bytes) => {
                 if let Ok(mut stream) = TcpStream::connect(addr).await {
@@ -168,13 +168,13 @@ async fn process_stream(
                     read_len = [0u8; 4];
                     received = 0;
                 }
-                Err(e) => {
+                Err(_e) => {
                     out_sender.send(EndpointStreamMessage::Close).await;
                     break;
                 }
             },
             msg = self_receiver.recv().fuse() => match msg {
-                Some(msg) => {
+                Ok(msg) => {
                     match msg {
                         EndpointStreamMessage::Bytes(bytes) => {
                             let len = bytes.len() as u32;
@@ -184,7 +184,7 @@ async fn process_stream(
                         EndpointStreamMessage::Close => break,
                     }
                 },
-                None => break,
+                Err(_) => break,
             }
         }
     }

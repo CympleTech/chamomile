@@ -67,7 +67,7 @@ pub(crate) fn start(
     task::spawn(async move {
         // timeout 10s to read peer_id & public_key
         let result: io::Result<Option<RemotePublic>> = io::timeout(Duration::from_secs(5), async {
-            while let Some(msg) = endpoint_recv.recv().await {
+            while let Ok(msg) = endpoint_recv.recv().await {
                 let remote_peer_key = match msg {
                     EndpointStreamMessage::Bytes(bytes) => {
                         RemotePublic::from_bytes(key.key, bytes).ok()
@@ -120,7 +120,7 @@ pub(crate) fn start(
         loop {
             select! {
                 msg = endpoint_recv.recv().fuse() => match msg {
-                    Some(msg) => {
+                    Ok(msg) => {
                         if !is_ok {
                             continue;
                         }
@@ -252,10 +252,10 @@ pub(crate) fn start(
                             _ => break,
                         }
                     },
-                    None => break,
+                    Err(_) => break,
                 },
                 out_msg = receiver.recv().fuse() => match out_msg {
-                    Some(msg) => {
+                    Ok(msg) => {
                         match msg {
                             SessionSendMessage::Bytes(from, to, bytes) => {
                                 if session_key.is_ok() {
@@ -300,7 +300,7 @@ pub(crate) fn start(
                             }
                         }
                     },
-                    None => break,
+                    Err(_) => break,
                 }
             }
         }

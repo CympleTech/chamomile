@@ -104,7 +104,7 @@ pub async fn start(
         loop {
             select! {
                 msg = endpoint_recv.recv().fuse() => match msg {
-                    Some(message) => {
+                    Ok(message) => {
                         let EndpointIncomingMessage(addr, receiver, sender, is_by_self) = message;
 
                         // check and start session
@@ -124,10 +124,10 @@ pub async fn start(
                             )
                         }
                     },
-                    None => break,
+                    Err(_) => break,
                 },
                 msg = session_recv.recv().fuse() => match msg {
-                    Some(message) =>{
+                    Ok(message) =>{
                         match message {
                             SessionReceiveMessage::Connected(peer_id, sender, remote_peer, data) => {
                                 // check and save tmp and save outside
@@ -164,10 +164,10 @@ pub async fn start(
                             }
                         }
                     },
-                    None => break,
+                    Err(_) => break,
                 },
                 msg = self_recv.recv().fuse() => match msg {
-                    Some(message) => {
+                    Ok(message) => {
                         match message {
                             SendMessage::PeerJoin(peer_id, socket, data) => {
                                 // TODO Add peer to directly connect.
@@ -235,7 +235,7 @@ pub async fn start(
                             }
                         }
                     },
-                    None => break,
+                    Err(_) => break,
                 }
             }
         }

@@ -22,7 +22,7 @@ fn main() {
                 .await;
         }
 
-        while let Some(message) = recv.recv().await {
+        while let Ok(message) = recv.recv().await {
             match message {
                 ReceiveMessage::Data(peer_id, bytes) => {
                     println!("recv data from: {}, {:?}", peer_id.short_show(), bytes);
