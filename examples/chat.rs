@@ -2,7 +2,7 @@ use async_std::task;
 use std::env::args;
 use std::net::SocketAddr;
 
-use chamomile::prelude::{start, Config, PeerId, ReceiveMessage, SendMessage};
+use chamomile::prelude::{start, Config, ReceiveMessage, SendMessage};
 
 fn main() {
     task::block_on(async {

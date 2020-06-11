@@ -6,7 +6,7 @@ use async_std::{
     task,
 };
 use futures::{select, FutureExt};
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::time::Duration;
 

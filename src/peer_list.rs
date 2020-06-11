@@ -1,6 +1,6 @@
 use async_std::sync::Sender;
 use rckad::KadTree;
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::iter::Iterator;
 use std::net::{IpAddr, SocketAddr};

@@ -1,7 +1,7 @@
 use async_std::io::Result;
 use async_std::sync::{channel, Receiver, Sender};
 use async_trait::async_trait;
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
 mod message;

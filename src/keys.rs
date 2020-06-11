@@ -1,13 +1,11 @@
-use aes_soft::{
-    block_cipher_trait::generic_array::GenericArray, block_cipher_trait::BlockCipher, Aes256,
-};
+use aes_soft::Aes256;
 use block_modes::block_padding::Pkcs7;
 use block_modes::{BlockMode, Cbc};
 use ed25519_dalek::{
     Keypair as Ed25519_Keypair, PublicKey as Ed25519_PublicKey, Signature as Ed25519_Signature,
     KEYPAIR_LENGTH, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH,
 };
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256, Sha3_512};
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::ops::Rem;
