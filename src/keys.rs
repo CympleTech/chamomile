@@ -221,7 +221,7 @@ impl SessionKey {
 
     fn cipher(&self) -> Aes256Cbc {
         Aes256Cbc::new_var(&self.ss, &self.iv)
-            .map_err(|e| println!("{:?}", e))
+            .map_err(|e| debug!("{:?}", e))
             .unwrap()
     }
 
@@ -244,7 +244,7 @@ impl SessionKey {
                     n_sha.input(&result[..]);
                     self.iv.copy_from_slice(&n_sha.result()[..16]);
                     self.is_ok = true;
-                    println!("{:?}", self);
+                    debug!("{:?}", self);
                 })
                 .is_ok()
         } else {

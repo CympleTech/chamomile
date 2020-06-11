@@ -45,7 +45,7 @@ impl PeerList {
         whites: (Vec<PeerId>, Vec<SocketAddr>),
         blacks: (Vec<PeerId>, Vec<IpAddr>),
     ) {
-        println!("{:?}", self.bootstraps);
+        debug!("{:?}", self.bootstraps);
         for addr in &whites.1 {
             self.add_bootstrap(*addr);
         }

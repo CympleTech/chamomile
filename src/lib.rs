@@ -64,6 +64,9 @@
 //! - Support common broadcast.
 //!
 
+#[macro_use]
+extern crate log;
+
 mod broadcast;
 mod config;
 mod hole_punching;

@@ -192,7 +192,7 @@ async fn process_stream(
     endpoint.lock().await.streams.remove(&addr);
     drop(self_receiver);
     drop(out_sender);
-    println!("close stream: {}", addr);
+    debug!("close stream: {}", addr);
 
     Ok(())
 }

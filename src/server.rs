@@ -222,7 +222,7 @@ pub async fn start(
                                 }
                             },
                             SendMessage::Data(to, data) => {
-                                println!("DEBUG: data is send to: {}, {}", to.short_show(), data.len());
+                                debug!("DEBUG: data is send to: {}, {}", to.short_show(), data.len());
                                 let peer_list_lock = peer_list.read().await;
                                 let sender = peer_list_lock.get(&to);
                                 if sender.is_some() {

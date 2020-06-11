@@ -82,7 +82,7 @@ pub(crate) fn start(
         .await;
 
         if result.is_err() {
-            println!("Debug: Session timeout");
+            debug!("Debug: Session timeout");
             endpoint_send.send(EndpointStreamMessage::Close).await;
             drop(endpoint_recv);
             drop(endpoint_send);
@@ -90,7 +90,7 @@ pub(crate) fn start(
         }
         let result = result.unwrap();
         if result.is_none() {
-            println!("Debug: Session invalid pk");
+            debug!("Debug: Session invalid pk");
             endpoint_send.send(EndpointStreamMessage::Close).await;
             drop(endpoint_recv);
             drop(endpoint_send);
@@ -100,10 +100,10 @@ pub(crate) fn start(
         let remote_peer_id = remote_peer_key.peer_id();
         let mut session_key: SessionKey = key.key.session_key(&key, &remote_peer_key);
 
-        println!("Debug: Session connected: {}", remote_peer_id.short_show());
+        debug!("Debug: Session connected: {}", remote_peer_id.short_show());
         let (sender, receiver) = new_session_send_channel();
         let remote_transport = nat(remote_addr, remote_local_addr);
-        println!("Debug: NAT addr: {}", remote_transport.addr());
+        debug!("Debug: NAT addr: {}", remote_transport.addr());
         server_send
             .send(SessionReceiveMessage::Connected(
                 remote_peer_id,
@@ -183,14 +183,14 @@ pub(crate) fn start(
                                             let d_data = session_key.decrypt(e_data);
                                             if d_data.is_ok() {
                                                 if to == my_peer_id {
-                                                    //println!("DEBUG: Directly: from: {} to: {}, me: {}, remote: {}", from.short_show(), to.short_show(), my_peer_id.short_show(), remote_peer_id.short_show());
+                                                    //debug!("DEBUG: Directly: from: {} to: {}, me: {}, remote: {}", from.short_show(), to.short_show(), my_peer_id.short_show(), remote_peer_id.short_show());
                                                     out_sender
                                                         .send(ReceiveMessage::Data(
                                                             from,
                                                             d_data.unwrap()
                                                         )).await;
                                                 } else {
-                                                    //println!("DEBUG: Relay: from: {} to: {}, me: {}, remote: {}", from.short_show(), to.short_show(),  my_peer_id.short_show(), remote_peer_id.short_show());
+                                                    //debug!("DEBUG: Relay: from: {} to: {}, me: {}, remote: {}", from.short_show(), to.short_show(),  my_peer_id.short_show(), remote_peer_id.short_show());
                                                     // Relay
                                                     let peer_list_lock = peer_list.read().await;
                                                     let sender = peer_list_lock.get(&to);
@@ -239,7 +239,7 @@ pub(crate) fn start(
                                         }
                                     }
                                     Err(e) => {
-                                        println!("Debug: Error Serialize SessionType {:?}", e)
+                                        debug!("Debug: Error Serialize SessionType {:?}", e)
                                     },
                                 }
                             },
