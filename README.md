@@ -1,7 +1,12 @@
-## Chamomile
+# Chamomile
 *Another P2P Library*
 
-### features
+## Example
+- `cargo run --example test 0.0.0.0:8000`
+- `cargo run --example test 0.0.0.0:8001 0.0.0.0:8000`
+- `cargo run --example test 0.0.0.0:8002 0.0.0.0:8000`
+
+## features
 - DHT-based & Relay connection.
 - Diff transports: UDP/TCP/UDP-Based Special Protocol.
 
@@ -14,7 +19,13 @@
 - Automatically switch the connection according to the number of connections and the network environment
 - Compatible with part of libp2p and Protocol Lab
 
-## Example
-- `cargo run --example test 0.0.0.0:8000`
-- `cargo run --example test 0.0.0.0:8001 0.0.0.0:8000`
-- `cargo run --example test 0.0.0.0:8002 0.0.0.0:8000`
+## License
+
+This project is licensed under either of
+
+ * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or
+   http://www.apache.org/licenses/LICENSE-2.0)
+ * MIT license ([LICENSE-MIT](LICENSE-MIT) or
+   http://opensource.org/licenses/MIT)
+
+at your option.
