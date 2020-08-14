@@ -15,7 +15,7 @@ pub use message::{EndpointIncomingMessage, EndpointSendMessage, EndpointStreamMe
 use crate::primitives::MAX_MESSAGE_CAPACITY;
 
 /// Transports types support by Endpoint.
-#[derive(Debug, Copy, Clone, Hash, Deserialize, Serialize)]
+#[derive(Debug, Copy, Clone, Hash, Deserialize, Serialize, Eq, PartialEq)]
 pub enum TransportType {
     UDP, // 0u8
     TCP, // 1u8
@@ -33,6 +33,39 @@ impl TransportType {
             "udt" => TransportType::UDT,
             _ => TransportType::UDP,
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TransportStream {
+    transport: TransportType,
+    sender: Sender<Vec<u8>>,
+    receiver: Receiver<Vec<u8>>,
+}
+
+impl Eq for TransportStream {}
+
+impl PartialEq for TransportStream {
+    fn eq(&self, other: &TransportStream) -> bool {
+        self.transport == other.transport
+    }
+}
+
+impl TransportStream {
+    pub fn new(
+        transport: TransportType,
+        sender: Sender<Vec<u8>>,
+        receiver: Receiver<Vec<u8>>,
+    ) -> Self {
+        Self {
+            transport,
+            sender,
+            receiver,
+        }
+    }
+
+    pub fn channel(self) -> (Sender<Vec<u8>>, Receiver<Vec<u8>>) {
+        (self.sender, self.receiver)
     }
 }
 

@@ -169,8 +169,9 @@ pub async fn start(
                 msg = self_recv.recv().fuse() => match msg {
                     Ok(message) => {
                         match message {
-                            SendMessage::PeerJoin(peer_id, socket, data) => {
+                            SendMessage::PeerJoin(_peer_id, _socket, _data) => {
                                 // TODO Add peer to directly connect.
+                                todo!();
                             }
                             SendMessage::Connect(addr, data) => {
                                 let join = if data.is_none() {
@@ -231,7 +232,10 @@ pub async fn start(
                                 }
                             },
                             SendMessage::Broadcast(_broadcast, _data) => {
-                                // TODO
+                                todo!();
+                            }
+                            SendMessage::Stream(_symbol, _stream_type) => {
+                                todo!();
                             }
                         }
                     },

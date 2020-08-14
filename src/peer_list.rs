@@ -89,11 +89,19 @@ impl PeerList {
     }
 
     pub fn remove_white_peer(&mut self, peer: &PeerId) -> Option<PeerId> {
-        self.whites.0.remove_item(peer)
+        let pos = match self.whites.0.iter().position(|x| *x == *peer) {
+            Some(x) => x,
+            None => return None,
+        };
+        Some(self.whites.0.remove(pos))
     }
 
     pub fn remove_white_addr(&mut self, addr: &SocketAddr) -> Option<SocketAddr> {
-        self.whites.1.remove_item(addr)
+        let pos = match self.whites.1.iter().position(|x| *x == *addr) {
+            Some(x) => x,
+            None => return None,
+        };
+        Some(self.whites.1.remove(pos))
     }
 
     pub fn is_black_peer(&self, peer: &PeerId) -> bool {
@@ -117,11 +125,19 @@ impl PeerList {
     }
 
     pub fn remove_black_peer(&mut self, peer: &PeerId) -> Option<PeerId> {
-        self.blacks.0.remove_item(peer)
+        let pos = match self.blacks.0.iter().position(|x| *x == *peer) {
+            Some(x) => x,
+            None => return None,
+        };
+        Some(self.blacks.0.remove(pos))
     }
 
     pub fn remove_black_addr(&mut self, addr: &SocketAddr) -> Option<IpAddr> {
-        self.blacks.1.remove_item(&addr.ip())
+        let pos = match self.blacks.1.iter().position(|x| *x == addr.ip()) {
+            Some(x) => x,
+            None => return None,
+        };
+        Some(self.blacks.1.remove(pos))
     }
 }
 

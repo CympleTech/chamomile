@@ -2,6 +2,18 @@ use std::net::SocketAddr;
 
 use crate::broadcast::Broadcast;
 use crate::peer::PeerId;
+use crate::transports::{TransportStream, TransportType};
+
+/// Custom apply for build a stream between nodes.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum StreamType {
+    /// request for build a stream, params is transport type and request custom info.
+    Req(TransportType, Vec<u8>),
+    /// response for build a stream, params is is_ok, and response custom info.
+    Res(bool, Vec<u8>),
+    /// if response is ok, will build a stream, and return the stream to ouside.
+    Ok(TransportStream),
+}
 
 /// main received message for outside channel, send from chamomile to outside.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -18,6 +30,9 @@ pub enum ReceiveMessage {
     /// when received a data from a trusted peer, send to outside.
     /// params is `peer_id` and `data_bytes`.
     Data(PeerId, Vec<u8>),
+    /// Apply for build a stream between nodes.
+    /// params is `u32` stream symbol, and `StreamType`.
+    Stream(u32, StreamType),
 }
 
 /// main send message for outside channel, send from outside to chamomile.
@@ -53,4 +68,7 @@ pub enum SendMessage {
     /// common algorithm, use it, donnot worry.
     /// params is `broadcast_type` and `data_bytes`
     Broadcast(Broadcast, Vec<u8>),
+    /// Apply for build a stream between nodes.
+    /// params is `u32` stream symbol, and `StreamType`.
+    Stream(u32, StreamType),
 }

@@ -1,4 +1,3 @@
-#![feature(vec_remove_item)]
 #![recursion_limit = "1024"]
 // TODO Debug
 #![allow(dead_code)]
@@ -92,7 +91,7 @@ pub mod prelude {
 
     pub use super::broadcast::Broadcast;
     pub use super::config::Config;
-    pub use super::message::{ReceiveMessage, SendMessage};
+    pub use super::message::{ReceiveMessage, SendMessage, StreamType};
     pub use super::peer::PeerId;
     pub use super::storage::LocalDB;
 
