@@ -13,7 +13,7 @@ edition = "2018"
 lazy_static = "1.4"
 toml = "0.5"
 rand = "0.7"
-sled = "0.31"
+sled = "0.34"
 log = "0.4"
 
 # async runtime and channel
@@ -22,11 +22,11 @@ async-std = { version = "1", features = ["unstable"] }
 async-trait = "0.1"
 
 # crypto
-sha3 = "0.8"
-ed25519-dalek = "1.0.0-pre.3"
+sha3 = "0.9"
+ed25519-dalek = "1.0.0-pre.4"
 x25519-dalek = "0.6"
-aes-soft = "0.4"
-block-modes = "0.4"
+aes-soft = "0.5"
+block-modes = "0.6"
 
 # DHT & NAT
 rckad = "0.0.6"

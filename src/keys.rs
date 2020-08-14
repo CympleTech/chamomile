@@ -3,10 +3,11 @@ use block_modes::block_padding::Pkcs7;
 use block_modes::{BlockMode, Cbc};
 use ed25519_dalek::{
     Keypair as Ed25519_Keypair, PublicKey as Ed25519_PublicKey, Signature as Ed25519_Signature,
-    KEYPAIR_LENGTH, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH,
+    Signer, Verifier, KEYPAIR_LENGTH, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH,
 };
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256, Sha3_512};
+use std::convert::TryFrom;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::ops::Rem;
 use x25519_dalek::{PublicKey as Ed25519_DH_Public, StaticSecret as Ed25519_DH_Secret};
@@ -97,7 +98,7 @@ impl KeyType {
             KeyType::Ed25519 => {
                 let ed_pk = Ed25519_PublicKey::from_bytes(&pk[..]).unwrap();
                 ed_pk
-                    .verify(msg, &Ed25519_Signature::from_bytes(&sign[..]).unwrap())
+                    .verify(msg, &Ed25519_Signature::try_from(&sign[..]).unwrap())
                     .is_ok()
             }
             _ => true,
@@ -163,9 +164,9 @@ pub struct SessionKey {
 impl Keypair {
     pub fn peer_id(&self) -> PeerId {
         let mut sha = Sha3_256::new();
-        sha.input(&self.pk);
+        sha.update(&self.pk);
         let mut peer_bytes = [0u8; 32];
-        peer_bytes.copy_from_slice(&sha.result()[..]);
+        peer_bytes.copy_from_slice(&sha.finalize()[..]);
         PeerId(peer_bytes)
     }
 
@@ -235,12 +236,12 @@ impl SessionKey {
                 .dh(&self.sk, tmp_pk)
                 .map(|session_key| {
                     let mut sha = Sha3_256::new();
-                    sha.input(session_key);
-                    let result = sha.result();
+                    sha.update(session_key);
+                    let result = sha.finalize();
                     self.ss.copy_from_slice(&result[..]);
                     let mut n_sha = Sha3_256::new();
-                    n_sha.input(&result[..]);
-                    self.iv.copy_from_slice(&n_sha.result()[..16]);
+                    n_sha.update(&result[..]);
+                    self.iv.copy_from_slice(&n_sha.finalize()[..16]);
                     self.is_ok = true;
                     debug!("{:?}", self);
                 })

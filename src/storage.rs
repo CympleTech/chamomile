@@ -33,7 +33,10 @@ impl LocalDB {
                 self.tree
                     .insert(k, bytes)
                     .map_err(|_e| new_error("db write failure!"))
-                    .and_then(|_| self.flush())
+                    .and_then(|_| {
+                        self.tree.flush()?;
+                        Ok(())
+                    })
             })
     }
 
@@ -46,12 +49,18 @@ impl LocalDB {
                     self.tree
                         .insert(k, bytes)
                         .map_err(|_e| new_error("db write failure!"))
-                        .and_then(|_| self.flush())
+                        .and_then(|_| {
+                            self.tree.flush()?;
+                            Ok(())
+                        })
                 } else {
                     self.tree
                         .compare_and_swap(k, Some(old.unwrap()), Some(bytes))
                         .map_err(|_e| new_error("db swap failure!"))
-                        .and_then(|_| self.flush())
+                        .and_then(|_| {
+                            self.tree.flush()?;
+                            Ok(())
+                        })
                 }
             })
     }
@@ -62,7 +71,10 @@ impl LocalDB {
             self.tree
                 .remove(k)
                 .map_err(|_e| new_error("db delete error"))
-                .and_then(|_| self.flush())?;
+                .and_then(|_| {
+                    self.tree.flush()?;
+                    Ok(())
+                })?;
             Ok(result.unwrap())
         } else {
             Err(new_error("db delete key not found!"))
@@ -70,7 +82,8 @@ impl LocalDB {
     }
 
     fn flush(&self) -> Result<(), Error> {
-        async_std::task::spawn(self.tree.flush_async());
-        Ok(())
+        //async_std::task::spawn(self.tree.flush_async());
+        //Ok(())
+        todo!();
     }
 }
