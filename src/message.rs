@@ -7,8 +7,8 @@ use crate::transports::{TransportStream, TransportType};
 /// Custom apply for build a stream between nodes.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum StreamType {
-    /// request for build a stream, params is transport type and request custom info.
-    Req(TransportType, Vec<u8>),
+    /// request for build a stream, params is peer id, transport type and request custom info.
+    Req(PeerId, TransportType, Vec<u8>),
     /// response for build a stream, params is is_ok, and response custom info.
     Res(bool, Vec<u8>),
     /// if response is ok, will build a stream, and return the stream to ouside.
