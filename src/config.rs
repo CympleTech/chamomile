@@ -13,6 +13,7 @@ pub struct Config {
     pub black_list: Vec<IpAddr>,
     pub white_peer_list: Vec<PeerId>,
     pub black_peer_list: Vec<PeerId>,
+    pub permission: bool,
 }
 
 impl Config {
@@ -26,6 +27,7 @@ impl Config {
             black_list: vec![],
             white_peer_list: vec![],
             black_peer_list: vec![],
+            permission: false,
         }
     }
 
@@ -38,6 +40,7 @@ impl Config {
         black_list: Vec<IpAddr>,
         white_peer_list: Vec<PeerId>,
         black_peer_list: Vec<PeerId>,
+        permission: bool,
     ) -> Self {
         Self {
             db_dir,
@@ -48,6 +51,7 @@ impl Config {
             black_list,
             white_peer_list,
             black_peer_list,
+            permission,
         }
     }
 }

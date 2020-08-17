@@ -12,7 +12,10 @@ fn main() {
             .parse()
             .expect("invalid addr");
 
-        let (peer_id, send, recv) = start(Config::default(self_addr)).await.unwrap();
+        let mut config = Config::default(self_addr);
+        config.permission = true;
+
+        let (peer_id, send, recv) = start(config).await.unwrap();
         println!("peer id: {}", peer_id.to_hex());
 
         if args().nth(2).is_some() {
@@ -25,30 +28,28 @@ fn main() {
         while let Ok(message) = recv.recv().await {
             match message {
                 ReceiveMessage::Data(peer_id, bytes) => {
-                    println!("recv data from: {}, {:?}", peer_id.short_show(), bytes);
+                    println!("Recv data from: {}, {:?}", peer_id.short_show(), bytes);
                 }
                 ReceiveMessage::PeerJoin(peer_id, addr, join_data) => {
                     println!(
-                        "peer join: {:?} {}, join data: {:?}",
+                        "Peer join: {:?} {}, join data: {:?}",
                         peer_id, addr, join_data
                     );
                     send.send(SendMessage::PeerJoinResult(peer_id, true, false, vec![1]))
                         .await;
-
-                    // Test Relay
-                    // send.send(SendMessage::Data(
-                    //     PeerId::from_hex(
-                    //         "63d6dca953e4941dc2a02298cf8964a26fa4b30659d66b7b90c1dd094d46ea05",
-                    //     )
-                    //     .unwrap(),
-                    //     vec![1, 1, 1, 1, 1],
-                    // ))
-                    // .await;
+                }
+                ReceiveMessage::PeerJoinResult(peer_id, is_ok, data) => {
+                    println!(
+                        "Peer Join Result: {:?} {}, data: {:?}",
+                        peer_id, is_ok, data
+                    );
                 }
                 ReceiveMessage::PeerLeave(peer_id) => {
-                    println!("peer_leave: {:?}", peer_id);
+                    println!("Peer_leave: {:?}", peer_id);
                 }
-                _ => {}
+                ReceiveMessage::Stream(..) => {
+                    panic!("Not stream");
+                }
             }
         }
     });

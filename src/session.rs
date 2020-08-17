@@ -20,8 +20,8 @@ use crate::transports::{EndpointSendMessage, EndpointStreamMessage};
 
 /// server send to session message in channel.
 pub(crate) enum SessionSendMessage {
-    /// when peer join ok, will send info to session.
-    Ok(Vec<u8>),
+    /// when peer join ok, will send info to session, bool is stabled.
+    Ok(Vec<u8>, bool),
     /// when peer join failure or close by self.
     Close,
     /// send bytes to session what want to send to peer..
@@ -31,7 +31,7 @@ pub(crate) enum SessionSendMessage {
 /// server receive from session message in channel.
 pub(crate) enum SessionReceiveMessage {
     /// when connection is ok, will send info to server.
-    Connected(PeerId, Sender<SessionSendMessage>, Peer, Vec<u8>),
+    Connected(PeerId, Sender<SessionSendMessage>, Peer, Vec<u8>, bool),
     /// when connection is closed.
     Close(PeerId),
     /// start try to connect this peer. from DHT help.
@@ -110,6 +110,7 @@ pub(crate) fn start(
                 sender,
                 remote_transport,
                 remote_join_data,
+                is_ok,
             ))
             .await;
 
@@ -268,7 +269,7 @@ pub(crate) fn start(
                                     buffers.push((to, bytes));
                                 }
                             },
-                            SessionSendMessage::Ok(data) => {
+                            SessionSendMessage::Ok(data, _is_stable) => {
                                 is_ok = true;
 
                                 endpoint_send

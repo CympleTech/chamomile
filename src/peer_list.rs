@@ -16,6 +16,8 @@ pub(crate) struct PeerList {
     #[serde(skip)]
     peers: KadTree<PeerId, Option<(Sender<SessionSendMessage>, Peer)>>,
     #[serde(skip)]
+    stables: HashMap<PeerId, Option<(Sender<SessionSendMessage>, Peer)>>,
+    #[serde(skip)]
     tmps: HashMap<PeerId, (Sender<SessionSendMessage>, Peer)>,
     #[serde(skip)]
     whites: (Vec<PeerId>, Vec<SocketAddr>),
@@ -32,6 +34,7 @@ impl PeerList {
     ) -> Self {
         PeerList {
             peers: KadTree::new(self_peer_id, None),
+            stables: HashMap::new(),
             tmps: HashMap::new(),
             bootstraps: whites.1.clone(),
             whites: whites,
@@ -153,14 +156,19 @@ impl PeerList {
             .collect()
     }
 
-    /// get in tmps, DHT, DHT closest.
+    /// get in tmps, Stables, DHT, DHT closest.
     pub fn get(&self, peer_id: &PeerId) -> Option<&Sender<SessionSendMessage>> {
         self.tmps
             .get(peer_id)
             .or(self
-                .peers
-                .search(peer_id)
-                .and_then(|(_k, ref v, _is_it)| v.as_ref()))
+                .stables
+                .get(peer_id)
+                .map(|g| if let Some(s) = g { Some(s) } else { None })
+                .flatten()
+                .or(self
+                    .peers
+                    .search(peer_id)
+                    .and_then(|(_k, ref v, _is_it)| v.as_ref())))
             .map(|s| &s.0)
     }
 
@@ -168,15 +176,15 @@ impl PeerList {
     pub fn get_it(&self, peer_id: &PeerId) -> Option<&Sender<SessionSendMessage>> {
         self.tmps
             .get(peer_id)
-            .or(self.peers.search(peer_id).and_then(
-                |(_k, v, is_it)| {
-                    if is_it {
-                        v.as_ref()
-                    } else {
-                        None
-                    }
-                },
-            ))
+            .or(self
+                .stables
+                .get(peer_id)
+                .map(|g| if let Some(s) = g { Some(s) } else { None })
+                .flatten()
+                .or(self
+                    .peers
+                    .search(peer_id)
+                    .and_then(|(_k, v, is_it)| if is_it { v.as_ref() } else { None })))
             .map(|s| &s.0)
     }
 
@@ -199,16 +207,56 @@ impl PeerList {
     }
 
     pub fn contains(&self, peer_id: &PeerId) -> bool {
-        self.peers.contains(peer_id)
+        self.stables.contains_key(peer_id) || self.peers.contains(peer_id)
     }
 
-    pub fn remove(&mut self, peer_id: &PeerId) -> Option<(Sender<SessionSendMessage>, Peer)> {
+    /// Step:
+    /// 1. add to boostraps;
+    /// 2. add to kad.
+    pub fn peer_add(
+        &mut self,
+        peer_id: PeerId,
+        sender: Sender<SessionSendMessage>,
+        peer: Peer,
+        key: &Vec<u8>,
+        db: &mut LocalDB,
+    ) {
+        // 1. add to boostraps.
+        if !self.bootstraps.contains(peer.addr()) {
+            self.add_bootstrap(peer.addr().clone());
+            let _ = db.update(key.clone(), self);
+        }
+        // 2. add to kad.
+        self.peers.add(peer_id, Some((sender, peer)));
+    }
+
+    /// Step:
+    /// 1. remove from kad;
+    /// 2. from from tmps.
+    pub fn peer_remove(&mut self, peer_id: &PeerId) -> Option<(Sender<SessionSendMessage>, Peer)> {
         let r1 = self.peers.remove(peer_id).and_then(|v| v);
-        let r2 = self.remove_tmp_peer(peer_id);
+        let r2 = self.stable_tmp_remove(peer_id);
         r1.or(r2)
     }
 
-    pub fn add_tmp_peer(
+    /// Disconnect Step:
+    /// 1. remove from bootstrap.
+    pub fn peer_disconnect(&mut self, addr: &SocketAddr) {
+        let mut d: Option<usize> = None;
+        for (k, i) in self.bootstraps.iter().enumerate() {
+            if i == addr {
+                d = Some(k);
+            }
+        }
+
+        if let Some(i) = d {
+            self.bootstraps.remove(i);
+        }
+    }
+
+    /// Step:
+    /// 1. add to tmps.
+    pub fn stable_tmp_add(
         &mut self,
         peer_id: PeerId,
         sender: Sender<SessionSendMessage>,
@@ -220,20 +268,89 @@ impl PeerList {
             .or_insert((sender, peer));
     }
 
-    pub fn remove_tmp_peer(
+    /// Step:
+    /// 1. remove from tmps.
+    pub fn stable_tmp_remove(
         &mut self,
         peer_id: &PeerId,
     ) -> Option<(Sender<SessionSendMessage>, Peer)> {
         self.tmps.remove(peer_id)
     }
 
-    pub fn stabilize_tmp_peer(&mut self, peer_id: PeerId, key: &Vec<u8>, db: &mut LocalDB) {
+    /// Step:
+    /// 1. remove from tmp;
+    /// 2. add to bootstrap;
+    /// 3. add to stables.
+    /// 4. add to white_list.
+    pub fn stable_tmp_stabilize(
+        &mut self,
+        peer_id: PeerId,
+        key: &Vec<u8>,
+        db: &mut LocalDB,
+        is_stable: bool,
+    ) {
         self.tmps.remove(&peer_id).map(|m| {
             if !self.bootstraps.contains(m.1.addr()) {
                 self.add_bootstrap(m.1.addr().clone());
                 let _ = db.update(key.clone(), self);
             }
-            self.peers.add(peer_id, Some(m));
+            if is_stable {
+                self.stables.insert(peer_id, Some(m));
+                self.add_white_peer(peer_id);
+            } else {
+                self.peers.add(peer_id, Some(m));
+            }
         });
+    }
+
+    /// PeerDisconnect Step:
+    /// 1. remove from white_list;
+    /// 2. remove from stables.
+    pub fn stable_remove(
+        &mut self,
+        peer_id: &PeerId,
+    ) -> Option<(Sender<SessionSendMessage>, Peer)> {
+        self.remove_white_peer(peer_id);
+        self.stables.remove(peer_id).flatten()
+    }
+
+    /// Peerl leave Step:
+    /// 1. remove from stables.
+    pub fn stable_leave(&mut self, peer_id: &PeerId) {
+        self.stables.remove(peer_id);
+    }
+
+    /// PeerConnect start Step:
+    /// 1. check is exsit, and add to stables;
+    /// 2. add to white_list.
+    pub fn pre_stable_add(&mut self, peer_id: PeerId) -> bool {
+        if self.stables.contains_key(&peer_id) {
+            true
+        } else {
+            self.stables.insert(peer_id, None);
+            self.add_white_peer(peer_id);
+            false
+        }
+    }
+
+    /// Peer stable connect ok Step:
+    /// 1. add to bootstrap;
+    /// 2. add to stables;
+    pub fn stable_stabilize(
+        &mut self,
+        peer_id: PeerId,
+        sender: Sender<SessionSendMessage>,
+        peer: Peer,
+        key: &Vec<u8>,
+        db: &mut LocalDB,
+    ) {
+        if !self.bootstraps.contains(peer.addr()) {
+            self.add_bootstrap(peer.addr().clone());
+            let _ = db.update(key.clone(), self);
+        }
+
+        if self.stables.contains_key(&peer_id) {
+            self.stables.insert(peer_id, Some((sender, peer)));
+        }
     }
 }

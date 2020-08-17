@@ -18,13 +18,13 @@ pub enum StreamType {
 /// main received message for outside channel, send from chamomile to outside.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ReceiveMessage {
-    /// when peer join, send from chamomile to outside.
+    /// (permissioned only) when a stable peer join, send from chamomile to outside.
     /// params is `peer_id`, `socket_addr` and peer `join_info`.
     PeerJoin(PeerId, SocketAddr, Vec<u8>),
-    /// when peer get join result.
+    /// (permissioned only) when peer get join result.
     /// params is `peer_id`, `is_ok` and `result_data`.
     PeerJoinResult(PeerId, bool, Vec<u8>),
-    /// when peer leave, send from chamomile to outside.
+    /// when a stable connection's peer leave, send from chamomile to outside.
     /// params is `peer_id`.
     PeerLeave(PeerId),
     /// when received a data from a trusted peer, send to outside.
@@ -38,13 +38,7 @@ pub enum ReceiveMessage {
 /// main send message for outside channel, send from outside to chamomile.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum SendMessage {
-    /// when need add a peer, send to chamomile from outside.
-    /// params is `peer_id`, `socket_addr` and peer `join_info`.
-    PeerJoin(PeerId, SocketAddr, Vec<u8>),
-    /// when outside want to close a connectioned peer. use it force close.
-    /// params is `peer_id`.
-    PeerLeave(PeerId),
-    /// when peer request for join, outside decide connect or not.
+    /// (permissioned only) when peer request for join, outside decide connect or not.
     /// params is `peer_id`, `is_connect`, `is_force_close`, `result info`.
     /// if `is_connect` is true, it will add to white directly list.
     /// we want to build a better network, add a `is_force_close`.
@@ -52,12 +46,21 @@ pub enum SendMessage {
     /// will use this peer to build our DHT for better connection.
     /// if false, we will force close it.
     PeerJoinResult(PeerId, bool, bool, Vec<u8>),
+    /// when need add a peer to stable connect, send to chamomile from outside.
+    /// if success connect, will start a stable connection, and add peer to kad, stables,
+    /// bootstraps and whitelists. if failure, will send `PeerLeave` to outside.
+    /// params is `peer_id`, `socket_addr` and peer `join_info`.
+    PeerConnect(PeerId, Option<SocketAddr>, Vec<u8>),
+    /// when outside want to close a stable connectioned peer. use it force close.
+    /// params is `peer_id`.
+    PeerDisconnect(PeerId),
     /// when outside want to connect a peer. will try connect directly.
-    /// if connected, chamomile will send PeerJoin back. if join_info is none,
+    /// if connected, chamomile will add to kad and bootstrap. if join_info is none,
     /// chamomile will use config's join_data as default.
     /// params is `socket_addr`, `join_info`.
     Connect(SocketAddr, Option<Vec<u8>>),
     /// when outside donnot want to connect peer. use it to force close.
+    /// it will remove from kad and bootstrap list.
     /// params is `socket_addr`.
     DisConnect(SocketAddr),
     /// when need send a data to a peer, only need know the peer_id,
