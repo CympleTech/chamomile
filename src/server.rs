@@ -121,6 +121,7 @@ pub async fn start(
                                 peer.clone(),
                                 peer_list.clone(),
                                 is_by_self,
+                                is_by_self || !permission,
                             )
                         }
                     },
@@ -200,6 +201,7 @@ pub async fn start(
                             )).await;
                         } else {
                             // TODO search the peer's socket in kad.
+                            todo!()
                         }
                     }
                     Ok(SendMessage::PeerDisconnect(peer_id)) => {

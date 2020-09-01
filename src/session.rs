@@ -62,8 +62,12 @@ pub(crate) fn start(
     key: Arc<Keypair>,
     peer: Arc<Peer>,
     peer_list: Arc<RwLock<PeerList>>,
-    mut is_ok: bool,
+    is_self: bool,
+    mut has_permission: bool,
 ) {
+    let mut is_stable = false;
+    let mut is_ok = is_self;
+
     task::spawn(async move {
         // timeout 10s to read peer_id & public_key
         let result: io::Result<Option<RemotePublic>> = io::timeout(Duration::from_secs(5), async {
@@ -110,7 +114,7 @@ pub(crate) fn start(
                 sender,
                 remote_transport,
                 remote_join_data,
-                is_ok,
+                is_self,
             ))
             .await;
 
@@ -121,186 +125,164 @@ pub(crate) fn start(
         loop {
             select! {
                 msg = endpoint_recv.recv().fuse() => match msg {
-                    Ok(msg) => {
-                        if !is_ok {
+                    Ok(EndpointStreamMessage::Bytes(bytes)) => {
+                        let t = SessionType::from_bytes(bytes);
+                        if t.is_err() {
+                            debug!("Debug: Error Serialize SessionType");
                             continue;
                         }
 
-                        match msg {
-                            EndpointStreamMessage::Bytes(bytes) => {
-                                match SessionType::from_bytes(bytes) {
-                                    Ok(t) => match t {
-                                        SessionType::Key(bytes) => {
-                                            if !session_key.is_ok() {
-                                                if !session_key.in_bytes(bytes) {
-                                                    server_send
-                                                        .send(
-                                                            SessionReceiveMessage::Close(
-                                                                remote_peer_id)).await;
-                                                    endpoint_send.send(
-                                                        EndpointStreamMessage::Close).await;
-                                                    break;
-                                                }
+                        match t.unwrap() {
+                            SessionType::Key(bytes) => {
+                                if !session_key.is_ok() {
+                                    if !session_key.in_bytes(bytes) {
+                                        server_send.send(SessionReceiveMessage::Close(
+                                            remote_peer_id)).await;
+                                        endpoint_send.send(
+                                            EndpointStreamMessage::Close).await;
+                                        break;
+                                    }
 
-                                                endpoint_send
-                                                    .send(EndpointStreamMessage::Bytes(
-                                                        SessionType::Key(session_key.out_bytes())
-                                                            .to_bytes()
-                                                    ))
-                                                    .await;
-                                            }
+                                    endpoint_send.send(EndpointStreamMessage::Bytes(
+                                        SessionType::Key(session_key.out_bytes())
+                                            .to_bytes()
+                                    )).await;
+                                }
 
-                                            while !buffers.is_empty() {
-                                                let (peer_id, bytes) = buffers.pop().unwrap();
-                                                let e_data = session_key.encrypt(bytes);
-                                                let data = SessionType::Data(
-                                                    my_peer_id,
-                                                    peer_id,
-                                                    e_data
-                                                ).to_bytes();
-                                                endpoint_send
-                                                    .send(EndpointStreamMessage::Bytes(data))
-                                                    .await;
-                                            }
+                                while !buffers.is_empty() {
+                                    let (peer_id, bytes) = buffers.pop().unwrap();
+                                    let e_data = session_key.encrypt(bytes);
+                                    let data = SessionType::Data(
+                                        my_peer_id,
+                                        peer_id,
+                                        e_data
+                                    ).to_bytes();
+                                    endpoint_send.send(
+                                        EndpointStreamMessage::Bytes(data)).await;
+                                }
 
-                                            while !receiver_buffers.is_empty() {
-                                                let e_data = receiver_buffers.pop().unwrap();
-                                                let d_data = session_key.decrypt(e_data);
-                                                if d_data.is_ok() {
-                                                    out_sender
-                                                        .send(ReceiveMessage::Data(
-                                                            remote_peer_id,
-                                                            d_data.unwrap()
-                                                        )).await;
-                                                }
-                                            }
+                                while !receiver_buffers.is_empty() {
+                                    let e_data = receiver_buffers.pop().unwrap();
+                                    let d_data = session_key.decrypt(e_data);
+                                    if d_data.is_ok() {
+                                        out_sender
+                                            .send(ReceiveMessage::Data(
+                                                remote_peer_id,
+                                                d_data.unwrap()
+                                            )).await;
+                                    }
+                                }
 
+                            }
+                            SessionType::Data(from, to, e_data) => {
+                                if !session_key.is_ok() {
+                                    continue;
+                                }
+
+                                let d_data = session_key.decrypt(e_data);
+                                if d_data.is_ok() {
+                                    if to == my_peer_id {
+                                        if !has_permission {
+                                            continue;
                                         }
-                                        SessionType::Data(from, to, e_data) => {
-                                            if !session_key.is_ok() {
-                                                continue;
-                                            }
 
-                                            let d_data = session_key.decrypt(e_data);
-                                            if d_data.is_ok() {
-                                                if to == my_peer_id {
-                                                    //debug!("DEBUG: Directly: from: {} to: {}, me: {}, remote: {}", from.short_show(), to.short_show(), my_peer_id.short_show(), remote_peer_id.short_show());
-                                                    out_sender
-                                                        .send(ReceiveMessage::Data(
-                                                            from,
-                                                            d_data.unwrap()
-                                                        )).await;
-                                                } else {
-                                                    //debug!("DEBUG: Relay: from: {} to: {}, me: {}, remote: {}", from.short_show(), to.short_show(),  my_peer_id.short_show(), remote_peer_id.short_show());
-                                                    // Relay
-                                                    let peer_list_lock = peer_list.read().await;
-                                                    let sender = peer_list_lock.get(&to);
-                                                    if sender.is_some() {
-                                                        let sender = sender.unwrap();
-                                                        sender.send(
-                                                            SessionSendMessage::Bytes(
-                                                                from,
-                                                                to,
-                                                                d_data.unwrap()
-                                                            )).await;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        SessionType::DHT(peers, _sign) => {
-                                            let DHT(peers) = peers;
-                                            // TODO DHT Helper
-                                            // remote_peer_key.verify()
-
-                                            for p in peers {
-                                                if p.id() != peer.id()
-                                                    && peer_list.read().await
-                                                    .get_it(p.id())
-                                                    .is_none() {
-                                                        server_send.send(
-                                                            SessionReceiveMessage::Connect(
-                                                                *p.addr(),
-                                                            )).await;
-                                                }
-                                            }
-
-                                        }
-                                        SessionType::Ping => {
-                                            endpoint_send
-                                                .send(EndpointStreamMessage::Bytes(
-                                                    SessionType::Pong.to_bytes()
-                                                ))
-                                                .await;
-                                        }
-                                        SessionType::Pong => {
-                                            // TODO Heartbeat Ping/Pong
-                                        },
-                                        _ => {
-                                            //TODO Hole
+                                        out_sender.send(ReceiveMessage::Data(
+                                            from,
+                                            d_data.unwrap()
+                                        )).await;
+                                    } else {
+                                        // Relay
+                                        let peer_list_lock = peer_list.read().await;
+                                        let sender = peer_list_lock.get(&to);
+                                        if sender.is_some() {
+                                            let sender = sender.unwrap();
+                                            sender.send(SessionSendMessage::Bytes(
+                                                from,
+                                                to,
+                                                d_data.unwrap()
+                                            )).await;
                                         }
                                     }
-                                    Err(e) => {
-                                        debug!("Debug: Error Serialize SessionType {:?}", e)
-                                    },
                                 }
-                            },
-                            EndpointStreamMessage::Close => {
-                                server_send
-                                    .send(SessionReceiveMessage::Close(remote_peer_id))
-                                    .await;
-                                break;
                             }
-                            _ => break,
+                            SessionType::DHT(peers, _sign) => {
+                                let DHT(peers) = peers;
+                                // TODO DHT Helper
+                                // remote_peer_key.verify()
+
+                                for p in peers {
+                                    if p.id() != peer.id() &&
+                                        peer_list.read().await.get_it(p.id()).is_none()
+                                    {
+                                        server_send.send(SessionReceiveMessage::Connect(
+                                            *p.addr(),
+                                        )).await;
+                                    }
+                                }
+
+                            }
+                            SessionType::Ping => {
+                                endpoint_send.send(EndpointStreamMessage::Bytes(
+                                    SessionType::Pong.to_bytes()
+                                )).await;
+                            }
+                            SessionType::Pong => {
+                                todo!();
+                                // TODO Heartbeat Ping/Pong
+                            },
+                            _ => {
+                                todo!();
+                                //TODO Hole
+                            }
                         }
                     },
+                    Ok(EndpointStreamMessage::Close) => {
+                        server_send.send(SessionReceiveMessage::Close(remote_peer_id)).await;
+                        break;
+                    }
                     Err(_) => break,
                 },
                 out_msg = receiver.recv().fuse() => match out_msg {
-                    Ok(msg) => {
-                        match msg {
-                            SessionSendMessage::Bytes(from, to, bytes) => {
-                                if session_key.is_ok() {
-                                    let e_data = session_key.encrypt(bytes);
-                                    let data = SessionType::Data(from, to, e_data).to_bytes();
-                                    endpoint_send
-                                        .send(EndpointStreamMessage::Bytes(data))
-                                        .await;
-                                } else {
-                                    buffers.push((to, bytes));
-                                }
-                            },
-                            SessionSendMessage::Ok(data, _is_stable) => {
-                                is_ok = true;
-
-                                endpoint_send
-                                    .send(EndpointStreamMessage::Bytes(
-                                        RemotePublic(
-                                            key.public(),
-                                            *peer.clone(),
-                                            data
-                                        ).to_bytes()
-                                    )).await;
-
-                                endpoint_send
-                                    .send(EndpointStreamMessage::Bytes(
-                                        SessionType::Key(session_key.out_bytes()).to_bytes()
-                                    ))
-                                    .await;
-
-                                let sign = vec![]; // TODO
-                                let peers = peer_list.read().await.get_dht_help(&remote_peer_id);
-                                endpoint_send
-                                    .send(EndpointStreamMessage::Bytes(
-                                        SessionType::DHT(DHT(peers), sign).to_bytes()
-                                    ))
-                                    .await;
-                            },
-                            SessionSendMessage::Close => {
-                                endpoint_send.send(EndpointStreamMessage::Close).await;
-                                break;
-                            }
+                    Ok(SessionSendMessage::Bytes(from, to, bytes)) => {
+                        if session_key.is_ok() {
+                            let e_data = session_key.encrypt(bytes);
+                            let data = SessionType::Data(from, to, e_data).to_bytes();
+                            endpoint_send.send(EndpointStreamMessage::Bytes(data)).await;
+                        } else {
+                            buffers.push((to, bytes));
                         }
                     },
+                    Ok(SessionSendMessage::Ok(data, stable)) => {
+                        is_ok = true;
+                        has_permission = true;
+                        is_stable = stable;
+
+                        if is_stable {
+                            todo!();
+                        }
+
+                        endpoint_send.send(EndpointStreamMessage::Bytes(
+                            RemotePublic(
+                                key.public(),
+                                *peer.clone(),
+                                data
+                            ).to_bytes()
+                        )).await;
+
+                        endpoint_send.send(EndpointStreamMessage::Bytes(
+                            SessionType::Key(session_key.out_bytes()).to_bytes()
+                        )).await;
+
+                        let sign = vec![]; // TODO
+                        let peers = peer_list.read().await.get_dht_help(&remote_peer_id);
+                        endpoint_send.send(EndpointStreamMessage::Bytes(
+                            SessionType::DHT(DHT(peers), sign).to_bytes()
+                        )).await;
+                    },
+                    Ok(SessionSendMessage::Close) => {
+                        endpoint_send.send(EndpointStreamMessage::Close).await;
+                        break;
+                    }
                     Err(_) => break,
                 }
             }
