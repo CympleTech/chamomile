@@ -1,8 +1,6 @@
 use std::net::SocketAddr;
 
-use crate::broadcast::Broadcast;
-use crate::peer::PeerId;
-use crate::transports::{TransportStream, TransportType};
+use crate::types::{Broadcast, PeerId, TransportStream, TransportType};
 
 /// Custom apply for build a stream between nodes.
 #[derive(Debug, Clone, Eq, PartialEq)]

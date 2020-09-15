@@ -1,4 +1,4 @@
-use lazy_static::lazy_static;
+//use lazy_static::lazy_static;
 //use multiaddr::Multiaddr;
 //use serde_derive::{Deserialize, Serialize};
 //use std::collections::HashMap;
@@ -6,8 +6,6 @@ use lazy_static::lazy_static;
 
 //use crate::peer_id::PeerID;
 //use crate::transports::TransportType;
-
-pub const MAX_MESSAGE_CAPACITY: usize = 1024;
 
 pub const PEER_ID_LENGTH: usize = 42;
 

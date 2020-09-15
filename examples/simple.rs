@@ -1,11 +1,19 @@
-use async_std::task;
+use simplelog::{CombinedLogger, Config as LogConfig, LevelFilter, TermLogger, TerminalMode};
 use std::env::args;
 use std::net::SocketAddr;
 
 use chamomile::prelude::{start, Config, ReceiveMessage, SendMessage};
 
 fn main() {
-    task::block_on(async {
+    CombinedLogger::init(vec![TermLogger::new(
+        LevelFilter::Debug,
+        LogConfig::default(),
+        TerminalMode::Mixed,
+    )
+    .unwrap()])
+    .unwrap();
+
+    smol::block_on(async {
         let self_addr: SocketAddr = args()
             .nth(1)
             .expect("missing path")
@@ -18,7 +26,9 @@ fn main() {
         if args().nth(2).is_some() {
             let remote_addr: SocketAddr = args().nth(2).unwrap().parse().expect("invalid addr");
             println!("start connect to remote: {}", remote_addr);
-            send.send(SendMessage::Connect(remote_addr, None)).await;
+            send.send(SendMessage::Connect(remote_addr, None))
+                .await
+                .expect("channel failure");
         }
 
         while let Ok(message) = recv.recv().await {

@@ -1,0 +1,14 @@
+[package]
+name = "chamomile_types"
+version = "0.1.0"
+authors = ["Contact <contact@cypherlink.io>"]
+readme = "README.md"
+description = "Another P2P Library. Support IoT devices."
+repository = "https://github.com/cypherlink/chamomile"
+keywords = ["distributed", "blockchain", "p2p", "libp2p", "peer-to-peer"]
+license = "MIT/Apache-2.0"
+edition = "2018"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+async-channel = "1.4"

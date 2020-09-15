@@ -1,11 +1,13 @@
-use async_std::sync::Sender;
 use rckad::KadTree;
 use serde::{Deserialize, Serialize};
+use smol::channel::Sender;
 use std::collections::HashMap;
 use std::iter::Iterator;
 use std::net::{IpAddr, SocketAddr};
 
-use crate::peer::{Peer, PeerId};
+use chamomile_types::types::PeerId;
+
+use crate::peer::Peer;
 use crate::session::SessionSendMessage;
 use crate::storage::LocalDB;
 
@@ -220,14 +222,25 @@ impl PeerList {
         peer: Peer,
         key: &Vec<u8>,
         db: &mut LocalDB,
-    ) {
+    ) -> bool {
         // 1. add to boostraps.
         if !self.bootstraps.contains(peer.addr()) {
             self.add_bootstrap(peer.addr().clone());
             let _ = db.update(key.clone(), self);
         }
+
         // 2. add to kad.
-        self.peers.add(peer_id, Some((sender, peer)));
+        if self
+            .peers
+            .search(&peer_id)
+            .and_then(|(_k, v, is_it)| if is_it { v.as_ref() } else { None })
+            .is_none()
+        {
+            self.peers.add(peer_id, Some((sender, peer)));
+            true
+        } else {
+            false
+        }
     }
 
     /// Step:
@@ -262,10 +275,11 @@ impl PeerList {
         sender: Sender<SessionSendMessage>,
         peer: Peer,
     ) {
-        self.tmps
-            .entry(peer_id)
-            .and_modify(|m| *m = (sender.clone(), peer.clone()))
-            .or_insert((sender, peer));
+        if !self.tmps.contains_key(&peer_id) {
+            self.tmps.insert(peer_id, (sender, peer));
+        } else {
+            let _ = sender.try_send(SessionSendMessage::Close);
+        }
     }
 
     /// Step:
@@ -280,8 +294,8 @@ impl PeerList {
     /// Step:
     /// 1. remove from tmp;
     /// 2. add to bootstrap;
-    /// 3. add to stables.
-    /// 4. add to white_list.
+    /// 3. if is stable, add to stables & whitelist.
+    /// 4. if not stable, add to kad.
     pub fn stable_tmp_stabilize(
         &mut self,
         peer_id: PeerId,
@@ -349,8 +363,10 @@ impl PeerList {
             let _ = db.update(key.clone(), self);
         }
 
-        if self.stables.contains_key(&peer_id) {
+        if !self.stables.contains_key(&peer_id) || self.stables.get(&peer_id).unwrap().is_none() {
             self.stables.insert(peer_id, Some((sender, peer)));
+        } else {
+            let _ = sender.try_send(SessionSendMessage::Close);
         }
     }
 }

@@ -1,21 +1,24 @@
-use async_std::{
+use futures::{select, FutureExt};
+use postcard::{from_bytes, to_allocvec};
+use serde::{Deserialize, Serialize};
+use smol::future::FutureExt as SmolFutureExt;
+use smol::{
+    channel::{self, Receiver, RecvError, Sender},
     io,
     io::BufReader,
+    lock::RwLock,
     prelude::*,
-    sync::{channel, Arc, Receiver, RwLock, Sender},
-    task,
 };
-use futures::{select, FutureExt};
-use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
+
+use chamomile_types::{message::ReceiveMessage, types::PeerId};
 
 use crate::hole_punching::{nat, Hole, DHT};
 use crate::keys::{KeyType, Keypair, SessionKey};
-use crate::message::ReceiveMessage;
-use crate::peer::{Peer, PeerId};
+use crate::peer::Peer;
 use crate::peer_list::PeerList;
-use crate::primitives::MAX_MESSAGE_CAPACITY;
 use crate::transports::{EndpointSendMessage, EndpointStreamMessage};
 
 /// server send to session message in channel.
@@ -43,13 +46,13 @@ pub(crate) fn new_session_receive_channel() -> (
     Sender<SessionReceiveMessage>,
     Receiver<SessionReceiveMessage>,
 ) {
-    channel(MAX_MESSAGE_CAPACITY)
+    channel::unbounded()
 }
 
 /// new a channel for send message to session.
 pub(crate) fn new_session_send_channel(
 ) -> (Sender<SessionSendMessage>, Receiver<SessionSendMessage>) {
-    channel(MAX_MESSAGE_CAPACITY)
+    channel::unbounded()
 }
 
 /// start a session to handle incoming.
@@ -62,32 +65,31 @@ pub(crate) fn start(
     key: Arc<Keypair>,
     peer: Arc<Peer>,
     peer_list: Arc<RwLock<PeerList>>,
-    is_self: bool,
-    mut has_permission: bool,
+    mut is_stable: bool,
+    is_permissioned: bool,
 ) {
-    let mut is_stable = false;
-    let mut is_ok = is_self;
-
-    task::spawn(async move {
+    smol::spawn(async move {
         // timeout 10s to read peer_id & public_key
-        let result: io::Result<Option<RemotePublic>> = io::timeout(Duration::from_secs(5), async {
-            while let Ok(msg) = endpoint_recv.recv().await {
-                let remote_peer_key = match msg {
-                    EndpointStreamMessage::Bytes(bytes) => {
-                        RemotePublic::from_bytes(key.key, bytes).ok()
-                    }
-                    _ => None,
-                };
-                return Ok(remote_peer_key);
-            }
-
-            Ok(None)
-        })
-        .await;
+        let result: io::Result<Option<RemotePublic>> = endpoint_recv
+            .recv()
+            .or(async {
+                smol::Timer::after(Duration::from_secs(10)).await;
+                Err(RecvError)
+            })
+            .await
+            .map(|msg| match msg {
+                EndpointStreamMessage::Bytes(bytes) => {
+                    RemotePublic::from_bytes(key.key, bytes).ok()
+                }
+                _ => None,
+            })
+            .map_err(|_e| std::io::ErrorKind::TimedOut.into());
 
         if result.is_err() {
             debug!("Debug: Session timeout");
-            endpoint_send.send(EndpointStreamMessage::Close).await;
+            let _ = endpoint_send
+                .send(EndpointStreamMessage::Close)
+                .await;
             drop(endpoint_recv);
             drop(endpoint_send);
             return;
@@ -95,11 +97,14 @@ pub(crate) fn start(
         let result = result.unwrap();
         if result.is_none() {
             debug!("Debug: Session invalid pk");
-            endpoint_send.send(EndpointStreamMessage::Close).await;
+            let _ = endpoint_send
+                .send(EndpointStreamMessage::Close)
+                .await;
             drop(endpoint_recv);
             drop(endpoint_send);
             return;
         }
+
         let RemotePublic(remote_peer_key, remote_local_addr, remote_join_data) = result.unwrap();
         let remote_peer_id = remote_peer_key.peer_id();
         let mut session_key: SessionKey = key.key.session_key(&key, &remote_peer_key);
@@ -114,9 +119,10 @@ pub(crate) fn start(
                 sender,
                 remote_transport,
                 remote_join_data,
-                is_self,
+                is_stable,
             ))
-            .await;
+            .await
+            .expect("Session to Server (Connected)");
 
         let mut buffers: Vec<(PeerId, Vec<u8>)> = vec![];
         let mut receiver_buffers: Vec<Vec<u8>> = vec![];
@@ -137,16 +143,18 @@ pub(crate) fn start(
                                 if !session_key.is_ok() {
                                     if !session_key.in_bytes(bytes) {
                                         server_send.send(SessionReceiveMessage::Close(
-                                            remote_peer_id)).await;
+                                            remote_peer_id)
+                                        ).await.expect("Session to Server (Key Close)");
                                         endpoint_send.send(
-                                            EndpointStreamMessage::Close).await;
+                                            EndpointStreamMessage::Close
+                                        ).await.expect("Session to Endpoint (Key Close)");
                                         break;
                                     }
 
                                     endpoint_send.send(EndpointStreamMessage::Bytes(
                                         SessionType::Key(session_key.out_bytes())
                                             .to_bytes()
-                                    )).await;
+                                    )).await.expect("Session to Endpoint (Bytes)");
                                 }
 
                                 while !buffers.is_empty() {
@@ -158,7 +166,8 @@ pub(crate) fn start(
                                         e_data
                                     ).to_bytes();
                                     endpoint_send.send(
-                                        EndpointStreamMessage::Bytes(data)).await;
+                                        EndpointStreamMessage::Bytes(data)
+                                    ).await.expect("Session to Endpoint (Bytes)");
                                 }
 
                                 while !receiver_buffers.is_empty() {
@@ -169,7 +178,7 @@ pub(crate) fn start(
                                             .send(ReceiveMessage::Data(
                                                 remote_peer_id,
                                                 d_data.unwrap()
-                                            )).await;
+                                            )).await.expect("Session to Outside (Data)");
                                     }
                                 }
 
@@ -182,14 +191,14 @@ pub(crate) fn start(
                                 let d_data = session_key.decrypt(e_data);
                                 if d_data.is_ok() {
                                     if to == my_peer_id {
-                                        if !has_permission {
+                                        if is_permissioned && !is_stable {
                                             continue;
                                         }
 
                                         out_sender.send(ReceiveMessage::Data(
                                             from,
                                             d_data.unwrap()
-                                        )).await;
+                                        )).await.expect("Session to Outside (Data)");
                                     } else {
                                         // Relay
                                         let peer_list_lock = peer_list.read().await;
@@ -200,7 +209,7 @@ pub(crate) fn start(
                                                 from,
                                                 to,
                                                 d_data.unwrap()
-                                            )).await;
+                                            )).await.expect("Session to Session (Relay)");
                                         }
                                     }
                                 }
@@ -216,7 +225,7 @@ pub(crate) fn start(
                                     {
                                         server_send.send(SessionReceiveMessage::Connect(
                                             *p.addr(),
-                                        )).await;
+                                        )).await.expect("Session to Server (Connect)");
                                     }
                                 }
 
@@ -224,41 +233,46 @@ pub(crate) fn start(
                             SessionType::Ping => {
                                 endpoint_send.send(EndpointStreamMessage::Bytes(
                                     SessionType::Pong.to_bytes()
-                                )).await;
+                                )).await.expect("Session to Endpoint (Ping)");
                             }
                             SessionType::Pong => {
                                 todo!();
                                 // TODO Heartbeat Ping/Pong
                             },
-                            _ => {
+                            SessionType::Hole(..) => {
                                 todo!();
-                                //TODO Hole
+                            },
+                            SessionType::HoleConnect => {
+                                todo!();
                             }
                         }
                     },
                     Ok(EndpointStreamMessage::Close) => {
-                        server_send.send(SessionReceiveMessage::Close(remote_peer_id)).await;
+                        server_send.send(SessionReceiveMessage::Close(remote_peer_id))
+                            .await.expect("Session to Server (Close by Endpoint)");
                         break;
                     }
-                    Err(_) => break,
+                    Err(_) => {
+                        break;
+                    }
                 },
                 out_msg = receiver.recv().fuse() => match out_msg {
                     Ok(SessionSendMessage::Bytes(from, to, bytes)) => {
                         if session_key.is_ok() {
                             let e_data = session_key.encrypt(bytes);
                             let data = SessionType::Data(from, to, e_data).to_bytes();
-                            endpoint_send.send(EndpointStreamMessage::Bytes(data)).await;
+                            endpoint_send.send(EndpointStreamMessage::Bytes(data))
+                                .await.expect("Session to Endpoint (Data)");
                         } else {
                             buffers.push((to, bytes));
                         }
                     },
                     Ok(SessionSendMessage::Ok(data, stable)) => {
-                        is_ok = true;
-                        has_permission = true;
                         is_stable = stable;
 
                         if is_stable {
-                            todo!();
+                            // todo!();
+                            debug!("TODO Stable connection");
                         }
 
                         endpoint_send.send(EndpointStreamMessage::Bytes(
@@ -267,27 +281,29 @@ pub(crate) fn start(
                                 *peer.clone(),
                                 data
                             ).to_bytes()
-                        )).await;
+                        )).await.expect("Session to Endpoint (Data Key)");
 
                         endpoint_send.send(EndpointStreamMessage::Bytes(
                             SessionType::Key(session_key.out_bytes()).to_bytes()
-                        )).await;
+                        )).await.expect("Session to Endpoint (Data SessionKey)");
 
                         let sign = vec![]; // TODO
                         let peers = peer_list.read().await.get_dht_help(&remote_peer_id);
                         endpoint_send.send(EndpointStreamMessage::Bytes(
                             SessionType::DHT(DHT(peers), sign).to_bytes()
-                        )).await;
+                        )).await.expect("Sesssion to Endpoint (Data)");
                     },
                     Ok(SessionSendMessage::Close) => {
-                        endpoint_send.send(EndpointStreamMessage::Close).await;
+                        endpoint_send.send(EndpointStreamMessage::Close).await.expect("Session to Endpoint (Close)");
                         break;
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        break;
+                    }
                 }
             }
         }
-    });
+    }).detach();
 }
 
 #[derive(Deserialize, Serialize)]
@@ -303,24 +319,25 @@ enum SessionType {
 
 impl SessionType {
     fn to_bytes(&self) -> Vec<u8> {
-        bincode::serialize(self).unwrap()
+        to_allocvec(self).unwrap_or(vec![])
     }
 
     fn from_bytes(bytes: Vec<u8>) -> Result<Self, ()> {
-        bincode::deserialize(&bytes[..]).map_err(|_e| ())
+        from_bytes(&bytes).map_err(|_e| ())
     }
 }
 
 /// Rtemote Public Info, include local transport and public key bytes.
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct RemotePublic(pub Keypair, pub Peer, pub Vec<u8>);
 
 impl RemotePublic {
     pub fn from_bytes(key: KeyType, bytes: Vec<u8>) -> Result<Self, ()> {
-        bincode::deserialize(&bytes).map_err(|_e| ())
+        from_bytes(&bytes).map_err(|_e| ())
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        bincode::serialize(self).unwrap()
+        let bytes = to_allocvec(self).unwrap_or(vec![]);
+        bytes
     }
 }

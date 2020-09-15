@@ -1,16 +1,17 @@
-use async_std::{
-    io::Result,
+use futures::select;
+use rand::{thread_rng, RngCore};
+use smol::{
+    channel::{Receiver, Sender},
+    io::{BufReader, Result},
+    lock::Mutex,
     net::UdpSocket,
     prelude::*,
-    sync::{Arc, Mutex, Receiver, Sender},
-    task,
 };
-use async_trait::async_trait;
-use rand::{thread_rng, RngCore};
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
+use std::sync::Arc;
 
-use super::{new_channel, new_stream_channel, Endpoint, EndpointMessage, StreamMessage};
+use super::{new_channel, new_stream_channel, EndpointMessage, StreamMessage};
 
 /// 576(MTU) - 8(Head) - 20(IP) - 8(ID + Head) = 540
 const UDP_UINT: usize = 540;
@@ -28,7 +29,7 @@ pub struct UdpEndpoint {
 // TODO how to connected verify
 
 #[async_trait]
-impl Endpoint for UdpEndpoint {
+impl UdpEndpoint {
     /// Init and run a UdpEndpoint object.
     /// You need send a socketaddr str and udp send message's addr,
     /// and receiver outside message addr.
@@ -45,8 +46,8 @@ impl Endpoint for UdpEndpoint {
         let m1 = Arc::new(Mutex::new(endpoint));
         let m2 = m1.clone();
 
-        task::spawn(run_self_recv(socket.clone(), recv));
-        task::spawn(run_listen(socket, out_send, m2));
+        smol::spawn(run_self_recv(socket.clone(), recv));
+        smol::spawn(run_listen(socket, out_send, m2));
         Ok(send)
     }
 }

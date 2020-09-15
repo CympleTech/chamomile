@@ -1,4 +1,4 @@
-use async_std::sync::{channel, Receiver, Sender};
+use smol::channel::{Receiver, Sender};
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::net::SocketAddr;
 
@@ -6,8 +6,8 @@ use std::net::SocketAddr;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EndpointSendMessage {
     /// connect to a socket address.
-    /// params is `socket_addr` and `bytes`.
-    Connect(SocketAddr, Vec<u8>),
+    /// params is `socket_addr` , `is_stable` and `bytes`.
+    Connect(SocketAddr, bool, Vec<u8>),
     /// close a connection.
     /// params is `socket_addr`.
     Close(SocketAddr),

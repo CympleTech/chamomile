@@ -70,7 +70,6 @@ mod broadcast;
 mod config;
 mod hole_punching;
 mod keys;
-mod message;
 mod multicasting;
 mod peer;
 mod peer_list;
@@ -82,27 +81,25 @@ pub mod primitives;
 pub mod transports;
 
 pub mod prelude {
-    use async_std::{
+    use smol::{
+        channel::{self, Receiver, Sender},
         io::Result,
-        sync::{channel, Receiver, Sender},
     };
 
-    use super::primitives::MAX_MESSAGE_CAPACITY;
+    pub use chamomile_types::message::{ReceiveMessage, SendMessage, StreamType};
+    pub use chamomile_types::types::{Broadcast, PeerId};
 
-    pub use super::broadcast::Broadcast;
     pub use super::config::Config;
-    pub use super::message::{ReceiveMessage, SendMessage, StreamType};
-    pub use super::peer::PeerId;
     pub use super::storage::LocalDB;
 
     /// new a channel for send message to the chamomile.
     pub fn new_send_channel() -> (Sender<SendMessage>, Receiver<SendMessage>) {
-        channel::<SendMessage>(MAX_MESSAGE_CAPACITY)
+        channel::unbounded()
     }
 
     /// new a channel for receive the chamomile message.
     pub fn new_receive_channel() -> (Sender<ReceiveMessage>, Receiver<ReceiveMessage>) {
-        channel::<ReceiveMessage>(MAX_MESSAGE_CAPACITY)
+        channel::unbounded()
     }
 
     /// main function. start a p2p service.

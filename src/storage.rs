@@ -1,3 +1,4 @@
+use postcard::{from_bytes, to_allocvec};
 use serde::{de::DeserializeOwned, Serialize};
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
@@ -22,12 +23,12 @@ impl LocalDB {
             .ok()
             .map(|v| v)
             .flatten()
-            .map(|v| bincode::deserialize(&v).ok())
+            .map(|v| from_bytes(&v).ok())
             .flatten()
     }
 
     pub fn write<T: Serialize + DeserializeOwned>(&self, k: Vec<u8>, t: &T) -> Result<(), Error> {
-        bincode::serialize(&t)
+        to_allocvec(t)
             .map_err(|_e| new_error("db serialize error!"))
             .and_then(|bytes| {
                 self.tree
@@ -41,7 +42,7 @@ impl LocalDB {
     }
 
     pub fn update<T: Serialize + DeserializeOwned>(&self, k: Vec<u8>, t: &T) -> Result<(), Error> {
-        bincode::serialize(&t)
+        to_allocvec(&t)
             .map_err(|_e| new_error("db serialize error!"))
             .and_then(|bytes| {
                 let old = self.tree.get(&k).ok().map(|v| v).flatten();
@@ -82,7 +83,7 @@ impl LocalDB {
     }
 
     fn flush(&self) -> Result<(), Error> {
-        //async_std::task::spawn(self.tree.flush_async());
+        //smol::spawn(self.tree.flush_async());
         //Ok(())
         todo!();
     }

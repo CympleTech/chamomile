@@ -9,17 +9,23 @@ keywords = ["distributed", "blockchain", "p2p", "libp2p", "peer-to-peer"]
 license = "MIT/Apache-2.0"
 edition = "2018"
 
+[workspace]
+members = [
+    "types",
+]
+
 [dependencies]
-lazy_static = "1.4"
+chamomile_types = { path = "./types" }
+
 toml = "0.5"
 rand = "0.7"
 sled = "0.34"
 log = "0.4"
 
 # async runtime and channel
+#async-std = { version = "1", features = ["unstable"] }
 futures = "0.3"
-async-std = { version = "1", features = ["unstable"] }
-async-trait = "0.1"
+smol = "1.0"
 
 # crypto
 sha3 = "0.9"
@@ -33,7 +39,7 @@ rckad = "0.0.6"
 
 # serializtion
 serde = { version = "1.0", features = ["derive"]}
-bincode = "1"
+postcard = { version = "0.5", default-features = false, features = ["alloc"] }
 
 ## transport
 # QUIC
@@ -51,3 +57,4 @@ bincode = "1"
 # rpc
 
 [dev-dependencies]
+simplelog = "0.7"

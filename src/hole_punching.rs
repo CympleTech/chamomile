@@ -1,13 +1,11 @@
-use async_std::{
-    io::Result,
-    sync::{Receiver, Sender},
-};
 use serde::{Deserialize, Serialize};
+use smol::io::Result;
 use std::net::SocketAddr;
 
-use super::peer::{Peer, PeerId};
+use chamomile_types::types::{PeerId, TransportType};
+
+use super::peer::Peer;
 use super::peer_list::PeerList;
-use crate::transports::TransportType;
 
 #[derive(Deserialize, Serialize)]
 pub(crate) enum Hole {

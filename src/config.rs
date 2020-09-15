@@ -1,7 +1,7 @@
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
-use crate::peer::PeerId;
+use chamomile_types::types::PeerId;
 
 #[derive(Debug, Clone)]
 pub struct Config {

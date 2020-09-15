@@ -5,6 +5,7 @@ use ed25519_dalek::{
     Keypair as Ed25519_Keypair, PublicKey as Ed25519_PublicKey, Signature as Ed25519_Signature,
     Signer, Verifier, KEYPAIR_LENGTH, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH,
 };
+use postcard::{from_bytes, to_allocvec};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256, Sha3_512};
 use std::convert::TryFrom;
@@ -12,12 +13,12 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::ops::Rem;
 use x25519_dalek::{PublicKey as Ed25519_DH_Public, StaticSecret as Ed25519_DH_Secret};
 
-use crate::peer::PeerId;
+use chamomile_types::types::PeerId;
 
 // create an alias for convenience
 type Aes256Cbc = Cbc<Aes256, Pkcs7>;
 
-#[derive(Copy, Clone, Serialize, Deserialize)]
+#[derive(Copy, Clone, Serialize, Deserialize, Debug)]
 pub enum KeyType {
     Ed25519, // Ed25519 = 0
     Lattice, // Lattice-based = 1
@@ -143,7 +144,7 @@ impl KeyType {
     }
 }
 
-#[derive(Default, Clone, Serialize, Deserialize)]
+#[derive(Default, Clone, Serialize, Deserialize, Debug)]
 pub struct Keypair {
     pub key: KeyType,
     pub sk: Vec<u8>,
@@ -187,11 +188,11 @@ impl Keypair {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        bincode::serialize(self).unwrap()
+        to_allocvec(self).unwrap_or(vec![])
     }
 
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, ()> {
-        bincode::deserialize(&bytes[..]).map_err(|_e| ())
+        from_bytes(&bytes).map_err(|_e| ())
     }
 
     pub fn from_pk(key: KeyType, bytes: Vec<u8>) -> Result<Self, ()> {
