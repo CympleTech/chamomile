@@ -1,6 +1,6 @@
 [package]
 name = "chamomile"
-version = "0.1.1"
+version = "0.2.0"
 authors = ["Contact <contact@cypherlink.io>"]
 readme = "README.md"
 description = "Another P2P Library. Support IoT devices."
@@ -15,7 +15,7 @@ members = [
 ]
 
 [dependencies]
-chamomile_types = { path = "./types" }
+chamomile_types = "0.2"
 
 toml = "0.5"
 rand = "0.7"
@@ -23,14 +23,13 @@ sled = "0.34"
 log = "0.4"
 
 # async runtime and channel
-#async-std = { version = "1", features = ["unstable"] }
 futures = "0.3"
 smol = "1.0"
 
 # crypto
 sha3 = "0.9"
-ed25519-dalek = "1.0.0-pre.4"
-x25519-dalek = "0.6"
+ed25519-dalek = "1.0"
+x25519-dalek = "1.1"
 aes-soft = "0.5"
 block-modes = "0.6"
 
