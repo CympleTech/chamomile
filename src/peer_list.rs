@@ -1,6 +1,6 @@
 use rckad::KadTree;
 use serde::{Deserialize, Serialize};
-use smol::{channel::Sender, lock::MutexGuard};
+use smol::channel::Sender;
 use std::collections::HashMap;
 use std::iter::Iterator;
 use std::net::{IpAddr, SocketAddr};
@@ -9,7 +9,6 @@ use chamomile_types::types::PeerId;
 
 use crate::peer::Peer;
 use crate::session::SessionSendMessage;
-use crate::storage::LocalDB;
 
 /// PeerList
 /// contains: peers(DHT) & tmp_peers(HashMap)
@@ -63,6 +62,10 @@ impl PeerList {
 
 // Black and white list.
 impl PeerList {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).unwrap_or(vec![])
+    }
+
     pub fn bootstrap(&self) -> &Vec<SocketAddr> {
         &self.bootstraps
     }
@@ -220,13 +223,10 @@ impl PeerList {
         peer_id: PeerId,
         sender: Sender<SessionSendMessage>,
         peer: Peer,
-        key: &Vec<u8>,
-        db: &MutexGuard<LocalDB>,
     ) -> bool {
         // 1. add to boostraps.
         if !self.bootstraps.contains(peer.addr()) {
             self.add_bootstrap(peer.addr().clone());
-            let _ = db.update(key.clone(), self);
         }
 
         // 2. add to kad.
@@ -296,25 +296,21 @@ impl PeerList {
     /// 2. add to bootstrap;
     /// 3. if is stable, add to stables & whitelist.
     /// 4. if not stable, add to kad.
-    pub fn stable_tmp_stabilize(
-        &mut self,
-        peer_id: PeerId,
-        key: &Vec<u8>,
-        db: &MutexGuard<LocalDB>,
-        is_stable: bool,
-    ) {
-        self.tmps.remove(&peer_id).map(|m| {
-            if !self.bootstraps.contains(m.1.addr()) {
-                self.add_bootstrap(m.1.addr().clone());
-                let _ = db.update(key.clone(), self);
-            }
-            if is_stable {
-                self.stables.insert(peer_id, Some(m));
-                self.add_white_peer(peer_id);
-            } else {
-                self.peers.add(peer_id, Some(m));
-            }
-        });
+    pub fn stable_tmp_stabilize(&mut self, peer_id: PeerId, is_stable: bool) -> bool {
+        self.tmps
+            .remove(&peer_id)
+            .map(|m| {
+                if !self.bootstraps.contains(m.1.addr()) {
+                    self.add_bootstrap(m.1.addr().clone());
+                }
+                if is_stable {
+                    self.stables.insert(peer_id, Some(m));
+                    self.add_white_peer(peer_id);
+                } else {
+                    self.peers.add(peer_id, Some(m));
+                }
+            })
+            .is_some()
     }
 
     /// PeerDisconnect Step:
@@ -355,18 +351,17 @@ impl PeerList {
         peer_id: PeerId,
         sender: Sender<SessionSendMessage>,
         peer: Peer,
-        key: &Vec<u8>,
-        db: &MutexGuard<LocalDB>,
-    ) {
+    ) -> bool {
         if !self.bootstraps.contains(peer.addr()) {
             self.add_bootstrap(peer.addr().clone());
-            let _ = db.update(key.clone(), self);
         }
 
         if !self.stables.contains_key(&peer_id) || self.stables.get(&peer_id).unwrap().is_none() {
             self.stables.insert(peer_id, Some((sender, peer)));
+            true
         } else {
             let _ = sender.try_send(SessionSendMessage::Close);
+            false
         }
     }
 }

@@ -75,7 +75,6 @@ mod peer;
 mod peer_list;
 mod server;
 mod session;
-mod storage;
 
 pub mod primitives;
 pub mod transports;
@@ -90,7 +89,6 @@ pub mod prelude {
     pub use chamomile_types::types::{Broadcast, PeerId};
 
     pub use super::config::Config;
-    pub use super::storage::LocalDB;
 
     /// new a channel for send message to the chamomile.
     pub fn new_send_channel() -> (Sender<SendMessage>, Receiver<SendMessage>) {

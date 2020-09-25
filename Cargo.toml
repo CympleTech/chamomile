@@ -19,7 +19,6 @@ chamomile_types = "0.2"
 
 toml = "0.5"
 rand = "0.7"
-sled = "0.34"
 log = "0.4"
 
 # async runtime and channel

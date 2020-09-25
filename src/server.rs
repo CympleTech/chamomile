@@ -1,5 +1,7 @@
+use postcard::{from_bytes, to_allocvec};
 use smol::{
     channel::{Receiver, Sender},
+    fs,
     io::Result,
     lock::{Mutex, RwLock},
     prelude::*,
@@ -18,12 +20,11 @@ use crate::hole_punching::DHT;
 use crate::keys::{KeyType, Keypair};
 use crate::peer::Peer;
 use crate::peer_list::PeerList;
-use crate::primitives::{STORAGE_KEY_KEY, STORAGE_NAME};
+use crate::primitives::{STORAGE_KEY_KEY, STORAGE_NAME, STORAGE_PEER_LIST_KEY};
 use crate::session::{
     new_session_receive_channel, start as session_start, RemotePublic, SessionReceiveMessage,
     SessionSendMessage,
 };
-use crate::storage::LocalDB;
 use crate::transports::{
     start as endpoint_start, EndpointIncomingMessage, EndpointSendMessage, EndpointStreamMessage,
 };
@@ -46,35 +47,47 @@ pub async fn start(
         permission,
     } = config;
     db_dir.push(STORAGE_NAME);
-    let db = LocalDB::open_absolute(&db_dir)?;
-    let db_key_key = STORAGE_KEY_KEY.as_bytes().to_vec();
-    let key_result = db.read::<Keypair>(&db_key_key); // TODO KeyStore
-    let key = if key_result.is_none() {
-        let key = KeyType::Ed25519.generate_kepair();
-        db.write(db_key_key, &key)?;
-        key
-    } else {
-        key_result.unwrap()
+    if !db_dir.exists() {
+        fs::create_dir_all(&db_dir).await?;
+    }
+    let mut key_path = db_dir.clone();
+    key_path.push(STORAGE_KEY_KEY);
+    let key_bytes = fs::read(&key_path).await.unwrap_or(vec![]);
+
+    let key = match from_bytes::<Keypair>(&key_bytes) {
+        Ok(keypair) => keypair,
+        Err(_) => {
+            let key = KeyType::Ed25519.generate_kepair();
+            let key_bytes = to_allocvec(&key).unwrap_or(vec![]);
+            fs::write(key_path, key_bytes).await?;
+            key
+        }
     };
 
     let peer_id = key.peer_id();
-    let db_peer_list_key = peer_id.0.to_vec();
-    let peer_list_result = db.read::<PeerList>(&db_peer_list_key);
-    let peer_list = if peer_list_result.is_none() {
-        Arc::new(RwLock::new(PeerList::init(
-            peer_id,
-            (white_peer_list, white_list),
-            (black_peer_list, black_list),
-        )))
-    } else {
-        let mut peer_list = peer_list_result.unwrap();
-        peer_list.merge(
-            peer_id,
-            (white_peer_list, white_list),
-            (black_peer_list, black_list),
-        );
 
-        Arc::new(RwLock::new(peer_list))
+    let mut peer_list_path = db_dir;
+    peer_list_path.push(STORAGE_PEER_LIST_KEY);
+    let peer_list_bytes = fs::read(&peer_list_path).await.unwrap_or(vec![]);
+
+    let peer_list = match from_bytes::<PeerList>(&peer_list_bytes) {
+        Ok(mut peer_list) => {
+            peer_list.merge(
+                peer_id,
+                (white_peer_list, white_list),
+                (black_peer_list, black_list),
+            );
+            Arc::new(RwLock::new(peer_list))
+        }
+        Err(_) => {
+            let peer_list = PeerList::init(
+                peer_id,
+                (white_peer_list, white_list),
+                (black_peer_list, black_list),
+            );
+            fs::write(&peer_list_path, peer_list.to_bytes()).await?;
+            Arc::new(RwLock::new(peer_list))
+        }
     };
 
     let peer = Peer::new(
@@ -84,6 +97,7 @@ pub async fn start(
         true,
     );
 
+    // TODO features.
     let _transports: HashMap<u8, Sender<EndpointSendMessage>> = HashMap::new();
 
     let (endpoint_send, endpoint_recv) = endpoint_start(peer.transport(), *peer.addr())
@@ -109,7 +123,6 @@ pub async fn start(
 
     let peer = Arc::new(peer);
     let key = Arc::new(key);
-    let db = Arc::new(Mutex::new(db));
 
     let out_send_1 = out_send.clone();
     let peer_1 = peer.clone();
@@ -149,8 +162,7 @@ pub async fn start(
 
     let peer_list_2 = peer_list.clone();
     let endpoint_send_2 = endpoint_send.clone();
-    let db_peer_list_key_2 = db_peer_list_key.clone();
-    let db_2 = db.clone();
+    let peer_list_path_2 = peer_list_path.clone();
 
     smol::spawn(async move {
         loop {
@@ -170,15 +182,18 @@ pub async fn start(
                             .expect("Server to Senssion (Close)");
                     } else {
                         if is_stable {
-                            let db_lock = db_2.lock().await;
-                            peer_list_2.write().await.stable_stabilize(
-                                peer_id,
-                                sender,
-                                remote_peer,
-                                &db_peer_list_key_2,
-                                &db_lock,
-                            );
-                            drop(db_lock);
+                            let mut peer_list_lock = peer_list_2.write().await;
+                            let is_save =
+                                peer_list_lock.stable_stabilize(peer_id, sender, remote_peer);
+                            drop(peer_list_lock);
+
+                            if is_save {
+                                let _ = fs::write(
+                                    &peer_list_path_2,
+                                    peer_list_2.read().await.to_bytes(),
+                                )
+                                .await;
+                            }
                         } else {
                             if permission {
                                 let addr = remote_peer.addr().clone();
@@ -192,25 +207,30 @@ pub async fn start(
                                     .await
                                     .expect("Server to Outside (PeerJoin)");
                             } else {
-                                let db_lock = db_2.lock().await;
-                                if peer_list_2.write().await.peer_add(
+                                let peer_list_lock = peer_list_2.write().await;
+                                let is_save = peer_list_2.write().await.peer_add(
                                     peer_id,
                                     sender.clone(),
                                     remote_peer,
-                                    &db_peer_list_key_2,
-                                    &db_lock,
-                                ) {
+                                );
+                                drop(peer_list_lock);
+
+                                if is_save {
                                     sender
                                         .send(SessionSendMessage::Ok(vec![], false))
                                         .await
                                         .expect("Server to Senssion (Ok)");
+                                    let _ = fs::write(
+                                        &peer_list_path_2,
+                                        peer_list_2.read().await.to_bytes(),
+                                    )
+                                    .await;
                                 } else {
                                     sender
                                         .send(SessionSendMessage::Close)
                                         .await
                                         .expect("Server to Senssion (Old Close)");
                                 }
-                                drop(db_lock);
                             }
                         }
                     }
@@ -304,14 +324,14 @@ pub async fn start(
                                 .await
                                 .expect("Server to Session (Join Ok)");
                             // stable or kad
-                            let db_lock = db.lock().await;
-                            peer_list_lock.stable_tmp_stabilize(
-                                peer_id,
-                                &db_peer_list_key,
-                                &db_lock,
-                                is_ok,
-                            );
-                            drop(db_lock);
+
+                            if peer_list_lock.stable_tmp_stabilize(peer_id, is_ok) {
+                                let _ = fs::write(
+                                    &peer_list_path,
+                                    to_allocvec(&peer_list_lock.to_bytes()).unwrap_or(vec![]),
+                                )
+                                .await;
+                            }
                         } else {
                             // close
                             sender
