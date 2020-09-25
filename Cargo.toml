@@ -23,7 +23,6 @@ sled = "0.34"
 log = "0.4"
 
 # async runtime and channel
-futures = "0.3"
 smol = "1.0"
 
 # crypto

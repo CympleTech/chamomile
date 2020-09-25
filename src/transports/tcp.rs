@@ -1,4 +1,3 @@
-use futures::{select, FutureExt};
 use smol::{
     channel::{Receiver, Sender},
     io::{BufReader, Result},
@@ -106,13 +105,14 @@ async fn run_self_recv(
 }
 
 async fn process_stream(
-    mut stream: TcpStream,
+    stream: TcpStream,
     sender: Sender<EndpointIncomingMessage>,
     endpoint: Arc<Mutex<TcpEndpoint>>,
     is_stable: bool,
 ) -> Result<()> {
     let addr = stream.peer_addr()?;
-    let (mut reader, mut writer) = &mut (&stream, &stream);
+    let mut reader = stream.clone();
+    let mut writer = stream;
 
     let (self_sender, self_receiver) = new_endpoint_stream_channel();
     let (out_sender, out_receiver) = new_endpoint_stream_channel();
@@ -135,68 +135,72 @@ async fn process_stream(
         .await
         .expect("Endpoint to Server (Incoming)");
 
-    let mut read_len = [0u8; 4];
-
-    loop {
-        select! {
-            msg = reader.read(&mut read_len).fuse() => match msg {
-                Ok(size) => {
-                    if size == 0 {
-                        // when close or better when many Ok(0)
-                        out_sender
-                            .send(EndpointStreamMessage::Close)
-                            .await
-                            .expect("Endpoint to Session (Size Close)");
-                        break;
+    smol::spawn(async move {
+        loop {
+            match self_receiver.recv().await {
+                Ok(msg) => match msg {
+                    EndpointStreamMessage::Bytes(bytes) => {
+                        let len = bytes.len() as u32;
+                        let _ = writer.write(&(len.to_be_bytes())).await;
+                        let _ = writer.write_all(&bytes[..]).await;
                     }
-
-                    let len: usize = u32::from_be_bytes(read_len) as usize;
-                    let mut received: usize = 0;
-                    let mut read_bytes = vec![0u8; len];
-                    while let Ok(bytes_size) = reader.read(&mut read_bytes).await {
-                        received += bytes_size;
-                        if received > len {
-                            break;
-                        }
-
-                        if received != len {
-                            continue;
-                        }
-
-                        out_sender
-                            .send(EndpointStreamMessage::Bytes(read_bytes.clone()))
-                            .await.expect("Endpoint to Session (Bytes)");
-
-                        break;
-                    }
-                    read_len = [0u8; 4];
-                    received = 0;
-                }
-                Err(_e) => {
-                    out_sender.send(EndpointStreamMessage::Close)
-                        .await.expect("Endpoint to Session (Close)");
-                    break;
-                }
-            },
-            msg = self_receiver.recv().fuse() => match msg {
-                Ok(msg) => {
-                    match msg {
-                        EndpointStreamMessage::Bytes(bytes) => {
-                            let len = bytes.len() as u32;
-                            writer.write(&(len.to_be_bytes())).await?;
-                            writer.write_all(&bytes[..]).await?;
-                        }
-                        EndpointStreamMessage::Close => break,
-                    }
+                    EndpointStreamMessage::Close => break,
                 },
                 Err(_) => break,
             }
         }
+    })
+    .detach();
+
+    let mut read_len = [0u8; 4];
+    let mut received: usize = 0;
+
+    loop {
+        match reader.read(&mut read_len).await {
+            Ok(size) => {
+                if size == 0 {
+                    // when close or better when many Ok(0)
+                    out_sender
+                        .send(EndpointStreamMessage::Close)
+                        .await
+                        .expect("Endpoint to Session (Size Close)");
+                    break;
+                }
+
+                let len: usize = u32::from_be_bytes(read_len) as usize;
+                let mut read_bytes = vec![0u8; len];
+                while let Ok(bytes_size) = reader.read(&mut read_bytes).await {
+                    received += bytes_size;
+                    if received > len {
+                        break;
+                    }
+
+                    if received != len {
+                        continue;
+                    }
+
+                    out_sender
+                        .send(EndpointStreamMessage::Bytes(read_bytes.clone()))
+                        .await
+                        .expect("Endpoint to Session (Bytes)");
+
+                    break;
+                }
+                read_len = [0u8; 4];
+                received = 0;
+            }
+            Err(_e) => {
+                out_sender
+                    .send(EndpointStreamMessage::Close)
+                    .await
+                    .expect("Endpoint to Session (Close)");
+                break;
+            }
+        }
     }
 
-    stream.close().await?;
+    //stream.close().await?;
     endpoint.lock().await.streams.remove(&addr);
-    drop(self_receiver);
     drop(out_sender);
     debug!("close stream: {}", addr);
 

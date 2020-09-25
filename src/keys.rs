@@ -151,6 +151,7 @@ pub struct Keypair {
     pub pk: Vec<u8>,
 }
 
+#[derive(Clone)]
 pub struct SessionKey {
     key: KeyType,
     sk: Vec<u8>,

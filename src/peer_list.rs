@@ -1,6 +1,6 @@
 use rckad::KadTree;
 use serde::{Deserialize, Serialize};
-use smol::channel::Sender;
+use smol::{channel::Sender, lock::MutexGuard};
 use std::collections::HashMap;
 use std::iter::Iterator;
 use std::net::{IpAddr, SocketAddr};
@@ -221,7 +221,7 @@ impl PeerList {
         sender: Sender<SessionSendMessage>,
         peer: Peer,
         key: &Vec<u8>,
-        db: &mut LocalDB,
+        db: &MutexGuard<LocalDB>,
     ) -> bool {
         // 1. add to boostraps.
         if !self.bootstraps.contains(peer.addr()) {
@@ -300,7 +300,7 @@ impl PeerList {
         &mut self,
         peer_id: PeerId,
         key: &Vec<u8>,
-        db: &mut LocalDB,
+        db: &MutexGuard<LocalDB>,
         is_stable: bool,
     ) {
         self.tmps.remove(&peer_id).map(|m| {
@@ -356,7 +356,7 @@ impl PeerList {
         sender: Sender<SessionSendMessage>,
         peer: Peer,
         key: &Vec<u8>,
-        db: &mut LocalDB,
+        db: &MutexGuard<LocalDB>,
     ) {
         if !self.bootstraps.contains(peer.addr()) {
             self.add_bootstrap(peer.addr().clone());
