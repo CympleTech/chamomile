@@ -15,7 +15,8 @@ members = [
 ]
 
 [dependencies]
-chamomile_types = "0.2"
+#chamomile_types = "0.2"
+chamomile_types = { path = "./types" }
 
 toml = "0.5"
 rand = "0.7"

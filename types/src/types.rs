@@ -53,6 +53,7 @@ impl Debug for PeerId {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Broadcast {
     Gossip,
+    StableAll,
 }
 
 /// Transports types support by Endpoint.

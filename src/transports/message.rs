@@ -6,8 +6,8 @@ use std::net::SocketAddr;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EndpointSendMessage {
     /// connect to a socket address.
-    /// params is `socket_addr` , `is_stable` and `bytes`.
-    Connect(SocketAddr, bool, Vec<u8>),
+    /// params is `socket_addr`, `remote_pk_info`, `is_stable_data`.
+    Connect(SocketAddr, Vec<u8>, Option<Vec<u8>>),
     /// close a connection.
     /// params is `socket_addr`.
     Close(SocketAddr),
@@ -21,7 +21,7 @@ pub struct EndpointIncomingMessage(
     pub SocketAddr,
     pub Receiver<EndpointStreamMessage>,
     pub Sender<EndpointStreamMessage>,
-    pub bool,
+    pub Option<Vec<u8>>,
 );
 
 /// StreamMessage use in endpoint and outside.

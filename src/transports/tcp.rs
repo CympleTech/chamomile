@@ -59,7 +59,7 @@ async fn run_listen(
             stream,
             out_send.clone(),
             endpoint.clone(),
-            false,
+            None,
         ))
         .detach();
     }
@@ -76,11 +76,11 @@ async fn run_self_recv(
 ) -> Result<()> {
     while let Ok(m) = recv.recv().await {
         match m {
-            EndpointSendMessage::Connect(addr, is_stable, bytes) => {
+            EndpointSendMessage::Connect(addr, data, is_stable) => {
                 if let Ok(mut stream) = TcpStream::connect(addr).await {
-                    let len = bytes.len() as u32;
+                    let len = data.len() as u32;
                     let _ = stream.write(&(len.to_be_bytes())).await;
-                    let _ = stream.write_all(&bytes[..]).await;
+                    let _ = stream.write_all(&data).await;
                     smol::spawn(process_stream(
                         stream,
                         out_send.clone(),
@@ -108,7 +108,7 @@ async fn process_stream(
     stream: TcpStream,
     sender: Sender<EndpointIncomingMessage>,
     endpoint: Arc<Mutex<TcpEndpoint>>,
-    is_stable: bool,
+    is_stable: Option<Vec<u8>>,
 ) -> Result<()> {
     let addr = stream.peer_addr()?;
     let mut reader = stream.clone();

@@ -7,12 +7,13 @@ use smol::{
     prelude::*,
 };
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use chamomile_types::{
     message::{ReceiveMessage, SendMessage},
-    types::{PeerId, TransportType},
+    types::{Broadcast, PeerId, TransportType},
 };
 
 use crate::config::Config;
@@ -21,10 +22,7 @@ use crate::keys::{KeyType, Keypair};
 use crate::peer::Peer;
 use crate::peer_list::PeerList;
 use crate::primitives::{STORAGE_KEY_KEY, STORAGE_NAME, STORAGE_PEER_LIST_KEY};
-use crate::session::{
-    new_session_receive_channel, start as session_start, RemotePublic, SessionReceiveMessage,
-    SessionSendMessage,
-};
+use crate::session::{start as session_start, RemotePublic, SessionSendMessage};
 use crate::transports::{
     start as endpoint_start, EndpointIncomingMessage, EndpointSendMessage, EndpointStreamMessage,
 };
@@ -38,13 +36,13 @@ pub async fn start(
     let Config {
         mut db_dir,
         addr,
-        join_data,
         transport,
         white_list,
         black_list,
         white_peer_list,
         black_peer_list,
         permission,
+        only_stable_data,
     } = config;
     db_dir.push(STORAGE_NAME);
     if !db_dir.exists() {
@@ -72,20 +70,24 @@ pub async fn start(
 
     let peer_list = match from_bytes::<PeerList>(&peer_list_bytes) {
         Ok(mut peer_list) => {
-            peer_list.merge(
-                peer_id,
-                (white_peer_list, white_list),
-                (black_peer_list, black_list),
-            );
+            peer_list
+                .merge(
+                    peer_id,
+                    peer_list_path.clone(),
+                    (white_peer_list, white_list),
+                    (black_peer_list, black_list),
+                )
+                .await;
             Arc::new(RwLock::new(peer_list))
         }
         Err(_) => {
             let peer_list = PeerList::init(
                 peer_id,
+                peer_list_path,
                 (white_peer_list, white_list),
                 (black_peer_list, black_list),
-            );
-            fs::write(&peer_list_path, peer_list.to_bytes()).await?;
+            )
+            .await;
             Arc::new(RwLock::new(peer_list))
         }
     };
@@ -97,26 +99,19 @@ pub async fn start(
         true,
     );
 
-    // TODO features.
+    // TODO support multiple Transports run same time.
     let _transports: HashMap<u8, Sender<EndpointSendMessage>> = HashMap::new();
 
     let (endpoint_send, endpoint_recv) = endpoint_start(peer.transport(), *peer.addr())
         .await
         .expect("Transport binding failure!");
 
-    let (session_send, session_recv) = new_session_receive_channel();
-
-    let remote_bytes =
-        RemotePublic(key.public().clone(), peer.clone(), join_data.clone()).to_bytes();
+    let remote_bytes = RemotePublic(key.public().clone(), peer.clone()).to_bytes();
 
     // bootstrap white list.
     for a in peer_list.read().await.bootstrap() {
         endpoint_send
-            .send(EndpointSendMessage::Connect(
-                *a,
-                false,
-                remote_bytes.clone(),
-            ))
+            .send(EndpointSendMessage::Connect(*a, remote_bytes.clone(), None))
             .await
             .expect("Server to Endpoint (Connect)");
     }
@@ -135,23 +130,20 @@ pub async fn start(
                 Ok(EndpointIncomingMessage(addr, receiver, sender, is_stable)) => {
                     // check and start session
                     if peer_list_1.read().await.is_black_addr(&addr) {
-                        sender
-                            .send(EndpointStreamMessage::Close)
-                            .await
-                            .expect("Server to Endpoint (Close)");
+                        let _ = sender.send(EndpointStreamMessage::Close).await;
                     } else {
-                        session_start(
+                        smol::spawn(session_start(
                             addr,
                             receiver,
                             sender,
-                            session_send.clone(),
                             out_send_1.clone(),
                             key_1.clone(),
                             peer_1.clone(),
                             peer_list_1.clone(),
-                            is_stable,
                             permission,
-                        )
+                            is_stable,
+                        ))
+                        .detach();
                     }
                 }
                 Err(_) => break,
@@ -160,185 +152,70 @@ pub async fn start(
     })
     .detach();
 
+    let out_send_2 = out_send.clone();
     let peer_list_2 = peer_list.clone();
     let endpoint_send_2 = endpoint_send.clone();
-    let peer_list_path_2 = peer_list_path.clone();
-
-    smol::spawn(async move {
-        loop {
-            match session_recv.recv().await {
-                Ok(SessionReceiveMessage::Connected(
-                    r_peer_id,
-                    sender,
-                    remote_peer,
-                    data,
-                    is_stable,
-                )) => {
-                    // check and save tmp and save outside
-                    if r_peer_id == peer_id || peer_list_2.read().await.is_black_peer(&peer_id) {
-                        sender
-                            .send(SessionSendMessage::Close)
-                            .await
-                            .expect("Server to Senssion (Close)");
-                    } else {
-                        if is_stable {
-                            let mut peer_list_lock = peer_list_2.write().await;
-                            let is_save =
-                                peer_list_lock.stable_stabilize(peer_id, sender, remote_peer);
-                            drop(peer_list_lock);
-
-                            if is_save {
-                                let _ = fs::write(
-                                    &peer_list_path_2,
-                                    peer_list_2.read().await.to_bytes(),
-                                )
-                                .await;
-                            }
-                        } else {
-                            if permission {
-                                let addr = remote_peer.addr().clone();
-                                peer_list_2.write().await.stable_tmp_add(
-                                    peer_id,
-                                    sender,
-                                    remote_peer,
-                                );
-                                out_send
-                                    .send(ReceiveMessage::PeerJoin(peer_id, addr, data))
-                                    .await
-                                    .expect("Server to Outside (PeerJoin)");
-                            } else {
-                                let peer_list_lock = peer_list_2.write().await;
-                                let is_save = peer_list_2.write().await.peer_add(
-                                    peer_id,
-                                    sender.clone(),
-                                    remote_peer,
-                                );
-                                drop(peer_list_lock);
-
-                                if is_save {
-                                    sender
-                                        .send(SessionSendMessage::Ok(vec![], false))
-                                        .await
-                                        .expect("Server to Senssion (Ok)");
-                                    let _ = fs::write(
-                                        &peer_list_path_2,
-                                        peer_list_2.read().await.to_bytes(),
-                                    )
-                                    .await;
-                                } else {
-                                    sender
-                                        .send(SessionSendMessage::Close)
-                                        .await
-                                        .expect("Server to Senssion (Old Close)");
-                                }
-                            }
-                        }
-                    }
-                }
-                Ok(SessionReceiveMessage::Close(peer_id)) => {
-                    peer_list_2.write().await.peer_remove(&peer_id);
-                    if permission {
-                        peer_list_2.write().await.stable_leave(&peer_id);
-                        out_send
-                            .send(ReceiveMessage::PeerLeave(peer_id))
-                            .await
-                            .expect("Server to Outside (PeerLeave)");
-                    }
-                }
-                Ok(SessionReceiveMessage::Connect(addr)) => {
-                    // DHT Helper's peers
-                    endpoint_send_2
-                        .send(EndpointSendMessage::Connect(
-                            addr,
-                            false,
-                            remote_bytes.clone(),
-                        ))
-                        .await
-                        .expect("Server to Endpoint (Connect)");
-                }
-                Err(_) => break,
-            }
-        }
-    })
-    .detach();
 
     smol::spawn(async move {
         loop {
             match self_recv.recv().await {
-                Ok(SendMessage::PeerConnect(peer_id, socket, data)) => {
-                    if peer_list.write().await.pre_stable_add(peer_id) {
+                Ok(SendMessage::StableConnect(to, socket, data)) => {
+                    if peer_list.read().await.contains_stable(&to) {
+                        out_send_2
+                            .send(ReceiveMessage::StableResult(to, true, data))
+                            .await
+                            .expect("Server to Outside (Stable Result)");
                         continue;
                     }
                     if let Some(addr) = socket {
                         endpoint_send
                             .send(EndpointSendMessage::Connect(
                                 addr,
-                                true,
-                                RemotePublic(key.public().clone(), *peer.clone(), data).to_bytes(),
+                                remote_bytes.clone(),
+                                Some(data),
                             ))
                             .await
                             .expect("Server to Endpoint (Connect)");
                     } else {
-                        // TODO search the peer's socket in kad.
-                        todo!()
+                        if let Some(sender) = peer_list.read().await.get(&peer_id) {
+                            let _ = sender
+                                .send(SessionSendMessage::StableConnect(to, data))
+                                .await;
+                        }
                     }
                 }
-                Ok(SendMessage::PeerDisconnect(peer_id)) => {
+                Ok(SendMessage::StableDisconnect(peer_id)) => {
                     if let Some((session, _p)) = peer_list.write().await.stable_remove(&peer_id) {
-                        session
-                            .send(SessionSendMessage::Close)
-                            .await
-                            .expect("Server to Session (PeerDisconnect)");
+                        let _ = session.send(SessionSendMessage::Close).await;
                     }
                 }
-                Ok(SendMessage::Connect(addr, data)) => {
-                    let join = if data.is_none() {
-                        join_data.clone()
-                    } else {
-                        data.unwrap()
-                    };
-
+                Ok(SendMessage::Connect(addr)) => {
                     endpoint_send
                         .send(EndpointSendMessage::Connect(
                             addr,
-                            false,
-                            RemotePublic(key.public().clone(), *peer.clone(), join).to_bytes(),
+                            remote_bytes.clone(),
+                            None,
                         ))
                         .await
                         .expect("Server to Endpoint (Connect)");
                 }
                 Ok(SendMessage::DisConnect(addr)) => {
-                    peer_list.write().await.peer_disconnect(&addr);
+                    peer_list.write().await.peer_disconnect(&addr).await;
                     // send to endpoint, beacuse not konw session peer_id.
                     endpoint_send
                         .send(EndpointSendMessage::Close(addr))
                         .await
                         .expect("Server to Endpoint (DisConnect)");
                 }
-                Ok(SendMessage::PeerJoinResult(peer_id, is_ok, is_force, data)) => {
-                    let mut peer_list_lock = peer_list.write().await;
+                Ok(SendMessage::StableResult(peer_id, is_ok, is_force, data)) => {
+                    let peer_list_lock = peer_list.read().await;
                     if let Some(sender) = peer_list_lock.get(&peer_id) {
                         if is_ok || !is_force {
-                            sender
-                                .send(SessionSendMessage::Ok(data, is_ok))
-                                .await
-                                .expect("Server to Session (Join Ok)");
-                            // stable or kad
-
-                            if peer_list_lock.stable_tmp_stabilize(peer_id, is_ok) {
-                                let _ = fs::write(
-                                    &peer_list_path,
-                                    to_allocvec(&peer_list_lock.to_bytes()).unwrap_or(vec![]),
-                                )
+                            let _ = sender
+                                .send(SessionSendMessage::StableResult(peer_id, is_ok, data))
                                 .await;
-                            }
                         } else {
-                            // close
-                            sender
-                                .send(SessionSendMessage::Close)
-                                .await
-                                .expect("Server to Session (Join Close)");
-                            peer_list_lock.stable_tmp_remove(&peer_id);
+                            let _ = sender.send(SessionSendMessage::Close).await;
                         }
                     }
                 }
@@ -350,15 +227,32 @@ pub async fn start(
                     );
                     let peer_list_lock = peer_list.read().await;
                     if let Some(sender) = peer_list_lock.get(&to) {
-                        sender
+                        let _ = sender
                             .send(SessionSendMessage::Bytes(peer_id, to, data))
-                            .await
-                            .expect("Server to Session (Data)");
+                            .await;
                     }
                 }
-                Ok(SendMessage::Broadcast(_broadcast, _data)) => {
-                    todo!();
-                }
+                Ok(SendMessage::Broadcast(broadcast, data)) => match broadcast {
+                    Broadcast::StableAll => {
+                        let peer_list_lock = peer_list.read().await;
+                        for (to, sender) in peer_list_lock.stable_all() {
+                            let _ = sender
+                                .send(SessionSendMessage::Bytes(peer_id, to, data.clone()))
+                                .await;
+                        }
+                        drop(peer_list_lock);
+                    }
+                    Broadcast::Gossip => {
+                        // TODO more Gossip base on Kad.
+                        let peer_list_lock = peer_list.read().await;
+                        for (to, sender) in peer_list_lock.all() {
+                            let _ = sender
+                                .send(SessionSendMessage::Bytes(peer_id, to, data.clone()))
+                                .await;
+                        }
+                        drop(peer_list_lock);
+                    }
+                },
                 Ok(SendMessage::Stream(_symbol, _stream_type)) => {
                     todo!();
                 }
