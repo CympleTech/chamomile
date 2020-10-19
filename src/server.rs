@@ -92,19 +92,18 @@ pub async fn start(
         }
     };
 
-    let peer = Peer::new(
-        key.peer_id(),
-        addr,
-        TransportType::from_str(&transport),
-        true,
-    );
+    let default_transport = TransportType::from_str(&transport);
 
-    // TODO support multiple Transports run same time.
-    let _transports: HashMap<u8, Sender<EndpointSendMessage>> = HashMap::new();
+    let peer = Peer::new(key.peer_id(), addr, default_transport, true);
+
+    let mut transports: HashMap<TransportType, Sender<EndpointSendMessage>> = HashMap::new();
 
     let (endpoint_send, endpoint_recv) = endpoint_start(peer.transport(), *peer.addr())
         .await
         .expect("Transport binding failure!");
+
+    transports.insert(default_transport, endpoint_send.clone());
+    let transports = Arc::new(RwLock::new(transports));
 
     let remote_bytes = RemotePublic(key.public().clone(), peer.clone()).to_bytes();
 
@@ -140,6 +139,7 @@ pub async fn start(
                             key_1.clone(),
                             peer_1.clone(),
                             peer_list_1.clone(),
+                            transports.clone(),
                             permission,
                             is_stable,
                         ))

@@ -1,4 +1,7 @@
-use chamomile_types::{message::ReceiveMessage, types::PeerId};
+use chamomile_types::{
+    message::ReceiveMessage,
+    types::{PeerId, TransportType},
+};
 use postcard::{from_bytes, to_allocvec};
 use serde::{Deserialize, Serialize};
 use smol::future::FutureExt as SmolFutureExt;
@@ -8,6 +11,7 @@ use smol::{
     lock::{Mutex, RwLock},
     prelude::*,
 };
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,6 +49,7 @@ pub(crate) async fn start(
     key: Arc<Keypair>,
     peer: Arc<Peer>,
     peer_list: Arc<RwLock<PeerList>>,
+    transports: Arc<RwLock<HashMap<TransportType, Sender<EndpointSendMessage>>>>,
     is_permissioned: bool,
     is_stable: Option<Vec<u8>>,
 ) {
@@ -143,6 +148,7 @@ pub(crate) async fn start(
         key,
         peer,
         peer_list,
+        transports,
         is_permissioned,
         is_stabled,
     };
@@ -163,7 +169,7 @@ struct Session {
     key: Arc<Keypair>,
     peer: Arc<Peer>,
     peer_list: Arc<RwLock<PeerList>>,
-    //endpoints: Arc<RwLock<HashMap<u8, Sender<EndpointSendMessage>>>>,
+    transports: Arc<RwLock<HashMap<TransportType, Sender<EndpointSendMessage>>>>,
     is_permissioned: bool,
     is_stabled: Arc<Mutex<bool>>,
 }
@@ -336,15 +342,27 @@ impl Session {
                         // TODO DHT Helper
                         // remote_peer_key.verify()
 
-                        for p in peers {
-                            if p.id() != &self.my_peer_id
-                                && self.peer_list.read().await.get_it(p.id()).is_none()
-                            {
-                                // TODO
-                                // self.endpoint_send
-                                //     .send(EndpointSendMessage::Connect(*p.addr()))
-                                //     .await
-                                //     .expect("Server to Endpoint (Connect)");
+                        if peers.len() > 0 {
+                            let my_rp =
+                                RemotePublic(self.key.public(), *self.peer.clone()).to_bytes();
+
+                            for p in peers {
+                                if p.id() != &self.my_peer_id
+                                    && self.peer_list.read().await.get_it(p.id()).is_none()
+                                {
+                                    if let Some(sender) =
+                                        self.transports.read().await.get(p.transport())
+                                    {
+                                        sender
+                                            .send(EndpointSendMessage::Connect(
+                                                *p.addr(),
+                                                my_rp.clone(),
+                                                None,
+                                            ))
+                                            .await
+                                            .expect("Server to Endpoint (Connect)");
+                                    }
+                                }
                             }
                         }
                     }
