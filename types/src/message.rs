@@ -17,7 +17,7 @@ pub enum StreamType {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ReceiveMessage {
     /// when peer what to stable connect, send from chamomile to outside.
-    /// params is `peer_id`, `socket_addr` and peer `join_info`.
+    /// params is `peer_id`, `socket_addr` and peer `connect_info`.
     StableConnect(PeerId, Vec<u8>),
     /// when peer get stable connect result.
     /// params is `peer_id`, `is_ok` and `result_data`.

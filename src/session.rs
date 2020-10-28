@@ -95,11 +95,17 @@ pub(crate) async fn start(
         return;
     }
 
+    // save to peer_list.
     let mut peer_list_lock = peer_list.write().await;
-    peer_list_lock
+    let is_new = peer_list_lock
         .peer_add(remote_peer_id, sender.clone(), remote_peer)
         .await;
     drop(peer_list_lock);
+
+    if !is_new {
+        debug!("Session is had connected");
+        return;
+    }
 
     endpoint_send
         .send(EndpointStreamMessage::Bytes(
@@ -186,6 +192,8 @@ impl Session {
                 break;
             }
         }
+
+        debug!("Session broke: {:?}", self.remote_peer_id);
     }
 
     async fn listen_outside(&self) -> Result<()> {
@@ -215,6 +223,7 @@ impl Session {
                 ));
             }
             Ok(SessionSendMessage::StableConnect(to, data)) => {
+                debug!("Session recv stable connect to: {:?}", to);
                 let mut guard = self.is_stabled.lock().await;
                 *guard = true;
                 drop(guard);
@@ -383,6 +392,7 @@ impl Session {
                         todo!();
                     }
                     SessionType::StableConnect(to, data) => {
+                        debug!("Recv stable connect from: {:?}", self.remote_peer_id);
                         if to == self.my_peer_id {
                             self.out_sender
                                 .send(ReceiveMessage::StableConnect(self.remote_peer_id, data))
@@ -393,6 +403,10 @@ impl Session {
                         }
                     }
                     SessionType::StableResult(to, is_ok, data) => {
+                        debug!(
+                            "Recv stable connect result {} from: {:?}",
+                            is_ok, self.remote_peer_id
+                        );
                         if to == self.my_peer_id {
                             self.out_sender
                                 .send(ReceiveMessage::StableResult(

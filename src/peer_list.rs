@@ -244,7 +244,7 @@ impl PeerList {
         if self
             .peers
             .search(&peer_id)
-            .and_then(|(_k, v, is_it)| if is_it { v.as_ref() } else { None })
+            .and_then(|(_k, _v, is_it)| if is_it { Some(()) } else { None })
             .is_none()
         {
             self.peers.add(peer_id, Some((sender, peer)));

@@ -160,7 +160,9 @@ pub async fn start(
         loop {
             match self_recv.recv().await {
                 Ok(SendMessage::StableConnect(to, socket, data)) => {
+                    debug!("Send stable connect to: {:?}", to);
                     if peer_list.read().await.contains_stable(&to) {
+                        debug!("Aready stable connected");
                         out_send_2
                             .send(ReceiveMessage::StableResult(to, true, data))
                             .await
@@ -177,7 +179,9 @@ pub async fn start(
                             .await
                             .expect("Server to Endpoint (Connect)");
                     } else {
-                        if let Some(sender) = peer_list.read().await.get(&peer_id) {
+                        debug!("Choose cloest peer to help stable connected");
+                        if let Some(sender) = peer_list.read().await.get(&to) {
+                            debug!("Got cloest peer");
                             let _ = sender
                                 .send(SessionSendMessage::StableConnect(to, data))
                                 .await;
@@ -185,11 +189,13 @@ pub async fn start(
                     }
                 }
                 Ok(SendMessage::StableDisconnect(peer_id)) => {
+                    debug!("Send stable disconnect to: {:?}", peer_id);
                     if let Some((session, _p)) = peer_list.write().await.stable_remove(&peer_id) {
                         let _ = session.send(SessionSendMessage::Close).await;
                     }
                 }
                 Ok(SendMessage::Connect(addr)) => {
+                    debug!("Send connect to: {:?}", addr);
                     endpoint_send
                         .send(EndpointSendMessage::Connect(
                             addr,
@@ -200,6 +206,7 @@ pub async fn start(
                         .expect("Server to Endpoint (Connect)");
                 }
                 Ok(SendMessage::DisConnect(addr)) => {
+                    debug!("Send disconnect to: {:?}", addr);
                     peer_list.write().await.peer_disconnect(&addr).await;
                     // send to endpoint, beacuse not konw session peer_id.
                     endpoint_send
@@ -208,6 +215,7 @@ pub async fn start(
                         .expect("Server to Endpoint (DisConnect)");
                 }
                 Ok(SendMessage::StableResult(peer_id, is_ok, is_force, data)) => {
+                    debug!("Send stable result {} to: {:?}", is_ok, peer_id);
                     let peer_list_lock = peer_list.read().await;
                     if let Some(sender) = peer_list_lock.get(&peer_id) {
                         if is_ok || !is_force {
