@@ -1,4 +1,3 @@
-use postcard::{from_bytes, to_allocvec};
 use smol::{
     channel::{Receiver, Sender},
     fs,
@@ -52,11 +51,11 @@ pub async fn start(
     key_path.push(STORAGE_KEY_KEY);
     let key_bytes = fs::read(&key_path).await.unwrap_or(vec![]);
 
-    let key = match from_bytes::<Keypair>(&key_bytes) {
+    let key = match Keypair::from_db_bytes(&key_bytes) {
         Ok(keypair) => keypair,
         Err(_) => {
             let key = KeyType::Ed25519.generate_kepair();
-            let key_bytes = to_allocvec(&key).unwrap_or(vec![]);
+            let key_bytes = key.to_db_bytes();
             fs::write(key_path, key_bytes).await?;
             key
         }
@@ -66,31 +65,12 @@ pub async fn start(
 
     let mut peer_list_path = db_dir;
     peer_list_path.push(STORAGE_PEER_LIST_KEY);
-    let peer_list_bytes = fs::read(&peer_list_path).await.unwrap_or(vec![]);
-
-    let peer_list = match from_bytes::<PeerList>(&peer_list_bytes) {
-        Ok(mut peer_list) => {
-            peer_list
-                .merge(
-                    peer_id,
-                    peer_list_path.clone(),
-                    (white_peer_list, white_list),
-                    (black_peer_list, black_list),
-                )
-                .await;
-            Arc::new(RwLock::new(peer_list))
-        }
-        Err(_) => {
-            let peer_list = PeerList::init(
-                peer_id,
-                peer_list_path,
-                (white_peer_list, white_list),
-                (black_peer_list, black_list),
-            )
-            .await;
-            Arc::new(RwLock::new(peer_list))
-        }
-    };
+    let peer_list = Arc::new(RwLock::new(PeerList::load(
+        peer_id,
+        peer_list_path,
+        (white_peer_list, white_list),
+        (black_peer_list, black_list),
+    )));
 
     let default_transport = TransportType::from_str(&transport);
 
@@ -127,8 +107,10 @@ pub async fn start(
         loop {
             match endpoint_recv.recv().await {
                 Ok(EndpointIncomingMessage(addr, receiver, sender, is_stable)) => {
+                    debug!("receiver incoming connect: {:?}", addr);
                     // check and start session
                     if peer_list_1.read().await.is_black_addr(&addr) {
+                        debug!("receiver incoming connect is blocked");
                         let _ = sender.send(EndpointStreamMessage::Close).await;
                     } else {
                         smol::spawn(session_start(
@@ -141,6 +123,7 @@ pub async fn start(
                             peer_list_1.clone(),
                             transports.clone(),
                             permission,
+                            only_stable_data,
                             is_stable,
                         ))
                         .detach();
@@ -179,9 +162,7 @@ pub async fn start(
                             .await
                             .expect("Server to Endpoint (Connect)");
                     } else {
-                        debug!("Choose cloest peer to help stable connected");
                         if let Some(sender) = peer_list.read().await.get(&to) {
-                            debug!("Got cloest peer");
                             let _ = sender
                                 .send(SessionSendMessage::StableConnect(to, data))
                                 .await;

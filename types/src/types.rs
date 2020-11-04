@@ -6,6 +6,8 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 #[derive(Copy, Clone, Default, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
 pub struct PeerId(pub [u8; 32]);
 
+pub const PEER_ID_LENGTH: usize = 32;
+
 impl PeerId {
     pub fn short_show(&self) -> String {
         let mut hex = String::new();
@@ -16,6 +18,19 @@ impl PeerId {
         new_hex.push_str("...");
         new_hex.push_str(&hex[hex.len() - 5..]);
         new_hex
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ()> {
+        if bytes.len() != 32 {
+            return Err(());
+        }
+        let mut raw = [0u8; 32];
+        raw.copy_from_slice(bytes);
+        Ok(Self(raw))
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.0.to_vec()
     }
 
     pub fn from_hex(s: impl ToString) -> Result<PeerId, ()> {
@@ -74,6 +89,25 @@ impl TransportType {
             "rtp" => TransportType::RTP,
             "udt" => TransportType::UDT,
             _ => TransportType::UDP,
+        }
+    }
+
+    pub fn from_byte(b: u8) -> Result<Self, ()> {
+        match b {
+            0u8 => Ok(TransportType::UDP),
+            1u8 => Ok(TransportType::TCP),
+            2u8 => Ok(TransportType::RTP),
+            3u8 => Ok(TransportType::UDT),
+            _ => Err(()),
+        }
+    }
+
+    pub fn to_byte(&self) -> u8 {
+        match self {
+            TransportType::UDP => 0u8,
+            TransportType::TCP => 1u8,
+            TransportType::RTP => 2u8,
+            TransportType::UDT => 3u8,
         }
     }
 }

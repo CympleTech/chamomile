@@ -1,5 +1,6 @@
 use smol::{
     channel::{Receiver, Sender},
+    future,
     io::{BufReader, Result},
     lock::Mutex,
     net::{TcpListener, TcpStream},
@@ -135,11 +136,12 @@ async fn process_stream(
         .await
         .expect("Endpoint to Server (Incoming)");
 
-    smol::spawn(async move {
+    let a = async move {
         loop {
             match self_receiver.recv().await {
                 Ok(msg) => match msg {
                     EndpointStreamMessage::Bytes(bytes) => {
+                        println!("Got MESSAGE to write stream");
                         let len = bytes.len() as u32;
                         let _ = writer.write(&(len.to_be_bytes())).await;
                         let _ = writer.write_all(&bytes[..]).await;
@@ -149,59 +151,65 @@ async fn process_stream(
                 Err(_) => break,
             }
         }
-    })
-    .detach();
 
-    let mut read_len = [0u8; 4];
-    let mut received: usize = 0;
+        Err::<(), ()>(())
+    };
 
-    loop {
-        match reader.read(&mut read_len).await {
-            Ok(size) => {
-                if size == 0 {
-                    // when close or better when many Ok(0)
-                    out_sender
-                        .send(EndpointStreamMessage::Close)
-                        .await
-                        .expect("Endpoint to Session (Size Close)");
-                    break;
-                }
+    let b = async move {
+        let mut read_len = [0u8; 4];
+        let mut received: usize = 0;
 
-                let len: usize = u32::from_be_bytes(read_len) as usize;
-                let mut read_bytes = vec![0u8; len];
-                while let Ok(bytes_size) = reader.read(&mut read_bytes).await {
-                    received += bytes_size;
-                    if received > len {
+        loop {
+            match reader.read(&mut read_len).await {
+                Ok(size) => {
+                    if size == 0 {
+                        // when close or better when many Ok(0)
+                        out_sender
+                            .send(EndpointStreamMessage::Close)
+                            .await
+                            .expect("Endpoint to Session (Size Close)");
                         break;
                     }
 
-                    if received != len {
-                        continue;
+                    let len: usize = u32::from_be_bytes(read_len) as usize;
+                    let mut read_bytes = vec![0u8; len];
+                    while let Ok(bytes_size) = reader.read(&mut read_bytes).await {
+                        received += bytes_size;
+                        if received > len {
+                            break;
+                        }
+
+                        if received != len {
+                            continue;
+                        }
+
+                        out_sender
+                            .send(EndpointStreamMessage::Bytes(read_bytes.clone()))
+                            .await
+                            .expect("Endpoint to Session (Bytes)");
+
+                        break;
                     }
-
+                    read_len = [0u8; 4];
+                    received = 0;
+                }
+                Err(_e) => {
                     out_sender
-                        .send(EndpointStreamMessage::Bytes(read_bytes.clone()))
+                        .send(EndpointStreamMessage::Close)
                         .await
-                        .expect("Endpoint to Session (Bytes)");
-
+                        .expect("Endpoint to Session (Close)");
                     break;
                 }
-                read_len = [0u8; 4];
-                received = 0;
-            }
-            Err(_e) => {
-                out_sender
-                    .send(EndpointStreamMessage::Close)
-                    .await
-                    .expect("Endpoint to Session (Close)");
-                break;
             }
         }
-    }
+
+        Err::<(), ()>(())
+    };
+
+    let _ = future::try_zip(a, b).await;
 
     //stream.close().await?;
     endpoint.lock().await.streams.remove(&addr);
-    drop(out_sender);
     debug!("close stream: {}", addr);
 
     Ok(())

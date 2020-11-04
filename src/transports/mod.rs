@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use smol::{
     channel::{self, Receiver, Sender},
     io::Result,

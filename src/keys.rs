@@ -5,8 +5,6 @@ use ed25519_dalek::{
     Keypair as Ed25519_Keypair, PublicKey as Ed25519_PublicKey, Signature as Ed25519_Signature,
     Signer, Verifier, KEYPAIR_LENGTH, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH,
 };
-use postcard::{from_bytes, to_allocvec};
-use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256, Sha3_512};
 use std::convert::TryFrom;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
@@ -18,7 +16,7 @@ use chamomile_types::types::PeerId;
 // create an alias for convenience
 type Aes256Cbc = Cbc<Aes256, Pkcs7>;
 
-#[derive(Copy, Clone, Serialize, Deserialize, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum KeyType {
     Ed25519, // Ed25519 = 0
     Lattice, // Lattice-based = 1
@@ -32,6 +30,23 @@ impl Default for KeyType {
 }
 
 impl KeyType {
+    pub fn to_byte(&self) -> u8 {
+        match self {
+            KeyType::Ed25519 => 1u8,
+            KeyType::Lattice => 2u8,
+            KeyType::None => 0u8,
+        }
+    }
+
+    pub fn from_byte(i: u8) -> Result<Self, ()> {
+        match i {
+            0u8 => Ok(Self::None),
+            1u8 => Ok(KeyType::Ed25519),
+            2u8 => Ok(KeyType::Lattice),
+            _ => Err(()),
+        }
+    }
+
     fn pk_len(&self) -> usize {
         match self {
             KeyType::Ed25519 => PUBLIC_KEY_LENGTH,
@@ -144,11 +159,11 @@ impl KeyType {
     }
 }
 
-#[derive(Default, Clone, Serialize, Deserialize, Debug)]
+#[derive(Default, Clone, Debug)]
 pub struct Keypair {
-    pub key: KeyType,
-    pub sk: Vec<u8>,
-    pub pk: Vec<u8>,
+    pub key: KeyType, // [u8, 1]
+    pub sk: Vec<u8>,  // [u8; key.psk_len]
+    pub pk: Vec<u8>,  // [u8; key.sk_len]
 }
 
 #[derive(Clone)]
@@ -164,6 +179,59 @@ pub struct SessionKey {
 }
 
 impl Keypair {
+    /// only key_type and public_key.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ()> {
+        if bytes.len() < 1 {
+            return Err(());
+        }
+        let key = KeyType::from_byte(bytes[0])?;
+        let pk_len = key.pk_len();
+
+        if bytes.len() != 1 + pk_len {
+            return Err(());
+        }
+        let pk = bytes[1..].to_vec();
+        return Ok(Keypair {
+            key,
+            pk,
+            sk: vec![],
+        });
+    }
+
+    /// only key_type and public_key.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = vec![self.key.to_byte()];
+        bytes.extend(&self.pk);
+
+        bytes
+    }
+
+    // TODO add keystore
+    pub fn to_db_bytes(&self) -> Vec<u8> {
+        let mut bytes = vec![self.key.to_byte()];
+        bytes.extend(&self.sk);
+        bytes.extend(&self.pk);
+
+        bytes
+    }
+
+    // TODO add keystore
+    pub fn from_db_bytes(bytes: &[u8]) -> Result<Self, ()> {
+        if bytes.len() < 1 {
+            return Err(());
+        }
+        let key = KeyType::from_byte(bytes[0])?;
+        let pk_len = key.pk_len();
+        let psk_len = key.psk_len();
+
+        if bytes.len() != 1 + pk_len + psk_len {
+            return Err(());
+        }
+        let sk = bytes[1..(1 + psk_len)].to_vec();
+        let pk = bytes[(1 + psk_len)..].to_vec();
+        Ok(Self { key, sk, pk })
+    }
+
     pub fn peer_id(&self) -> PeerId {
         let mut sha = Sha3_256::new();
         sha.update(&self.pk);
@@ -186,14 +254,6 @@ impl Keypair {
 
     pub fn verify(&self, msg: &[u8], sign: &[u8]) -> bool {
         self.key.verify(&self.pk, msg, sign)
-    }
-
-    pub fn to_bytes(&self) -> Vec<u8> {
-        to_allocvec(self).unwrap_or(vec![])
-    }
-
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, ()> {
-        from_bytes(&bytes).map_err(|_e| ())
     }
 
     pub fn from_pk(key: KeyType, bytes: Vec<u8>) -> Result<Self, ()> {

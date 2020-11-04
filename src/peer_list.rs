@@ -1,7 +1,7 @@
 use rckad::KadTree;
-use serde::{Deserialize, Serialize};
 use smol::{channel::Sender, fs};
 use std::collections::HashMap;
+use std::io::BufRead;
 use std::iter::Iterator;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -13,69 +13,66 @@ use crate::session::SessionSendMessage;
 
 /// PeerList
 /// contains: peers(DHT) & tmp_peers(HashMap)
-#[derive(Deserialize, Serialize)]
 pub(crate) struct PeerList {
-    #[serde(skip)]
     save_path: PathBuf,
-    #[serde(skip)]
     peers: KadTree<PeerId, Option<(Sender<SessionSendMessage>, Peer)>>,
-    #[serde(skip)]
     stables: HashMap<PeerId, (Sender<SessionSendMessage>, Peer)>,
-    #[serde(skip)]
     whites: (Vec<PeerId>, Vec<SocketAddr>),
-    #[serde(skip)]
     blacks: (Vec<PeerId>, Vec<IpAddr>),
     bootstraps: Vec<SocketAddr>,
 }
 
 impl PeerList {
-    pub async fn init(
-        self_peer_id: PeerId,
-        save_path: PathBuf,
-        whites: (Vec<PeerId>, Vec<SocketAddr>),
-        blacks: (Vec<PeerId>, Vec<IpAddr>),
-    ) -> Self {
-        let pl = PeerList {
-            save_path,
-            peers: KadTree::new(self_peer_id, None),
-            stables: HashMap::new(),
-            bootstraps: whites.1.clone(),
-            whites: whites,
-            blacks: blacks,
-        };
-        pl.save().await;
-        pl
+    pub async fn save(&self) {
+        let mut file_string = String::new();
+        for addr in &self.bootstraps {
+            file_string = format!("{}\n{}", file_string, addr.to_string());
+        }
+        let _ = fs::write(&self.save_path, file_string).await;
     }
 
-    pub async fn merge(
-        &mut self,
+    pub fn load(
         peer_id: PeerId,
         save_path: PathBuf,
         whites: (Vec<PeerId>, Vec<SocketAddr>),
         blacks: (Vec<PeerId>, Vec<IpAddr>),
-    ) {
-        for addr in &whites.1 {
-            self.add_bootstrap(*addr);
+    ) -> Self {
+        let mut bootstraps = whites.1.clone();
+        match std::fs::File::open(&save_path) {
+            Ok(file) => {
+                let addrs = std::io::BufReader::new(file).lines();
+                for addr in addrs {
+                    if let Ok(addr) = addr {
+                        if let Ok(socket) = addr.parse::<SocketAddr>() {
+                            if !bootstraps.contains(&socket) {
+                                bootstraps.push(socket);
+                            }
+                        }
+                    }
+                }
+                PeerList {
+                    save_path,
+                    bootstraps,
+                    peers: KadTree::new(peer_id, None),
+                    stables: HashMap::new(),
+                    whites: whites,
+                    blacks: blacks,
+                }
+            }
+            Err(_) => PeerList {
+                save_path,
+                bootstraps,
+                peers: KadTree::new(peer_id, None),
+                stables: HashMap::new(),
+                whites: whites,
+                blacks: blacks,
+            },
         }
-
-        self.save_path = save_path;
-        self.peers = KadTree::new(peer_id, None);
-        self.whites = whites;
-        self.blacks = blacks;
-        self.save().await;
-    }
-
-    pub async fn save(&self) {
-        let _ = fs::write(&self.save_path, self.to_bytes()).await;
     }
 }
 
 // Black and white list.
 impl PeerList {
-    pub fn to_bytes(&self) -> Vec<u8> {
-        postcard::to_allocvec(self).unwrap_or(vec![])
-    }
-
     pub fn bootstrap(&self) -> &Vec<SocketAddr> {
         &self.bootstraps
     }
