@@ -106,7 +106,13 @@ pub async fn start(
     smol::spawn(async move {
         loop {
             match endpoint_recv.recv().await {
-                Ok(EndpointIncomingMessage(addr, receiver, sender, is_stable)) => {
+                Ok(EndpointIncomingMessage(
+                    addr,
+                    receiver,
+                    sender,
+                    is_stable,
+                    is_remote_incoming,
+                )) => {
                     debug!("receiver incoming connect: {:?}", addr);
                     // check and start session
                     if peer_list_1.read().await.is_black_addr(&addr) {
@@ -125,6 +131,7 @@ pub async fn start(
                             permission,
                             only_stable_data,
                             is_stable,
+                            is_remote_incoming,
                         ))
                         .detach();
                     }

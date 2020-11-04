@@ -51,6 +51,7 @@ pub(crate) async fn start(
     is_permissioned: bool,
     is_only_stable_data: bool,
     is_stable: Option<Vec<u8>>,
+    is_remote_incoming: bool,
 ) {
     let my_peer_id = peer.id().clone();
 
@@ -109,12 +110,14 @@ pub(crate) async fn start(
         return;
     }
 
-    endpoint_send
-        .send(EndpointStreamMessage::Bytes(
-            RemotePublic(key.public(), *peer.clone()).to_bytes(),
-        ))
-        .await
-        .expect("Session to Endpoint (Data Key)");
+    if is_remote_incoming {
+        endpoint_send
+            .send(EndpointStreamMessage::Bytes(
+                RemotePublic(key.public(), *peer.clone()).to_bytes(),
+            ))
+            .await
+            .expect("Session to Endpoint (Data Key)");
+    }
 
     endpoint_send
         .send(EndpointStreamMessage::Bytes(

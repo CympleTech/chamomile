@@ -15,13 +15,14 @@ pub enum EndpointSendMessage {
 
 /// when endpoint get a incoming connection, will send to outside.
 /// params: `socket_addr`, `endpoint_stream_receiver`,
-/// `endpoint_stream_sender` and `is_start_connect_by_self`.
+/// `endpoint_stream_sender` and `is_stable`, `is_remote_incoming`.
 #[derive(Clone)]
 pub struct EndpointIncomingMessage(
     pub SocketAddr,
     pub Receiver<EndpointStreamMessage>,
     pub Sender<EndpointStreamMessage>,
     pub Option<Vec<u8>>,
+    pub bool,
 );
 
 /// StreamMessage use in endpoint and outside.

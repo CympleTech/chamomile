@@ -61,6 +61,7 @@ async fn run_listen(
             out_send.clone(),
             endpoint.clone(),
             None,
+            true,
         ))
         .detach();
     }
@@ -87,6 +88,7 @@ async fn run_self_recv(
                         out_send.clone(),
                         endpoint.clone(),
                         is_stable,
+                        false,
                     ))
                     .detach();
                 }
@@ -110,6 +112,7 @@ async fn process_stream(
     sender: Sender<EndpointIncomingMessage>,
     endpoint: Arc<Mutex<TcpEndpoint>>,
     is_stable: Option<Vec<u8>>,
+    is_remote_incoming: bool,
 ) -> Result<()> {
     let addr = stream.peer_addr()?;
     let mut reader = stream.clone();
@@ -132,6 +135,7 @@ async fn process_stream(
             out_receiver,
             self_sender,
             is_stable,
+            is_remote_incoming,
         ))
         .await
         .expect("Endpoint to Server (Incoming)");
@@ -141,7 +145,6 @@ async fn process_stream(
             match self_receiver.recv().await {
                 Ok(msg) => match msg {
                     EndpointStreamMessage::Bytes(bytes) => {
-                        println!("Got MESSAGE to write stream");
                         let len = bytes.len() as u32;
                         let _ = writer.write(&(len.to_be_bytes())).await;
                         let _ = writer.write_all(&bytes[..]).await;
