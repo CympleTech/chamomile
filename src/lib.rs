@@ -1,8 +1,6 @@
 #![recursion_limit = "1024"]
-// TODO Debug
+// TODO WIP
 #![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_imports)]
 
 //! `chamomile` is a crate for building a solid and efficient p2p network.
 //!

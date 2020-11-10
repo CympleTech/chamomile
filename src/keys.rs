@@ -5,10 +5,9 @@ use ed25519_dalek::{
     Keypair as Ed25519_Keypair, PublicKey as Ed25519_PublicKey, Signature as Ed25519_Signature,
     Signer, Verifier, KEYPAIR_LENGTH, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH,
 };
-use sha3::{Digest, Sha3_256, Sha3_512};
+use sha3::{Digest, Sha3_256};
 use std::convert::TryFrom;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
-use std::ops::Rem;
 use x25519_dalek::{PublicKey as Ed25519_DH_Public, StaticSecret as Ed25519_DH_Secret};
 
 use chamomile_types::types::PeerId;

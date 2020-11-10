@@ -39,7 +39,23 @@ fn main() {
 
             Timer::after(Duration::from_secs(3)).await;
 
-            send.send(SendMessage::Broadcast(Broadcast::Gossip, vec![1, 1, 1, 1]))
+            fn mod_reduce(mut i: u32) -> u8 {
+                loop {
+                    if i > 255 {
+                        i = i - 255
+                    } else {
+                        break;
+                    }
+                }
+                i as u8
+            }
+
+            let mut bytes = vec![];
+            for i in 0..8120u32 {
+                bytes.push(mod_reduce(i));
+            }
+            println!("Will send bytes: {}-{:?}", bytes.len(), &bytes[0..20]);
+            send.send(SendMessage::Broadcast(Broadcast::Gossip, bytes))
                 .await
                 .expect("channel failure");
         }
@@ -48,9 +64,10 @@ fn main() {
             match message {
                 ReceiveMessage::Data(peer_id, bytes) => {
                     println!(
-                        "Recv permissionless data from: {}, {:?}, start build a stable connection",
+                        "Recv permissionless data from: {}, {}-{:?}, start build a stable connection",
                         peer_id.short_show(),
-                        bytes
+                        bytes.len(),
+                        &bytes[0..20]
                     );
 
                     // START BUILD A STABLE CONNECTED.

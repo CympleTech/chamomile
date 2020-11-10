@@ -9,14 +9,15 @@ use std::path::PathBuf;
 use chamomile_types::types::PeerId;
 
 use crate::peer::Peer;
-use crate::session::SessionSendMessage;
+use crate::session::{RemotePublic, SessionSendMessage};
 
 /// PeerList
-/// contains: peers(DHT) & tmp_peers(HashMap)
+/// contains: dhts(DHT) & tmp_dhts(HashMap)
 pub(crate) struct PeerList {
     save_path: PathBuf,
-    peers: KadTree<PeerId, Option<(Sender<SessionSendMessage>, Peer)>>,
+    dhts: KadTree<PeerId, Option<(Sender<SessionSendMessage>, Peer)>>,
     stables: HashMap<PeerId, (Sender<SessionSendMessage>, Peer)>,
+    tmp_stables: HashMap<PeerId, RemotePublic>,
     whites: (Vec<PeerId>, Vec<SocketAddr>),
     blacks: (Vec<PeerId>, Vec<IpAddr>),
     bootstraps: Vec<SocketAddr>,
@@ -53,8 +54,9 @@ impl PeerList {
                 PeerList {
                     save_path,
                     bootstraps,
-                    peers: KadTree::new(peer_id, None),
+                    dhts: KadTree::new(peer_id, None),
                     stables: HashMap::new(),
+                    tmp_stables: HashMap::new(),
                     whites: whites,
                     blacks: blacks,
                 }
@@ -62,12 +64,176 @@ impl PeerList {
             Err(_) => PeerList {
                 save_path,
                 bootstraps,
-                peers: KadTree::new(peer_id, None),
+                dhts: KadTree::new(peer_id, None),
                 stables: HashMap::new(),
+                tmp_stables: HashMap::new(),
                 whites: whites,
                 blacks: blacks,
             },
         }
+    }
+
+    /// get all peers in the peer list.
+    pub fn all(&self) -> HashMap<PeerId, &Sender<SessionSendMessage>> {
+        let mut peers: HashMap<PeerId, &Sender<SessionSendMessage>> = HashMap::new();
+        for key in self.dhts.keys().into_iter() {
+            if let Some((sender, _)) = self.dht_get(&key) {
+                peers.insert(key, sender);
+            }
+        }
+
+        for (p, v) in self.stables.iter() {
+            peers.insert(*p, &v.0);
+        }
+
+        peers
+    }
+
+    /// get all stable peers in the peer list.
+    pub fn stable_all(&self) -> HashMap<PeerId, &Sender<SessionSendMessage>> {
+        self.stables.iter().map(|(k, v)| (*k, &v.0)).collect()
+    }
+
+    /// search in stable list and DHT table. result is channel sender and if is it.
+    pub fn get(&self, peer_id: &PeerId) -> Option<(&Sender<SessionSendMessage>, bool)> {
+        self.stable_get(peer_id).or(self.dht_get(peer_id))
+    }
+
+    /// search in dht table.
+    pub fn dht_get(&self, peer_id: &PeerId) -> Option<(&Sender<SessionSendMessage>, bool)> {
+        self.dhts
+            .search(peer_id)
+            .map(|(_k, ref v, is_it)| v.as_ref().map(|vv| (&vv.0, is_it)))
+            .flatten()
+    }
+
+    /// search in stable list.
+    pub fn stable_get(&self, peer_id: &PeerId) -> Option<(&Sender<SessionSendMessage>, bool)> {
+        self.stables.get(peer_id).map(|v| (&v.0, true))
+    }
+
+    /// if peer has connected in peer list.
+    pub fn contains(&self, peer_id: &PeerId) -> bool {
+        self.stables.contains_key(peer_id) || self.dhts.contains(peer_id)
+    }
+
+    /// if peer has stable connected in peer list.
+    pub fn stable_contains(&self, peer_id: &PeerId) -> bool {
+        self.stables.contains_key(peer_id)
+    }
+
+    /// get in DHT help
+    pub fn get_dht_help(&self, peer_id: &PeerId) -> Vec<Peer> {
+        // TODO better closest peers
+
+        let mut peers: HashMap<PeerId, &Peer> = HashMap::new();
+        for key in self.dhts.keys().into_iter() {
+            if &key == peer_id {
+                continue;
+            }
+            if let Some((_, Some((_, peer)), is_it)) = self.dhts.search(&peer_id) {
+                if is_it {
+                    peers.insert(key, peer);
+                }
+            }
+        }
+
+        for (p, v) in self.stables.iter() {
+            if p != peer_id {
+                peers.insert(*p, &v.1);
+            }
+        }
+
+        peers.values().map(|v| *v.clone()).collect()
+    }
+
+    /// Step:
+    /// 1. add to boostraps;
+    /// 2. add to kad.
+    pub async fn peer_add(
+        &mut self,
+        peer_id: PeerId,
+        sender: Sender<SessionSendMessage>,
+        peer: Peer,
+    ) -> bool {
+        // 1. add to boostraps.
+        if !self.bootstraps.contains(peer.addr()) {
+            self.add_bootstrap(peer.addr().clone());
+            self.save().await;
+        }
+
+        // 2. add to kad.
+        if self
+            .dhts
+            .search(&peer_id)
+            .and_then(|(_k, _v, is_it)| if is_it { Some(()) } else { None })
+            .is_none()
+        {
+            self.dhts.add(peer_id, Some((sender, peer)));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Step:
+    /// 1. remove from kad;
+    pub fn peer_remove(&mut self, peer_id: &PeerId) -> Option<(Sender<SessionSendMessage>, Peer)> {
+        self.dhts.remove(peer_id).and_then(|v| v)
+    }
+
+    /// Disconnect Step:
+    /// 1. remove from bootstrap.
+    pub async fn peer_disconnect(&mut self, addr: &SocketAddr) {
+        let mut d: Option<usize> = None;
+        for (k, i) in self.bootstraps.iter().enumerate() {
+            if i == addr {
+                d = Some(k);
+            }
+        }
+
+        if let Some(i) = d {
+            self.bootstraps.remove(i);
+            self.save().await;
+        }
+    }
+
+    /// PeerDisconnect Step:
+    /// 1. remove from white_list;
+    /// 2. remove from stables.
+    pub fn stable_remove(&mut self, peer_id: &PeerId) -> Option<Sender<SessionSendMessage>> {
+        self.remove_white_peer(peer_id);
+        self.stables.remove(peer_id).map(|(s, _)| s)
+    }
+
+    /// Peerl leave Step:
+    /// 1. remove from stables.
+    pub fn stable_leave(&mut self, peer_id: &PeerId) {
+        self.stables.remove(peer_id);
+    }
+
+    /// Peer stable connect ok Step:
+    /// 1. add to bootstrap;
+    /// 2. add to stables;
+    pub fn stable_add(&mut self, peer_id: PeerId, sender: Sender<SessionSendMessage>, peer: Peer) {
+        match self.stables.get_mut(&peer_id) {
+            Some((s, p)) => {
+                let _ = s.try_send(SessionSendMessage::Close);
+                *s = sender;
+                *p = peer;
+            }
+            None => {
+                self.stables.insert(peer_id, (sender, peer));
+            }
+        }
+    }
+
+    pub fn add_tmp_stable(&mut self, peer: RemotePublic) {
+        self.tmp_stables.insert(*peer.1.id(), peer);
+    }
+
+    pub fn tmp_stable(&mut self, peer_id: &PeerId) -> Option<RemotePublic> {
+        self.tmp_stables.remove(peer_id)
     }
 }
 
@@ -153,151 +319,5 @@ impl PeerList {
             None => return None,
         };
         Some(self.blacks.1.remove(pos))
-    }
-}
-
-// DHT
-impl PeerList {
-    pub fn all(&self) -> Vec<(PeerId, &Sender<SessionSendMessage>)> {
-        let keys = self.peers.keys();
-        keys.into_iter()
-            .map(|key| {
-                let sender = self.get(&key).unwrap();
-                (key, sender)
-            })
-            .collect()
-    }
-
-    pub fn stable_all(&self) -> Vec<(PeerId, &Sender<SessionSendMessage>)> {
-        self.stables.iter().map(|(k, v)| (*k, &v.0)).collect()
-    }
-
-    /// get in Stables, DHT, DHT closest.
-    pub fn get(&self, peer_id: &PeerId) -> Option<&Sender<SessionSendMessage>> {
-        self.stables.get(peer_id).map(|v| &v.0).or(self
-            .peers
-            .search(peer_id)
-            .map(|(_k, ref v, _is_it)| v.as_ref().map(|vv| &vv.0))
-            .flatten())
-    }
-
-    /// get in DHT (not closest).
-    pub fn get_it(&self, peer_id: &PeerId) -> Option<&Sender<SessionSendMessage>> {
-        self.stables.get(peer_id).map(|v| &v.0).or(self
-            .peers
-            .search(peer_id)
-            .map(|(_k, v, is_it)| {
-                if is_it {
-                    v.as_ref().map(|vv| &vv.0)
-                } else {
-                    None
-                }
-            })
-            .flatten())
-    }
-
-    /// get in DHT help
-    pub fn get_dht_help(&self, peer_id: &PeerId) -> Vec<Peer> {
-        // TODO closest peers
-
-        let keys = self.peers.keys();
-        keys.into_iter()
-            .map(|key| {
-                self.peers
-                    .search(&key)
-                    .and_then(|(_k, ref v, _is_it)| v.as_ref())
-                    .map(|s| &s.1)
-                    .unwrap()
-            })
-            .filter(|p| p.id() != peer_id)
-            .cloned()
-            .collect()
-    }
-
-    pub fn contains(&self, peer_id: &PeerId) -> bool {
-        self.stables.contains_key(peer_id) || self.peers.contains(peer_id)
-    }
-
-    pub fn contains_stable(&self, peer_id: &PeerId) -> bool {
-        self.stables.contains_key(peer_id)
-    }
-
-    /// Step:
-    /// 1. add to boostraps;
-    /// 2. add to kad.
-    pub async fn peer_add(
-        &mut self,
-        peer_id: PeerId,
-        sender: Sender<SessionSendMessage>,
-        peer: Peer,
-    ) -> bool {
-        // 1. add to boostraps.
-        if !self.bootstraps.contains(peer.addr()) {
-            self.add_bootstrap(peer.addr().clone());
-            self.save().await;
-        }
-
-        // 2. add to kad.
-        if self
-            .peers
-            .search(&peer_id)
-            .and_then(|(_k, _v, is_it)| if is_it { Some(()) } else { None })
-            .is_none()
-        {
-            self.peers.add(peer_id, Some((sender, peer)));
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Step:
-    /// 1. remove from kad;
-    pub fn peer_remove(&mut self, peer_id: &PeerId) -> Option<(Sender<SessionSendMessage>, Peer)> {
-        self.peers.remove(peer_id).and_then(|v| v)
-    }
-
-    /// Disconnect Step:
-    /// 1. remove from bootstrap.
-    pub async fn peer_disconnect(&mut self, addr: &SocketAddr) {
-        let mut d: Option<usize> = None;
-        for (k, i) in self.bootstraps.iter().enumerate() {
-            if i == addr {
-                d = Some(k);
-            }
-        }
-
-        if let Some(i) = d {
-            self.bootstraps.remove(i);
-            self.save().await;
-        }
-    }
-
-    /// PeerDisconnect Step:
-    /// 1. remove from white_list;
-    /// 2. remove from stables.
-    pub fn stable_remove(
-        &mut self,
-        peer_id: &PeerId,
-    ) -> Option<(Sender<SessionSendMessage>, Peer)> {
-        self.remove_white_peer(peer_id);
-        self.stables.remove(peer_id)
-    }
-
-    /// Peerl leave Step:
-    /// 1. remove from stables.
-    pub fn stable_leave(&mut self, peer_id: &PeerId) {
-        self.stables.remove(peer_id);
-    }
-
-    /// Peer stable connect ok Step:
-    /// 1. add to bootstrap;
-    /// 2. add to stables;
-    pub fn stable_add(&mut self, peer_id: PeerId, sender: Sender<SessionSendMessage>, peer: Peer) {
-        if !self.stables.contains_key(&peer_id) {
-            self.stables.insert(peer_id, (sender, peer));
-        } else {
-            let _ = sender.try_send(SessionSendMessage::Close);
-        }
     }
 }

@@ -1,14 +1,13 @@
 use smol::{
     channel::{Receiver, Sender},
     future,
-    io::{BufReader, Result},
+    io::Result,
     lock::Mutex,
     net::{TcpListener, TcpStream},
     prelude::*,
 };
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::ops::Div;
 use std::sync::Arc;
 
 use super::message::{EndpointIncomingMessage, EndpointSendMessage, EndpointStreamMessage};
@@ -60,8 +59,7 @@ async fn run_listen(
             stream,
             out_send.clone(),
             endpoint.clone(),
-            None,
-            true,
+            false,
         ))
         .detach();
     }
@@ -78,17 +76,30 @@ async fn run_self_recv(
 ) -> Result<()> {
     while let Ok(m) = recv.recv().await {
         match m {
-            EndpointSendMessage::Connect(addr, data, is_stable) => {
+            EndpointSendMessage::Connect(addr, mut data, is_stable) => {
                 if let Ok(mut stream) = TcpStream::connect(addr).await {
-                    let len = data.len() as u32;
-                    let _ = stream.write(&(len.to_be_bytes())).await;
-                    let _ = stream.write_all(&data).await;
+                    let (is_stable_byte, mut stable_bytes) = if let Some(stable_bytes) = is_stable {
+                        (1u8, stable_bytes)
+                    } else {
+                        (0u8, vec![])
+                    };
+
+                    let pk_len = data.len() as u16;
+                    let stable_len = stable_bytes.len() as u32;
+                    let mut bytes = vec![];
+                    bytes.push(1u8); // now setup version is 1u8.
+                    bytes.extend(&pk_len.to_be_bytes()[..]); // pk len is [0u8; 2].
+                    bytes.push(is_stable_byte); // is stable byte.
+                    bytes.extend(&stable_len.to_be_bytes()[..]); // stable len is [0u8; 4].
+                    bytes.append(&mut data); // append pk info.
+                    bytes.append(&mut stable_bytes); // append stable info.
+
+                    let _ = stream.write_all(&bytes).await;
                     smol::spawn(process_stream(
                         stream,
                         out_send.clone(),
                         endpoint.clone(),
-                        is_stable,
-                        false,
+                        true,
                     ))
                     .detach();
                 }
@@ -111,12 +122,58 @@ async fn process_stream(
     stream: TcpStream,
     sender: Sender<EndpointIncomingMessage>,
     endpoint: Arc<Mutex<TcpEndpoint>>,
-    is_stable: Option<Vec<u8>>,
-    is_remote_incoming: bool,
+    is_self: bool,
 ) -> Result<()> {
     let addr = stream.peer_addr()?;
     let mut reader = stream.clone();
     let mut writer = stream;
+
+    // bytes[0] is version, bytes[1..3] is public_info, bytes[3] is stable or not, bytes[4..8] is stable bytes.
+    let mut read_len = [0u8; 8];
+
+    let handshake: std::result::Result<(Vec<u8>, bool, Vec<u8>), ()> = async {
+        match reader.read(&mut read_len).await {
+            Ok(size) => {
+                if size != 8 {
+                    return Err(());
+                }
+                let mut pk_len_bytes = [0u8; 2];
+                let mut stable_len_bytes = [0u8; 4];
+                pk_len_bytes.copy_from_slice(&read_len[1..3]);
+                let is_stable = read_len[3] == 1u8;
+                stable_len_bytes.copy_from_slice(&read_len[4..8]);
+                let pk_len: u16 = u16::from_be_bytes(pk_len_bytes);
+                let stable_len: u32 = u32::from_be_bytes(stable_len_bytes);
+
+                let next_len = pk_len as usize + stable_len as usize;
+                let mut read_bytes = vec![0u8; next_len];
+                let mut received: usize = 0;
+
+                while let Ok(bytes_size) = reader.read(&mut read_bytes[received..]).await {
+                    received += bytes_size;
+                    if received >= next_len {
+                        break;
+                    }
+                }
+                let pk: Vec<u8> = read_bytes.drain(0..pk_len as usize).collect();
+                Ok((pk, is_stable, read_bytes))
+            }
+            Err(_e) => Err(()),
+        }
+    }
+    .or(async {
+        smol::Timer::after(std::time::Duration::from_secs(10)).await;
+        Err(())
+    })
+    .await;
+
+    if handshake.is_err() {
+        // close it. if is_by_self, Better send outside not connect.
+        debug!("Transport: connect read publics timeout, close it.");
+        return Ok(());
+    }
+    let (pk_info, is_stable, stable_bytes) = handshake.unwrap();
+    let stable_info = if is_stable { Some(stable_bytes) } else { None };
 
     let (self_sender, self_receiver) = new_endpoint_stream_channel();
     let (out_sender, out_receiver) = new_endpoint_stream_channel();
@@ -132,10 +189,11 @@ async fn process_stream(
     sender
         .send(EndpointIncomingMessage(
             addr,
+            pk_info,
+            stable_info,
+            is_self,
             out_receiver,
             self_sender,
-            is_stable,
-            is_remote_incoming,
         ))
         .await
         .expect("Endpoint to Server (Incoming)");
@@ -144,6 +202,17 @@ async fn process_stream(
         loop {
             match self_receiver.recv().await {
                 Ok(msg) => match msg {
+                    EndpointStreamMessage::Handshake(mut data) => {
+                        let pk_len = data.len() as u16;
+                        let stable_len = 0u32;
+                        let mut bytes = vec![];
+                        bytes.push(1u8); // now setup version is 1u8.
+                        bytes.extend(&pk_len.to_be_bytes()[..]); // pk len is [0u8; 2].
+                        bytes.push(0u8); // default when handshake is not stable.
+                        bytes.extend(&stable_len.to_be_bytes()[..]); // stable len is [0u8; 4].
+                        bytes.append(&mut data); // append pk info.
+                        let _ = writer.write_all(&bytes[..]).await;
+                    }
                     EndpointStreamMessage::Bytes(bytes) => {
                         let len = bytes.len() as u32;
                         let _ = writer.write(&(len.to_be_bytes())).await;
@@ -176,7 +245,7 @@ async fn process_stream(
 
                     let len: usize = u32::from_be_bytes(read_len) as usize;
                     let mut read_bytes = vec![0u8; len];
-                    while let Ok(bytes_size) = reader.read(&mut read_bytes).await {
+                    while let Ok(bytes_size) = reader.read(&mut read_bytes[received..]).await {
                         received += bytes_size;
                         if received > len {
                             break;

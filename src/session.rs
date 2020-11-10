@@ -3,19 +3,16 @@ use chamomile_types::{
     types::{PeerId, TransportType, PEER_ID_LENGTH},
 };
 use smol::{
-    channel::{self, Receiver, RecvError, Sender},
+    channel::{self, Receiver, Sender},
     future,
-    io::{BufReader, Result},
-    lock::{Mutex, RwLock},
-    prelude::*,
+    io::Result,
+    lock::RwLock,
 };
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
-use crate::hole_punching::{nat, Hole, DHT};
-use crate::keys::{KeyType, Keypair, SessionKey};
+use crate::hole_punching::{Hole, DHT};
+use crate::keys::{Keypair, SessionKey};
 use crate::peer::{Peer, PEER_LENGTH};
 use crate::peer_list::PeerList;
 use crate::transports::{EndpointSendMessage, EndpointStreamMessage};
@@ -23,11 +20,17 @@ use crate::transports::{EndpointSendMessage, EndpointStreamMessage};
 /// server send to session message in channel.
 pub(crate) enum SessionSendMessage {
     /// send bytes to session what want to send to peer..
-    Bytes(PeerId, PeerId, Vec<u8>),
+    Data(Vec<u8>),
     /// when need build a stable connection.
-    StableConnect(PeerId, Vec<u8>),
+    StableConnect(Vec<u8>),
     /// when receive a stable result.
-    StableResult(PeerId, bool, Vec<u8>),
+    StableResult(bool, Vec<u8>),
+    /// Receive Relay data.
+    RelayData(PeerId, PeerId, Vec<u8>),
+    /// Relay stable connect.
+    RelayStableConnect(RemotePublic, PeerId, Vec<u8>),
+    /// Relay stable connect result.
+    RelayStableResult(PeerId, PeerId, Vec<u8>),
     /// close the session.
     Close,
 }
@@ -38,450 +41,13 @@ pub(crate) fn new_session_send_channel(
     channel::unbounded()
 }
 
-/// start a session to handle incoming.
-pub(crate) async fn start(
-    remote_addr: SocketAddr,
-    endpoint_recv: Receiver<EndpointStreamMessage>,
-    endpoint_send: Sender<EndpointStreamMessage>,
-    out_sender: Sender<ReceiveMessage>,
-    key: Arc<Keypair>,
-    peer: Arc<Peer>,
-    peer_list: Arc<RwLock<PeerList>>,
-    transports: Arc<RwLock<HashMap<TransportType, Sender<EndpointSendMessage>>>>,
-    is_permissioned: bool,
-    is_only_stable_data: bool,
-    is_stable: Option<Vec<u8>>,
-    is_remote_incoming: bool,
-) {
-    let my_peer_id = peer.id().clone();
-
-    // timeout 10s to read peer_id & public_key
-    let result: Result<Option<RemotePublic>> = endpoint_recv
-        .recv()
-        .or(async {
-            smol::Timer::after(Duration::from_secs(10)).await;
-            Err(RecvError)
-        })
-        .await
-        .map(|msg| match msg {
-            EndpointStreamMessage::Bytes(bytes) => RemotePublic::from_bytes(bytes).ok(),
-            _ => None,
-        })
-        .map_err(|_e| std::io::ErrorKind::TimedOut.into());
-
-    if result.is_err() {
-        debug!("Debug: Session timeout, close it.");
-        let _ = endpoint_send.send(EndpointStreamMessage::Close).await;
-        return;
-    }
-    let result = result.unwrap();
-    if result.is_none() {
-        debug!("Debug: Session invalid pk, close it.");
-        let _ = endpoint_send.send(EndpointStreamMessage::Close).await;
-        return;
-    }
-
-    let RemotePublic(remote_peer_key, remote_peer) = result.unwrap();
-    let remote_peer_id = remote_peer_key.peer_id();
-    let session_key: SessionKey = key.key.session_key(&key, &remote_peer_key);
-
-    debug!("Debug: Session connected: {}", remote_peer_id.short_show());
-    let (sender, receiver) = new_session_send_channel();
-    let remote_transport = nat(remote_addr, remote_peer);
-    debug!("Debug: NAT addr: {}", remote_transport.addr());
-
-    // check and save tmp and save outside
-    if remote_peer_id == my_peer_id || peer_list.read().await.is_black_peer(&remote_peer_id) {
-        debug!("session remote peer is blocked, close it.");
-        let _ = endpoint_send.send(EndpointStreamMessage::Close).await;
-        return;
-    }
-
-    // save to peer_list.
-    let mut peer_list_lock = peer_list.write().await;
-    let is_new = peer_list_lock
-        .peer_add(remote_peer_id, sender.clone(), remote_peer)
-        .await;
-    drop(peer_list_lock);
-
-    if !is_new {
-        debug!("Session is had connected, close it.");
-        let _ = endpoint_send.send(EndpointStreamMessage::Close).await;
-        return;
-    }
-
-    if is_remote_incoming {
-        endpoint_send
-            .send(EndpointStreamMessage::Bytes(
-                RemotePublic(key.public(), *peer.clone()).to_bytes(),
-            ))
-            .await
-            .expect("Session to Endpoint (Data Key)");
-    }
-
-    endpoint_send
-        .send(EndpointStreamMessage::Bytes(
-            SessionType::Key(session_key.out_bytes()).to_bytes(),
-        ))
-        .await
-        .expect("Session to Endpoint (Data SessionKey)");
-
-    let peers = peer_list.read().await.get_dht_help(&remote_peer_id);
-    endpoint_send
-        .send(EndpointStreamMessage::Bytes(
-            SessionType::DHT(DHT(peers)).to_bytes(),
-        ))
-        .await
-        .expect("Sesssion to Endpoint (Data)");
-
-    let is_stabled = is_stable.is_some();
-    if let Some(data) = is_stable {
-        let data = SessionType::StableConnect(remote_peer_id, data).to_bytes();
-        endpoint_send
-            .send(EndpointStreamMessage::Bytes(data))
-            .await
-            .expect("Session to Endpoint (Stable)");
-    }
-
-    // if is_permissioned is true, only stable connected data. not relay.
-    // if is_permissioned is false, is_only_stable_data is true, only stable connected data. but can relay.
-    // if is_permissioned is false, is_only_stable data is false, all connnected data and can relay.
-    let is_relay_data = !is_permissioned;
-    let is_recv_data = !is_only_stable_data || is_stabled;
-
-    let is_stabled = Arc::new(Mutex::new(is_stabled));
-
-    let session = Session {
-        my_peer_id,
-        remote_peer_id,
-        remote_peer,
-        endpoint_send,
-        out_sender,
-        sender,
-        session_key,
-        key,
-        peer,
-        peer_list,
-        transports,
-        is_recv_data,
-        is_relay_data,
-        is_stabled,
-    };
-
-    session.listen(receiver, endpoint_recv).await
-}
-
-struct Session {
-    my_peer_id: PeerId,
-    remote_peer_id: PeerId,
-    remote_peer: Peer,
-    endpoint_send: Sender<EndpointStreamMessage>,
-    out_sender: Sender<ReceiveMessage>,
-    sender: Sender<SessionSendMessage>,
-    session_key: SessionKey,
-    key: Arc<Keypair>,
-    peer: Arc<Peer>,
-    peer_list: Arc<RwLock<PeerList>>,
-    transports: Arc<RwLock<HashMap<TransportType, Sender<EndpointSendMessage>>>>,
-    is_recv_data: bool,
-    is_relay_data: bool,
-    is_stabled: Arc<Mutex<bool>>,
-}
-
-impl Session {
-    async fn listen(
-        &self,
-        receiver: Receiver<SessionSendMessage>,
-        endpoint_recv: Receiver<EndpointStreamMessage>,
-    ) {
-        let _ = future::try_zip(
-            self.listen_outside(receiver),
-            self.listen_endpoint(endpoint_recv),
-        )
-        .await;
-
-        self.peer_list
-            .write()
-            .await
-            .peer_remove(&self.remote_peer_id);
-
-        if *self.is_stabled.lock().await {
-            self.peer_list
-                .write()
-                .await
-                .stable_leave(&self.remote_peer_id);
-            self.out_sender
-                .send(ReceiveMessage::StableLeave(self.remote_peer_id))
-                .await
-                .expect("Session to Outside (Close)");
-        }
-        debug!("Session broke: {:?}", self.remote_peer_id);
-    }
-
-    async fn listen_outside(&self, receiver: Receiver<SessionSendMessage>) -> Result<()> {
-        loop {
-            match receiver.recv().await {
-                Ok(SessionSendMessage::Bytes(from, to, bytes)) => {
-                    debug!("Got outside data to remote: {:?}", bytes.len());
-                    let e_data = self.session_key.encrypt(bytes);
-                    let data = SessionType::Data(from, to, e_data).to_bytes();
-                    self.endpoint_send
-                        .send(EndpointStreamMessage::Bytes(data))
-                        .await
-                        .expect("Session to Endpoint (Data)");
-                }
-                Ok(SessionSendMessage::Close) => {
-                    debug!("Got outside close it");
-                    self.endpoint_send
-                        .send(EndpointStreamMessage::Close)
-                        .await
-                        .expect("Session to Endpoint (Close)");
-                    break;
-                }
-                Ok(SessionSendMessage::StableConnect(to, data)) => {
-                    debug!("Session recv stable connect to: {:?}", to);
-                    let mut guard = self.is_stabled.lock().await;
-                    *guard = true;
-                    drop(guard);
-
-                    // Start stable connect.
-                    let data = SessionType::StableConnect(to, data).to_bytes();
-                    self.endpoint_send
-                        .send(EndpointStreamMessage::Bytes(data))
-                        .await
-                        .expect("Session to Endpoint (Stable)");
-                }
-                Ok(SessionSendMessage::StableResult(to, is_ok, data)) => {
-                    debug!("Session recv stable result to: {:?}, {}", to, is_ok);
-                    let data = SessionType::StableResult(to, is_ok, data).to_bytes();
-                    self.endpoint_send
-                        .send(EndpointStreamMessage::Bytes(data))
-                        .await
-                        .expect("Session to Endpoint (Stable)");
-
-                    // TODO build stable connections.
-                    if is_ok {
-                        let mut guard = self.is_stabled.lock().await;
-                        *guard = true;
-                        drop(guard);
-
-                        self.peer_list.write().await.stable_add(
-                            self.remote_peer_id,
-                            self.sender.clone(),
-                            self.remote_peer.clone(),
-                        );
-                        // TODO build stable connections.
-                        debug!("TODO more stable connections: receiver");
-                    }
-                }
-                Err(e) => break,
-            }
-        }
-
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "outside recever over",
-        ))
-    }
-
-    async fn listen_endpoint(&self, endpoint_recv: Receiver<EndpointStreamMessage>) -> Result<()> {
-        loop {
-            match endpoint_recv.recv().await {
-                Ok(EndpointStreamMessage::Bytes(bytes)) => {
-                    if bytes.len() < 1 {
-                        continue;
-                    }
-                    let t_type_byte = bytes[0].clone();
-                    let t = SessionType::from_bytes(bytes);
-                    if t.is_err() {
-                        debug!("Debug: Error Serialize SessionType type is {}", t_type_byte);
-                        continue;
-                    }
-
-                    match t.unwrap() {
-                        SessionType::Key(bytes) => {
-                            debug!("session rebuild new encrypt key.");
-                            // if !session_key.is_ok() {
-                            //     if !session_key.in_bytes(bytes) {
-                            //         server_send
-                            //             .send(SessionReceiveMessage::Close(remote_peer_id))
-                            //             .await
-                            //             .expect("Session to Server (Key Close)");
-                            //         endpoint_send
-                            //             .send(EndpointStreamMessage::Close)
-                            //             .await
-                            //             .expect("Session to Endpoint (Key Close)");
-                            //         break;
-                            //     }
-
-                            //     endpoint_send
-                            //         .send(EndpointStreamMessage::Bytes(
-                            //             SessionType::Key(session_key.out_bytes()).to_bytes(),
-                            //         ))
-                            //         .await
-                            //         .expect("Session to Endpoint (Bytes)");
-                            // }
-
-                            // while !buffers.is_empty() {
-                            //     let (peer_id, bytes) = buffers.pop().unwrap();
-                            //     let e_data = session_key.encrypt(bytes);
-                            //     let data =
-                            //         SessionType::Data(my_peer_id, peer_id, e_data).to_bytes();
-                            //     endpoint_send
-                            //         .send(EndpointStreamMessage::Bytes(data))
-                            //         .await
-                            //         .expect("Session to Endpoint (Bytes)");
-                            // }
-
-                            // while !receiver_buffers.is_empty() {
-                            //     let e_data = receiver_buffers.pop().unwrap();
-                            //     let d_data = session_key.decrypt(e_data);
-                            //     if d_data.is_ok() {
-                            //         out_sender
-                            //             .send(ReceiveMessage::Data(remote_peer_id, d_data.unwrap()))
-                            //             .await
-                            //             .expect("Session to Outside (Data)");
-                            //     }
-                            // }
-                        }
-                        SessionType::Data(from, to, e_data) => {
-                            let d_data = self.session_key.decrypt(e_data);
-                            if d_data.is_ok() {
-                                if to == self.my_peer_id {
-                                    if self.is_recv_data || *self.is_stabled.lock().await {
-                                        self.out_sender
-                                            .send(ReceiveMessage::Data(from, d_data.unwrap()))
-                                            .await
-                                            .expect("Session to Outside (Data)");
-                                    } else {
-                                        debug!("Permissioned: not accept data.")
-                                    }
-                                } else {
-                                    if self.is_relay_data {
-                                        // Relay
-                                        let peer_list_lock = self.peer_list.read().await;
-                                        let sender = peer_list_lock.get(&to);
-                                        if sender.is_some() {
-                                            let sender = sender.unwrap();
-                                            sender
-                                                .send(SessionSendMessage::Bytes(
-                                                    from,
-                                                    to,
-                                                    d_data.unwrap(),
-                                                ))
-                                                .await
-                                                .expect("Session to Session (Relay)");
-                                        }
-                                    } else {
-                                        debug!("Permissioned: not accept relay.")
-                                    }
-                                }
-                            }
-                        }
-                        SessionType::DHT(peers) => {
-                            let DHT(peers) = peers;
-                            // TODO DHT Helper
-                            // remote_peer_key.verify()
-
-                            if peers.len() > 0 {
-                                let my_rp =
-                                    RemotePublic(self.key.public(), *self.peer.clone()).to_bytes();
-
-                                for p in peers {
-                                    if p.id() != &self.my_peer_id
-                                        && self.peer_list.read().await.get_it(p.id()).is_none()
-                                    {
-                                        if let Some(sender) =
-                                            self.transports.read().await.get(p.transport())
-                                        {
-                                            sender
-                                                .send(EndpointSendMessage::Connect(
-                                                    *p.addr(),
-                                                    my_rp.clone(),
-                                                    None,
-                                                ))
-                                                .await
-                                                .expect("Server to Endpoint (Connect)");
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        SessionType::Ping => {
-                            self.endpoint_send
-                                .send(EndpointStreamMessage::Bytes(SessionType::Pong.to_bytes()))
-                                .await
-                                .expect("Session to Endpoint (Ping)");
-                        }
-                        SessionType::Pong => {
-                            todo!();
-                            // TODO Heartbeat Ping/Pong
-                        }
-                        SessionType::Hole(..) => {
-                            todo!();
-                        }
-                        SessionType::HoleConnect => {
-                            todo!();
-                        }
-                        SessionType::StableConnect(to, data) => {
-                            debug!("Recv stable connect from: {:?}", self.remote_peer_id);
-                            if to == self.my_peer_id {
-                                self.out_sender
-                                    .send(ReceiveMessage::StableConnect(self.remote_peer_id, data))
-                                    .await
-                                    .expect("Session to Outside (Data)");
-                            } else {
-                                // TODO proxy
-                            }
-                        }
-                        SessionType::StableResult(to, is_ok, data) => {
-                            debug!(
-                                "Recv stable connect result {} from: {:?}",
-                                is_ok, self.remote_peer_id
-                            );
-                            if to == self.my_peer_id {
-                                self.out_sender
-                                    .send(ReceiveMessage::StableResult(
-                                        self.remote_peer_id,
-                                        is_ok,
-                                        data,
-                                    ))
-                                    .await
-                                    .expect("Session to Outside (Data)");
-
-                                if is_ok && *self.is_stabled.lock().await {
-                                    self.peer_list.write().await.stable_add(
-                                        self.remote_peer_id,
-                                        self.sender.clone(),
-                                        self.remote_peer.clone(),
-                                    );
-                                    // TODO build stable connections.
-                                    debug!("TODO more stable connections: sender");
-                                }
-                            } else {
-                                // TODO proxy
-                            }
-                        }
-                    }
-                }
-                Ok(EndpointStreamMessage::Close) => break,
-                Err(_) => break,
-            }
-        }
-
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "transport recever over",
-        ))
-    }
-}
-
+/// Session Endpoint Message.
 /// bytes[0] is type, bytes[1..] is data.
-enum SessionType {
+pub(crate) enum EndpointMessage {
     /// type is 1u8.
-    Key(Vec<u8>),
+    Ping,
     /// type is 2u8.
-    Data(PeerId, PeerId, Vec<u8>),
+    Pong,
     /// type is 3u8.
     DHT(DHT),
     /// type is 4u8.
@@ -489,57 +55,90 @@ enum SessionType {
     /// type is 5u8.
     HoleConnect,
     /// type is 6u8.
-    Ping,
+    Key(Vec<u8>),
     /// type is 7u8.
-    Pong,
+    Data(Vec<u8>),
     /// type is 8u8.
-    StableConnect(PeerId, Vec<u8>),
+    StableConnect(Vec<u8>),
     /// type is 9u8.
-    StableResult(PeerId, bool, Vec<u8>),
+    StableResult(bool, Vec<u8>),
+    /// type is 10u8
+    RelayData(PeerId, PeerId, Vec<u8>),
+    /// type is 11u8.
+    RelayStableConnect(RemotePublic, PeerId, Vec<u8>),
+    /// type is 12u8.
+    RelayStableResult(PeerId, PeerId, Vec<u8>),
 }
 
-impl SessionType {
-    fn to_bytes(self) -> Vec<u8> {
+impl EndpointMessage {
+    pub fn to_bytes(self) -> Vec<u8> {
         let mut bytes = vec![0u8];
         match self {
-            SessionType::Key(mut data) => {
+            EndpointMessage::Ping => {
                 bytes[0] = 1u8;
+            }
+            EndpointMessage::Pong => {
+                bytes[0] = 2u8;
+            }
+            EndpointMessage::DHT(dht) => {
+                bytes[0] = 3u8;
+                bytes.append(&mut dht.to_bytes());
+            }
+            EndpointMessage::Hole(hole) => {
+                bytes[0] = 4u8;
+                bytes.push(hole.to_byte());
+            }
+            EndpointMessage::HoleConnect => {
+                bytes[0] = 5u8;
+            }
+            EndpointMessage::Key(mut data) => {
+                bytes[0] = 6u8;
                 bytes.append(&mut data);
             }
-            SessionType::Data(p1_id, p2_id, mut data) => {
-                bytes[0] = 2u8;
+            EndpointMessage::Data(mut data) => {
+                bytes[0] = 7u8;
+                bytes.append(&mut data);
+            }
+            EndpointMessage::StableConnect(mut data) => {
+                bytes[0] = 8u8;
+                bytes.append(&mut data);
+            }
+            EndpointMessage::StableResult(ok, mut data) => {
+                bytes[0] = 9u8;
+                bytes.push(if ok { 1u8 } else { 0u8 });
+                bytes.append(&mut data);
+            }
+            EndpointMessage::RelayData(p1_id, p2_id, mut data) => {
+                bytes[0] = 10u8;
                 bytes.append(&mut p1_id.to_bytes());
                 bytes.append(&mut p2_id.to_bytes());
                 bytes.append(&mut data);
             }
-            SessionType::DHT(dht) => {
-                bytes[0] = 3u8;
-                bytes.append(&mut dht.to_bytes());
-            }
-            SessionType::Hole(hole) => {
-                bytes[0] = 4u8;
-                bytes.push(hole.to_byte());
-            }
-            SessionType::HoleConnect => {
-                bytes[0] = 5u8;
-            }
-            SessionType::Ping => {
-                bytes[0] = 6u8;
-            }
-            SessionType::Pong => {
-                bytes[0] = 7u8;
-            }
-            SessionType::StableConnect(p_id, mut data) => {
-                bytes[0] = 8u8;
-                bytes.append(&mut p_id.to_bytes());
+            EndpointMessage::RelayStableConnect(p1_peer, p2_id, mut data) => {
+                bytes[0] = 11u8;
+                let mut peer_bytes = p1_peer.to_bytes();
+                bytes.extend(&(peer_bytes.len() as u32).to_le_bytes()[..]);
+                bytes.append(&mut peer_bytes);
+                bytes.append(&mut p2_id.to_bytes());
                 bytes.append(&mut data);
             }
-            SessionType::StableResult(p_id, ok, mut data) => {
-                bytes[0] = 9u8;
-                bytes.append(&mut p_id.to_bytes());
-                bytes.push(if ok { 1u8 } else { 0u8 });
+            EndpointMessage::RelayStableResult(p1_id, p2_id, mut data) => {
+                bytes[0] = 12u8;
+                bytes.append(&mut p1_id.to_bytes());
+                bytes.append(&mut p2_id.to_bytes());
                 bytes.append(&mut data);
             }
+        }
+
+        if bytes.len() < 20 {
+            debug!("DEBUG: SEND REMOTE BYTES: {} {}", bytes[0], bytes.len());
+        } else {
+            debug!(
+                "DEBUG: SEND REMOTE BYTES: {} {} {:?}",
+                bytes[0],
+                bytes.len(),
+                &bytes[0..20]
+            );
         }
 
         bytes
@@ -552,47 +151,60 @@ impl SessionType {
 
         let t: Vec<u8> = bytes.drain(0..1).collect();
         match t[0] {
-            1u8 => Ok(SessionType::Key(bytes)),
-            2u8 => {
-                if bytes.len() < PEER_ID_LENGTH + PEER_ID_LENGTH {
-                    return Err(());
-                }
-                let p1 = PeerId::from_bytes(&bytes[0..PEER_ID_LENGTH])?;
-                let p2 =
-                    PeerId::from_bytes(&bytes[PEER_ID_LENGTH..PEER_ID_LENGTH + PEER_ID_LENGTH])?;
-                let _ = bytes.drain(0..PEER_ID_LENGTH + PEER_ID_LENGTH);
-                Ok(SessionType::Data(p1, p2, bytes))
-            }
+            1u8 => Ok(EndpointMessage::Ping),
+            2u8 => Ok(EndpointMessage::Pong),
             3u8 => {
                 let dht = DHT::from_bytes(&bytes)?;
-                Ok(SessionType::DHT(dht))
+                Ok(EndpointMessage::DHT(dht))
             }
             4u8 => {
                 if bytes.len() != 1 {
                     return Err(());
                 }
                 let hole = Hole::from_byte(bytes[0])?;
-                Ok(SessionType::Hole(hole))
+                Ok(EndpointMessage::Hole(hole))
             }
-            5u8 => Ok(SessionType::HoleConnect),
-            6u8 => Ok(SessionType::Ping),
-            7u8 => Ok(SessionType::Pong),
-            8u8 => {
-                if bytes.len() < PEER_ID_LENGTH {
-                    return Err(());
-                }
-                let p = PeerId::from_bytes(&bytes[0..PEER_ID_LENGTH])?;
-                let _ = bytes.drain(0..PEER_ID_LENGTH);
-                Ok(SessionType::StableConnect(p, bytes))
-            }
+            5u8 => Ok(EndpointMessage::HoleConnect),
+            6u8 => Ok(EndpointMessage::Key(bytes)),
+            7u8 => Ok(EndpointMessage::Data(bytes)),
+            8u8 => Ok(EndpointMessage::StableConnect(bytes)),
             9u8 => {
-                if bytes.len() < PEER_ID_LENGTH + 1 {
+                if bytes.len() < 1 {
                     return Err(());
                 }
-                let p = PeerId::from_bytes(&bytes[0..PEER_ID_LENGTH])?;
-                let ok = bytes[PEER_ID_LENGTH] == 1u8;
-                let _ = bytes.drain(0..PEER_ID_LENGTH + 1);
-                Ok(SessionType::StableResult(p, ok, bytes))
+                let ok = bytes.drain(0..1).as_slice()[0] == 1u8;
+                Ok(EndpointMessage::StableResult(ok, bytes))
+            }
+            10u8 => {
+                if bytes.len() < PEER_ID_LENGTH * 2 {
+                    return Err(());
+                }
+                let p1 = PeerId::from_bytes(&bytes.drain(0..PEER_ID_LENGTH).as_slice())?;
+                let p2 = PeerId::from_bytes(&bytes.drain(0..PEER_ID_LENGTH).as_slice())?;
+                Ok(EndpointMessage::RelayData(p1, p2, bytes))
+            }
+            11u8 => {
+                if bytes.len() < 4 {
+                    return Err(());
+                }
+                let mut peer_len_bytes = [0u8; 4];
+                peer_len_bytes.copy_from_slice(bytes.drain(0..4).as_slice());
+                let peer_len = u32::from_le_bytes(peer_len_bytes) as usize;
+                if bytes.len() < peer_len + PEER_ID_LENGTH {
+                    return Err(());
+                }
+                let peer =
+                    RemotePublic::from_bytes(bytes.drain(0..peer_len).collect()).map_err(|_| ())?;
+                let p2 = PeerId::from_bytes(&bytes.drain(0..PEER_ID_LENGTH).as_slice())?;
+                Ok(EndpointMessage::RelayStableConnect(peer, p2, bytes))
+            }
+            12u8 => {
+                if bytes.len() < PEER_ID_LENGTH * 2 {
+                    return Err(());
+                }
+                let p1 = PeerId::from_bytes(&bytes.drain(0..PEER_ID_LENGTH).as_slice())?;
+                let p2 = PeerId::from_bytes(&bytes.drain(0..PEER_ID_LENGTH).as_slice())?;
+                Ok(EndpointMessage::RelayStableResult(p1, p2, bytes))
             }
             _ => Err(()),
         }
@@ -621,10 +233,540 @@ impl RemotePublic {
         Ok(Self(keypair, peer))
     }
 
+    pub fn ref_to_bytes(key: &Keypair, peer: &Peer) -> Vec<u8> {
+        let mut bytes = vec![];
+        bytes.append(&mut peer.to_bytes());
+        bytes.append(&mut key.to_bytes());
+        bytes
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = vec![];
         bytes.append(&mut self.1.to_bytes());
         bytes.append(&mut self.0.to_bytes());
         bytes
+    }
+}
+
+pub(crate) enum ConnectType {
+    Direct(Sender<EndpointStreamMessage>),
+    Relay(Vec<Sender<SessionSendMessage>>),
+}
+
+pub(crate) struct Session {
+    pub my_sender: Sender<SessionSendMessage>,
+    pub my_peer_id: PeerId,
+    pub remote_peer_id: PeerId,
+    pub remote_peer: Peer,
+    pub endpoint_sender: Sender<EndpointSendMessage>,
+    pub out_sender: Sender<ReceiveMessage>,
+    pub connect: ConnectType,
+    pub session_receiver: Receiver<SessionSendMessage>,
+    pub session_key: SessionKey,
+    pub key: Arc<Keypair>,
+    pub peer: Arc<Peer>,
+    pub peer_list: Arc<RwLock<PeerList>>,
+    pub transports: Arc<RwLock<HashMap<TransportType, Sender<EndpointSendMessage>>>>,
+    pub is_recv_data: bool,
+    pub is_relay_data: bool,
+    pub is_stable: bool,
+}
+
+pub(crate) async fn relay_stable(session: Session) -> Result<()> {
+    info!("start stable connection.");
+    let _ = future::race(session.listen_outside(), session.robust()).await;
+    session
+        .peer_list
+        .write()
+        .await
+        .stable_leave(&session.remote_peer_id);
+
+    let _ = session
+        .out_sender
+        .send(ReceiveMessage::StableLeave(session.remote_peer_id))
+        .await;
+
+    // Better tell listener, it is not need.
+
+    debug!("Relay stable session broke: {:?}", session.remote_peer_id);
+
+    Ok(())
+}
+
+pub(crate) async fn direct_dht(
+    mut session: Session,
+    stream_receiver: Receiver<EndpointStreamMessage>,
+) -> Result<()> {
+    info!("start DHT connection.");
+    let upgrade = if session.is_direct() {
+        future::race(
+            session.listen_outside(),
+            session.listen_endpoint(&stream_receiver),
+        )
+        .await
+    } else {
+        Err(std::io::Error::new(std::io::ErrorKind::Other, "PANIC"))
+    };
+
+    info!("over DHT connection.");
+
+    let info = session
+        .peer_list
+        .write()
+        .await
+        .peer_remove(&session.remote_peer_id);
+
+    if upgrade.is_ok() && info.is_some() {
+        // stable connection.
+        session.is_recv_data = true;
+        session.is_stable = true;
+        let (my_sender, peer_info) = info.unwrap();
+        session
+            .peer_list
+            .write()
+            .await
+            .stable_add(session.remote_peer_id, my_sender, peer_info);
+
+        info!("start stable connection.");
+        let _ = future::race(
+            session.listen_outside(),
+            session.stable_listen_endpoint(&stream_receiver),
+        )
+        .await;
+
+        session
+            .peer_list
+            .write()
+            .await
+            .stable_leave(&session.remote_peer_id);
+
+        let _ = session
+            .out_sender
+            .send(ReceiveMessage::StableLeave(session.remote_peer_id))
+            .await;
+    }
+
+    match session.connect {
+        ConnectType::Direct(sender) => {
+            let _ = sender.send(EndpointStreamMessage::Close).await;
+        }
+        _ => {}
+    }
+
+    debug!("Session broke: {:?}", session.remote_peer_id);
+
+    Ok(())
+}
+
+impl Session {
+    fn is_direct(&self) -> bool {
+        match self.connect {
+            ConnectType::Direct(..) => true,
+            _ => false,
+        }
+    }
+
+    async fn direct(&self, msg: EndpointMessage) -> Result<()> {
+        match &self.connect {
+            ConnectType::Direct(sender) => {
+                let _ = sender
+                    .send(EndpointStreamMessage::Bytes(msg.to_bytes()))
+                    .await;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn relay(&self, msg: SessionSendMessage) -> Result<()> {
+        match &self.connect {
+            ConnectType::Relay(senders) => {
+                let _ = senders[0].send(msg).await;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn listen_outside(&self) -> Result<()> {
+        loop {
+            match self.session_receiver.recv().await {
+                Ok(SessionSendMessage::Data(data)) => {
+                    debug!(
+                        "Got outside data {:?} to remote: {:?}",
+                        data.len(),
+                        self.remote_peer_id
+                    );
+                    let e_data = self.session_key.encrypt(data);
+
+                    if self.is_direct() {
+                        self.direct(EndpointMessage::Data(e_data)).await?;
+                    } else {
+                        self.relay(SessionSendMessage::RelayData(
+                            self.my_peer_id,
+                            self.remote_peer_id,
+                            e_data,
+                        ))
+                        .await?;
+                    }
+                }
+                Ok(SessionSendMessage::StableConnect(data)) => {
+                    debug!("Session recv stable connect to: {:?}", self.remote_peer_id);
+                    // only dht connection, not relay has this stable connect.
+                    self.direct(EndpointMessage::StableConnect(data)).await?;
+                }
+                Ok(SessionSendMessage::StableResult(is_ok, data)) => {
+                    debug!(
+                        "Session recv stable result to: {:?}, {}",
+                        self.remote_peer_id, is_ok
+                    );
+
+                    // only dht connection, not relay has this stable connect result.
+                    self.direct(EndpointMessage::StableResult(is_ok, data))
+                        .await?;
+
+                    if !self.is_stable && is_ok {
+                        // upgrade session to stable.
+                        info!("Upgrade to stable connection controller");
+                        return Ok(());
+                    }
+                }
+                Ok(SessionSendMessage::RelayData(from, to, e_data)) => {
+                    if from == self.remote_peer_id && to == self.my_peer_id {
+                        if let Ok(data) = self.session_key.decrypt(e_data) {
+                            if self.is_recv_data {
+                                self.out_sender
+                                    .send(ReceiveMessage::Data(from, data))
+                                    .await
+                                    .expect("Session to Outside (Data)");
+                            } else {
+                                debug!("Permissioned: not accept data.")
+                            }
+                        }
+                    } else {
+                        if self.is_direct() {
+                            self.direct(EndpointMessage::RelayData(from, to, e_data))
+                                .await?;
+                        } else {
+                            self.relay(SessionSendMessage::RelayData(from, to, e_data))
+                                .await?;
+                        }
+                    }
+                }
+                Ok(SessionSendMessage::RelayStableConnect(from_peer, to, data)) => {
+                    if self.is_direct() {
+                        self.direct(EndpointMessage::RelayStableConnect(from_peer, to, data))
+                            .await?;
+                    } else {
+                        self.relay(SessionSendMessage::RelayStableConnect(from_peer, to, data))
+                            .await?;
+                    }
+                }
+                Ok(SessionSendMessage::RelayStableResult(from, to, data)) => {
+                    if self.is_direct() {
+                        self.direct(EndpointMessage::RelayStableResult(from, to, data))
+                            .await?;
+                    } else {
+                        self.relay(SessionSendMessage::RelayStableResult(from, to, data))
+                            .await?;
+                    }
+                }
+                Ok(SessionSendMessage::Close) => {
+                    debug!("Got outside close it");
+                    break;
+                }
+                Err(_e) => break,
+            }
+        }
+
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "outside recever over",
+        ))
+    }
+
+    async fn listen_endpoint(
+        &self,
+        stream_receiver: &Receiver<EndpointStreamMessage>,
+    ) -> Result<()> {
+        loop {
+            match stream_receiver.recv().await {
+                Ok(EndpointStreamMessage::Handshake(_)) => {
+                    panic!("only send to endpoint.");
+                }
+                Ok(EndpointStreamMessage::Bytes(bytes)) => {
+                    if bytes.len() < 1 {
+                        continue;
+                    }
+                    if bytes.len() < 20 {
+                        debug!("DEBUG: RECV REMOTE BYTES: {} {}", bytes[0], bytes.len());
+                    } else {
+                        debug!(
+                            "DEBUG: RECV REMOTE BYTES: {} {} {:?}",
+                            bytes[0],
+                            bytes.len(),
+                            &bytes[0..20]
+                        );
+                    }
+                    let t_type_byte = bytes[0].clone();
+                    let t = EndpointMessage::from_bytes(bytes);
+                    if t.is_err() {
+                        debug!(
+                            "Debug: Error Serialize EndpointMessage type is {}",
+                            t_type_byte
+                        );
+                        continue;
+                    }
+
+                    match t.unwrap() {
+                        EndpointMessage::Ping => {
+                            self.direct(EndpointMessage::Pong).await?;
+                        }
+                        EndpointMessage::Pong => {
+                            debug!("Receive Poing");
+                            // TODO Heartbeat Ping/Pong
+                        }
+                        EndpointMessage::DHT(DHT(peers)) => {
+                            if peers.len() > 0 {
+                                let remote_bytes =
+                                    RemotePublic::ref_to_bytes(&self.key.public(), &self.peer);
+
+                                for p in peers {
+                                    if p.id() != &self.my_peer_id
+                                        && !self.peer_list.read().await.contains(p.id())
+                                    {
+                                        if let Some(sender) =
+                                            self.transports.read().await.get(p.transport())
+                                        {
+                                            let _ = sender
+                                                .send(EndpointSendMessage::Connect(
+                                                    *p.addr(),
+                                                    remote_bytes.clone(),
+                                                    None,
+                                                ))
+                                                .await;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        EndpointMessage::Hole(..) => {
+                            todo!();
+                        }
+                        EndpointMessage::HoleConnect => {
+                            todo!();
+                        }
+                        EndpointMessage::Key(_bytes) => {
+                            debug!("TODO session rebuild new encrypt key.");
+                            // if !session_key.is_ok() {
+                            //     if !session_key.in_bytes(bytes) {
+                            //         server_send
+                            //             .send(SessionReceiveEndpointMessage::Close(remote_peer_id))
+                            //             .await
+                            //             .expect("Session to Server (Key Close)");
+                            //         endpoint_sender
+                            //             .send(EndpointStreamMessage::Close)
+                            //             .await
+                            //             .expect("Session to Endpoint (Key Close)");
+                            //         break;
+                            //     }
+
+                            //     endpoint_sender
+                            //         .send(EndpointStreamMessage::Bytes(
+                            //             EndpointMessage::Key(session_key.out_bytes()).to_bytes(),
+                            //         ))
+                            //         .await
+                            //         .expect("Session to Endpoint (Bytes)");
+                            // }
+
+                            // while !buffers.is_empty() {
+                            //     let (peer_id, bytes) = buffers.pop().unwrap();
+                            //     let e_data = session_key.encrypt(bytes);
+                            //     let data =
+                            //         EndpointMessage::Data(my_peer_id, peer_id, e_data).to_bytes();
+                            //     endpoint_sender
+                            //         .send(EndpointStreamMessage::Bytes(data))
+                            //         .await
+                            //         .expect("Session to Endpoint (Bytes)");
+                            // }
+
+                            // while !receiver_buffers.is_empty() {
+                            //     let e_data = receiver_buffers.pop().unwrap();
+                            //     let d_data = session_key.decrypt(e_data);
+                            //     if d_data.is_ok() {
+                            //         out_sender
+                            //             .send(ReceiveMessage::Data(remote_peer_id, d_data.unwrap()))
+                            //             .await
+                            //             .expect("Session to Outside (Data)");
+                            //     }
+                            // }
+                        }
+                        EndpointMessage::Data(e_data) => {
+                            if let Ok(data) = self.session_key.decrypt(e_data) {
+                                if self.is_recv_data {
+                                    self.out_sender
+                                        .send(ReceiveMessage::Data(self.remote_peer_id, data))
+                                        .await
+                                        .expect("Session to Outside (Data)");
+                                } else {
+                                    debug!("Permissioned: not accept data.")
+                                }
+                            }
+                        }
+                        EndpointMessage::StableConnect(data) => {
+                            debug!("Recv stable connect from: {:?}", self.remote_peer_id);
+                            self.out_sender
+                                .send(ReceiveMessage::StableConnect(self.remote_peer_id, data))
+                                .await
+                                .expect("Session to Outside (Data)");
+                        }
+                        EndpointMessage::StableResult(is_ok, data) => {
+                            debug!(
+                                "Recv stable connect result {} from: {:?}",
+                                is_ok, self.remote_peer_id
+                            );
+                            self.out_sender
+                                .send(ReceiveMessage::StableResult(
+                                    self.remote_peer_id,
+                                    is_ok,
+                                    data,
+                                ))
+                                .await
+                                .expect("Session to Outside (Data)");
+
+                            if !self.is_stable && is_ok {
+                                // upgrade to stable connection.
+                                info!("Upgrade to stable connection controller");
+                                return Ok(());
+                            }
+                        }
+                        EndpointMessage::RelayData(from, to, data) => {
+                            if to == self.my_peer_id {
+                                // send to from's session.
+                                if let Some((sender, is_it)) =
+                                    self.peer_list.read().await.get(&from)
+                                {
+                                    if is_it {
+                                        let _ = sender
+                                            .send(SessionSendMessage::RelayData(from, to, data));
+                                    }
+                                }
+                            } else {
+                                // send to next relay
+                                if let Some((sender, _)) = self.peer_list.read().await.get(&to) {
+                                    let _ =
+                                        sender.send(SessionSendMessage::RelayData(from, to, data));
+                                }
+                            }
+                        }
+                        EndpointMessage::RelayStableConnect(from, to, data) => {
+                            if to == self.my_peer_id {
+                                // send to outside.
+                                self.out_sender
+                                    .send(ReceiveMessage::StableConnect(*from.1.id(), data))
+                                    .await
+                                    .expect("Session to Outside (Data)");
+                                // save to tmp_stable.
+                                self.peer_list.write().await.add_tmp_stable(from);
+                            } else {
+                                // send to next relay
+                                if let Some((sender, _)) = self.peer_list.read().await.get(&to) {
+                                    let _ = sender.send(SessionSendMessage::RelayStableConnect(
+                                        from, to, data,
+                                    ));
+                                }
+                            }
+                        }
+                        EndpointMessage::RelayStableResult(from, to, e_data) => {
+                            if to == self.my_peer_id {
+                                // create from's session.
+                                // only happen when the connection by self.
+                                let mut peer_list_lock = self.peer_list.write().await;
+                                if let Some(remote_peer) = peer_list_lock.tmp_stable(&from) {
+                                    let session_key: SessionKey =
+                                        self.key.key.session_key(&self.key, &remote_peer.0);
+
+                                    if let Ok(mut data) = self.session_key.decrypt(e_data) {
+                                        let is_ok = data.drain(0..1).as_slice()[0] == 1u8;
+                                        let _ = self
+                                            .out_sender
+                                            .send(ReceiveMessage::StableResult(from, is_ok, data))
+                                            .await;
+
+                                        if is_ok {
+                                            let (session_sender, session_receiver) =
+                                                new_session_send_channel();
+
+                                            peer_list_lock.stable_add(
+                                                to,
+                                                session_sender.clone(),
+                                                remote_peer.1,
+                                            );
+
+                                            smol::spawn(relay_stable(Session {
+                                                my_sender: session_sender,
+                                                my_peer_id: self.my_peer_id.clone(),
+                                                remote_peer_id: from,
+                                                remote_peer: remote_peer.1,
+                                                endpoint_sender: self.endpoint_sender.clone(),
+                                                out_sender: self.out_sender.clone(),
+                                                connect: ConnectType::Relay(vec![self
+                                                    .my_sender
+                                                    .clone()]),
+                                                session_receiver: session_receiver,
+                                                session_key: session_key,
+                                                key: self.key.clone(),
+                                                peer: self.peer.clone(),
+                                                peer_list: self.peer_list.clone(),
+                                                transports: self.transports.clone(),
+                                                is_recv_data: self.is_recv_data,
+                                                is_relay_data: self.is_relay_data,
+                                                is_stable: true,
+                                            }))
+                                            .detach();
+                                        }
+                                    }
+                                }
+                                drop(peer_list_lock);
+                            } else {
+                                // send to next relay
+                                if let Some((sender, _)) = self.peer_list.read().await.get(&to) {
+                                    let _ = sender
+                                        .send(SessionSendMessage::RelayData(from, to, e_data));
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(EndpointStreamMessage::Close) => break,
+                Err(_) => break,
+            }
+        }
+
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "transport recever over",
+        ))
+    }
+
+    async fn stable_listen_endpoint(
+        &self,
+        stream_receiver: &Receiver<EndpointStreamMessage>,
+    ) -> Result<()> {
+        if self.is_direct() {
+            let _ = future::race(self.robust(), self.listen_endpoint(stream_receiver)).await;
+        } else {
+            let _ = self.robust().await;
+        }
+
+        Ok(())
+    }
+
+    async fn robust(&self) -> Result<()> {
+        debug!("waiting 10s stoping...");
+        smol::Timer::after(std::time::Duration::from_secs(10)).await;
+        debug!("10s stoped");
+
+        Ok(())
     }
 }

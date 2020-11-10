@@ -50,7 +50,6 @@ impl Config {
     pub fn new(
         db_dir: PathBuf,
         addr: SocketAddr,
-        join_data: Vec<u8>,
         transport: String,
         white_list: Vec<SocketAddr>,
         black_list: Vec<IpAddr>,
