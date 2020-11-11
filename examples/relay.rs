@@ -24,7 +24,7 @@ fn main() {
 
         let mut config = Config::default(self_addr);
         config.permission = false; // Permissionless.
-        config.only_stable_data = true; // Receive all peer's data.
+        config.only_stable_data = true; // Only receive stable connected peer's data.
         config.db_dir = std::path::PathBuf::from(addr_str);
 
         let (peer_id, send, recv) = start(config).await.unwrap();
@@ -59,7 +59,7 @@ fn main() {
             match message {
                 ReceiveMessage::Data(peer_id, bytes) => {
                     println!(
-                        "Recv permissionless data from: {}, {}-{:?}, start build a stable connection",
+                        "Recv permissioned data from: {}, {}-{:?}, start build a stable connection",
                         peer_id.short_show(),
                         bytes.len(),
                         bytes

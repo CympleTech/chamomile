@@ -424,15 +424,27 @@ impl Session {
                     // only dht connection, not relay has this stable connect.
                     self.direct(EndpointMessage::StableConnect(data)).await?;
                 }
-                Ok(SessionSendMessage::StableResult(is_ok, data)) => {
+                Ok(SessionSendMessage::StableResult(is_ok, mut data)) => {
                     debug!(
                         "Session recv stable result to: {:?}, {}",
                         self.remote_peer_id, is_ok
                     );
 
-                    // only dht connection, not relay has this stable connect result.
-                    self.direct(EndpointMessage::StableResult(is_ok, data))
+                    if self.is_direct() {
+                        self.direct(EndpointMessage::StableResult(is_ok, data))
+                            .await?;
+                    } else {
+                        // when remote lost this stable connection.
+                        let mut c_data = if is_ok { vec![1u8] } else { vec![0u8] };
+                        c_data.append(&mut data);
+                        let e_data = self.session_key.encrypt(c_data);
+                        self.relay(SessionSendMessage::RelayStableResult(
+                            RemotePublic(self.key.public(), *self.peer.clone()),
+                            self.remote_peer_id,
+                            e_data,
+                        ))
                         .await?;
+                    }
 
                     if !self.is_stable && is_ok {
                         // upgrade session to stable.

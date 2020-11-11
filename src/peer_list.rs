@@ -127,21 +127,21 @@ impl PeerList {
     pub fn get_dht_help(&self, peer_id: &PeerId) -> Vec<Peer> {
         // TODO better closest peers
 
-        let mut peers: HashMap<PeerId, &Peer> = HashMap::new();
+        let mut peers: HashMap<&PeerId, &Peer> = HashMap::new();
         for key in self.dhts.keys().into_iter() {
             if &key == peer_id {
                 continue;
             }
-            if let Some((_, KadValue(_, peer), is_it)) = self.dhts.search(&peer_id) {
+            if let Some((k, KadValue(_, peer), is_it)) = self.dhts.search(&key) {
                 if is_it {
-                    peers.insert(key, peer);
+                    peers.insert(k, peer);
                 }
             }
         }
 
         for (p, v) in self.stables.iter() {
             if p != peer_id {
-                peers.insert(*p, &v.1);
+                peers.insert(p, &v.1);
             }
         }
 

@@ -9,9 +9,12 @@
 - `cargo run --example permissionless 0.0.0.0:8002 0.0.0.0:8000`
 
 ## Relay test.
-- `cargo run --example relay 192.168.xx.xx:8000` this ip is your LAN address, it will do relay work.
-- `cargo run --example relay 127.0.0.1:8001 192.168.xx.xx:8000` start waiting stable connected by relay.
-- `cargo run --example relay 127.0.0.1:8002 192.168.xx.xx:8000 0xNEEDCONNECTEDPEERID` 0x.. is above's network pper id which want to build a stable connection.
+- `cargo run --example relay 192.168.xx.xx:8000`
+  - this ip is your LAN address, it will do relay work.
+- `cargo run --example relay 127.0.0.1:8001 192.168.xx.xx:8000`
+  - start waiting stable connected by relay.
+- `cargo run --example relay 127.0.0.1:8002 192.168.xx.xx:8000 XX..`
+  - XX.. is above's network peer id will connected it.
 
 ## features
 - Support build a robust stable connection between two peers on the p2p network.
