@@ -1,4 +1,3 @@
-use rckad::KadTree;
 use smol::{channel::Sender, fs};
 use std::collections::HashMap;
 use std::io::BufRead;
@@ -8,6 +7,7 @@ use std::path::PathBuf;
 
 use chamomile_types::types::PeerId;
 
+use crate::kad::{KadTree, KadValue};
 use crate::peer::Peer;
 use crate::session::{RemotePublic, SessionSendMessage};
 
@@ -15,9 +15,11 @@ use crate::session::{RemotePublic, SessionSendMessage};
 /// contains: dhts(DHT) & tmp_dhts(HashMap)
 pub(crate) struct PeerList {
     save_path: PathBuf,
-    dhts: KadTree<PeerId, Option<(Sender<SessionSendMessage>, Peer)>>,
-    stables: HashMap<PeerId, (Sender<SessionSendMessage>, Peer)>,
-    tmp_stables: HashMap<PeerId, RemotePublic>,
+    /// PeerId => KadValue(Sender<SessionSendmessage>, Peer)
+    dhts: KadTree,
+    /// PeerId => KadValue(Sender<SessionSendMessage>, Peer)
+    stables: HashMap<PeerId, KadValue>,
+    tmp_stables: HashMap<PeerId, Option<RemotePublic>>,
     whites: (Vec<PeerId>, Vec<SocketAddr>),
     blacks: (Vec<PeerId>, Vec<IpAddr>),
     bootstraps: Vec<SocketAddr>,
@@ -54,7 +56,7 @@ impl PeerList {
                 PeerList {
                     save_path,
                     bootstraps,
-                    dhts: KadTree::new(peer_id, None),
+                    dhts: KadTree::new(peer_id),
                     stables: HashMap::new(),
                     tmp_stables: HashMap::new(),
                     whites: whites,
@@ -64,7 +66,7 @@ impl PeerList {
             Err(_) => PeerList {
                 save_path,
                 bootstraps,
-                dhts: KadTree::new(peer_id, None),
+                dhts: KadTree::new(peer_id),
                 stables: HashMap::new(),
                 tmp_stables: HashMap::new(),
                 whites: whites,
@@ -103,8 +105,7 @@ impl PeerList {
     pub fn dht_get(&self, peer_id: &PeerId) -> Option<(&Sender<SessionSendMessage>, bool)> {
         self.dhts
             .search(peer_id)
-            .map(|(_k, ref v, is_it)| v.as_ref().map(|vv| (&vv.0, is_it)))
-            .flatten()
+            .map(|(_k, v, is_it)| (&v.0, is_it))
     }
 
     /// search in stable list.
@@ -131,7 +132,7 @@ impl PeerList {
             if &key == peer_id {
                 continue;
             }
-            if let Some((_, Some((_, peer)), is_it)) = self.dhts.search(&peer_id) {
+            if let Some((_, KadValue(_, peer), is_it)) = self.dhts.search(&peer_id) {
                 if is_it {
                     peers.insert(key, peer);
                 }
@@ -169,7 +170,7 @@ impl PeerList {
             .and_then(|(_k, _v, is_it)| if is_it { Some(()) } else { None })
             .is_none()
         {
-            self.dhts.add(peer_id, Some((sender, peer)));
+            self.dhts.add(peer_id, KadValue(sender, peer));
             true
         } else {
             false
@@ -179,7 +180,7 @@ impl PeerList {
     /// Step:
     /// 1. remove from kad;
     pub fn peer_remove(&mut self, peer_id: &PeerId) -> Option<(Sender<SessionSendMessage>, Peer)> {
-        self.dhts.remove(peer_id).and_then(|v| v)
+        self.dhts.remove(peer_id).map(|v| (v.0, v.1))
     }
 
     /// Disconnect Step:
@@ -203,7 +204,7 @@ impl PeerList {
     /// 2. remove from stables.
     pub fn stable_remove(&mut self, peer_id: &PeerId) -> Option<Sender<SessionSendMessage>> {
         self.remove_white_peer(peer_id);
-        self.stables.remove(peer_id).map(|(s, _)| s)
+        self.stables.remove(peer_id).map(|v| v.0)
     }
 
     /// Peerl leave Step:
@@ -217,22 +218,22 @@ impl PeerList {
     /// 2. add to stables;
     pub fn stable_add(&mut self, peer_id: PeerId, sender: Sender<SessionSendMessage>, peer: Peer) {
         match self.stables.get_mut(&peer_id) {
-            Some((s, p)) => {
+            Some(KadValue(s, p)) => {
                 let _ = s.try_send(SessionSendMessage::Close);
                 *s = sender;
                 *p = peer;
             }
             None => {
-                self.stables.insert(peer_id, (sender, peer));
+                self.stables.insert(peer_id, KadValue(sender, peer));
             }
         }
     }
 
-    pub fn add_tmp_stable(&mut self, peer: RemotePublic) {
-        self.tmp_stables.insert(*peer.1.id(), peer);
+    pub fn add_tmp_stable(&mut self, peer_id: PeerId, peer: Option<RemotePublic>) {
+        self.tmp_stables.insert(peer_id, peer);
     }
 
-    pub fn tmp_stable(&mut self, peer_id: &PeerId) -> Option<RemotePublic> {
+    pub fn tmp_stable(&mut self, peer_id: &PeerId) -> Option<Option<RemotePublic>> {
         self.tmp_stables.remove(peer_id)
     }
 }

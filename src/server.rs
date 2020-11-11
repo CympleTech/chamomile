@@ -237,6 +237,11 @@ pub async fn start(
             match self_recv.recv().await {
                 Ok(SendMessage::StableConnect(to, socket, data)) => {
                     debug!("Send stable connect to: {:?}", to);
+                    if to == peer_id {
+                        info!("Nerver here, stable connect to self.");
+                        continue;
+                    }
+
                     if peer_list.read().await.stable_contains(&to) {
                         debug!("Aready stable connected");
                         out_send
@@ -245,6 +250,7 @@ pub async fn start(
                             .expect("Server to Outside (Stable Result)");
                         continue;
                     }
+
                     if let Some(addr) = socket {
                         endpoint_send
                             .send(EndpointSendMessage::Connect(
@@ -255,9 +261,11 @@ pub async fn start(
                             .await
                             .expect("Server to Endpoint (Connect)");
                     } else {
-                        if let Some((sender, is_it)) = peer_list.read().await.get(&to) {
+                        let is_tmp = if let Some((sender, is_it)) = peer_list.read().await.get(&to)
+                        {
                             if is_it {
                                 let _ = sender.send(SessionSendMessage::StableConnect(data)).await;
+                                false
                             } else {
                                 let _ = sender
                                     .send(SessionSendMessage::RelayStableConnect(
@@ -266,8 +274,104 @@ pub async fn start(
                                         data,
                                     ))
                                     .await;
+                                true
                             }
+                        } else {
+                            false
+                        };
+
+                        if is_tmp {
+                            // save to tmp_stable.
+                            peer_list.write().await.add_tmp_stable(to, None);
                         }
+                    }
+                }
+                Ok(SendMessage::StableResult(to, is_ok, is_force, data)) => {
+                    debug!("Send stable result {} to: {:?}", is_ok, to);
+                    if to == peer_id {
+                        info!("Nerver here, stable result to self.");
+                        continue;
+                    }
+
+                    let is_sender = if let Some((sender, is_it)) = peer_list.read().await.get(&to) {
+                        debug!("Got peer to send stable result.");
+                        if is_ok || !is_force {
+                            debug!("ok to send.");
+                            if is_it {
+                                debug!("ok to send directly.");
+                                let _ = sender
+                                    .send(SessionSendMessage::StableResult(is_ok, data))
+                                    .await;
+                                None
+                            } else {
+                                debug!("ok to send relay.");
+                                Some((sender.clone(), data))
+                            }
+                        } else if is_force && is_it {
+                            let _ = sender.send(SessionSendMessage::Close).await;
+                            None
+                        } else {
+                            Some((sender.clone(), data))
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some((sender, mut data)) = is_sender {
+                        debug!("start send by relay");
+                        let mut peer_list_lock = peer_list.write().await;
+                        let remote_pk_result = peer_list_lock.tmp_stable(&to);
+                        if remote_pk_result.is_none() {
+                            continue;
+                        }
+                        let remote_pk_value = remote_pk_result.unwrap(); // unwrap is safe, checked.
+                        if remote_pk_value.is_none() {
+                            continue;
+                        }
+                        let RemotePublic(remote_key, remote_peer) = remote_pk_value.unwrap(); // unwrap is safe, checked.
+                        let session_key: SessionKey = key.key.session_key(&key, &remote_key);
+                        let mut c_data = if is_ok { vec![1u8] } else { vec![0u8] };
+                        c_data.append(&mut data);
+                        let e_data = session_key.encrypt(c_data);
+                        let _ = sender
+                            .send(SessionSendMessage::RelayStableResult(
+                                RemotePublic(key.public(), peer_2.clone()),
+                                to,
+                                e_data,
+                            ))
+                            .await;
+
+                        if is_ok {
+                            // create a new stable session.
+                            // only happen when the connection by relay.
+                            let (session_sender, session_receiver) = new_session_send_channel();
+                            peer_list_lock.stable_add(
+                                to,
+                                session_sender.clone(),
+                                remote_peer.clone(),
+                            );
+
+                            smol::spawn(relay_stable(Session {
+                                my_sender: session_sender,
+                                my_peer_id: peer_id.clone(),
+                                remote_peer_id: to,
+                                remote_peer: remote_peer,
+                                endpoint_sender: endpoint_send.clone(),
+                                out_sender: out_send.clone(),
+                                connect: ConnectType::Relay(vec![sender]),
+                                session_receiver: session_receiver,
+                                session_key: session_key,
+                                key: key.clone(),
+                                peer: peer.clone(),
+                                peer_list: peer_list.clone(),
+                                transports: transports.clone(),
+                                is_recv_data: !only_stable_data,
+                                is_relay_data: !permission,
+                                is_stable: true,
+                            }))
+                            .detach();
+                        }
+                        drop(peer_list_lock);
                     }
                 }
                 Ok(SendMessage::StableDisconnect(peer_id)) => {
@@ -295,64 +399,6 @@ pub async fn start(
                         .send(EndpointSendMessage::Close(addr))
                         .await
                         .expect("Server to Endpoint (DisConnect)");
-                }
-                Ok(SendMessage::StableResult(to, is_ok, is_force, data)) => {
-                    debug!("Send stable result {} to: {:?}", is_ok, to);
-
-                    let is_sender = if let Some((sender, is_it)) = peer_list.read().await.get(&to) {
-                        debug!("Got peer to send stable result.");
-                        if is_ok || !is_force {
-                            debug!("ok to send.");
-                            if is_it {
-                                let _ = sender
-                                    .send(SessionSendMessage::StableResult(is_ok, data))
-                                    .await;
-                                None
-                            } else {
-                                Some(sender.clone())
-                            }
-                        } else if is_force && is_it {
-                            let _ = sender.send(SessionSendMessage::Close).await;
-                            None
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-
-                    if let Some(sender) = is_sender {
-                        let mut peer_list_lock = peer_list.write().await;
-                        // create a new stable session.
-                        // only happen when the connection by relay.
-                        if let Some(remote_peer) = peer_list_lock.tmp_stable(&to) {
-                            let (session_sender, session_receiver) = new_session_send_channel();
-
-                            let session_key: SessionKey = key.key.session_key(&key, &remote_peer.0);
-                            peer_list_lock.stable_add(to, session_sender.clone(), remote_peer.1);
-
-                            smol::spawn(relay_stable(Session {
-                                my_sender: session_sender,
-                                my_peer_id: peer_id.clone(),
-                                remote_peer_id: to,
-                                remote_peer: remote_peer.1,
-                                endpoint_sender: endpoint_send.clone(),
-                                out_sender: out_send.clone(),
-                                connect: ConnectType::Relay(vec![sender]),
-                                session_receiver: session_receiver,
-                                session_key: session_key,
-                                key: key.clone(),
-                                peer: peer.clone(),
-                                peer_list: peer_list.clone(),
-                                transports: transports.clone(),
-                                is_recv_data: !only_stable_data,
-                                is_relay_data: !permission,
-                                is_stable: true,
-                            }))
-                            .detach();
-                        }
-                        drop(peer_list_lock);
-                    }
                 }
                 Ok(SendMessage::Data(to, data)) => {
                     debug!(

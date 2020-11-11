@@ -3,7 +3,7 @@ use std::env::args;
 use std::net::SocketAddr;
 
 use chamomile::prelude::{start, Config, ReceiveMessage, SendMessage};
-use chamomile_types::types::Broadcast;
+use chamomile_types::types::{Broadcast, PeerId};
 use smol::Timer;
 use std::time::Duration;
 
@@ -51,14 +51,27 @@ fn main() {
             }
 
             let mut bytes = vec![];
-            for i in 0..8120u32 {
+            for i in 0..10u32 {
                 bytes.push(mod_reduce(i));
             }
-            println!("Will send bytes: {}-{:?}", bytes.len(), &bytes[0..20]);
-            send.send(SendMessage::Broadcast(Broadcast::Gossip, bytes))
+            //println!("Will send bytes: {}-{:?}", bytes.len(), &bytes[0..20]);
+            // send.send(SendMessage::Broadcast(Broadcast::Gossip, bytes))
+            //     .await
+            //     .expect("channel failure");
+
+            //START BUILD A STABLE CONNECTED.
+            // relay peer_id f1e5d319168ed41ba15e3b94ba278792bcd0c244c590cf1123a629b368a9bc9f
+            // direct peer_id 3e5730bf4a3a1234d97c6c6e5b90b15b7df480e3a269dacf0d50f828162f575e
+            let peer_id = PeerId::from_hex(
+                "3e5730bf4a3a1234d97c6c6e5b90b15b7df480e3a269dacf0d50f828162f575e",
+            )
+            .unwrap(); // test peer_id
+            send.send(SendMessage::StableConnect(peer_id, None, bytes))
                 .await
                 .expect("channel failure");
         }
+
+        let mut first_data = true;
 
         while let Ok(message) = recv.recv().await {
             match message {
@@ -67,13 +80,13 @@ fn main() {
                         "Recv permissionless data from: {}, {}-{:?}, start build a stable connection",
                         peer_id.short_show(),
                         bytes.len(),
-                        &bytes[0..20]
+                        bytes
                     );
 
-                    // START BUILD A STABLE CONNECTED.
-                    send.send(SendMessage::StableConnect(peer_id, None, vec![2, 2, 2, 2]))
-                        .await
-                        .expect("channel failure");
+                    if first_data {
+                        let _ = send.send(SendMessage::Data(peer_id, bytes)).await;
+                        first_data = false;
+                    }
                 }
                 ReceiveMessage::Stream(..) => {
                     panic!("Nerver here (stream)");
@@ -100,6 +113,10 @@ fn main() {
                         is_ok,
                         remark
                     );
+
+                    let _ = send
+                        .send(SendMessage::Data(peer_id, vec![1, 2, 3, 4, 5]))
+                        .await;
 
                     // TODO START BUILD A STREAM TO TEST.
                 }
