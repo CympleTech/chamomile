@@ -49,9 +49,11 @@ async fn run_listen(
     out_send: Sender<EndpointIncomingMessage>,
     endpoint: Arc<Mutex<TcpEndpoint>>,
 ) -> Result<()> {
-    let listener = TcpListener::bind(socket_addr)
-        .await
-        .expect("TCP listen failure!");
+    let listener = TcpListener::bind(socket_addr).await.map_err(|e| {
+        error!("Chamomile TCP listen {:?}", e);
+        std::io::Error::new(std::io::ErrorKind::Other, "TCP Listen")
+    })?;
+
     let mut incoming = listener.incoming();
 
     while let Some(Ok(stream)) = incoming.next().await {
@@ -78,6 +80,7 @@ async fn run_self_recv(
         match m {
             EndpointSendMessage::Connect(addr, mut data, is_stable) => {
                 if let Ok(mut stream) = TcpStream::connect(addr).await {
+                    info!("TCP connect to {:?}", addr);
                     let (is_stable_byte, mut stable_bytes) = if let Some(stable_bytes) = is_stable {
                         (1u8, stable_bytes)
                     } else {
@@ -94,7 +97,11 @@ async fn run_self_recv(
                     bytes.append(&mut data); // append pk info.
                     bytes.append(&mut stable_bytes); // append stable info.
 
-                    let _ = stream.write_all(&bytes).await;
+                    let _ = stream
+                        .write_all(&bytes)
+                        .await
+                        .map_err(|e| error!("TCP WRITE ERROR {:?}", e));
+
                     smol::spawn(process_stream(
                         stream,
                         out_send.clone(),
@@ -102,6 +109,8 @@ async fn run_self_recv(
                         true,
                     ))
                     .detach();
+                } else {
+                    info!("TCP cannot connect to {:?}", addr);
                 }
             }
             EndpointSendMessage::Close(ref addr) => {
@@ -158,7 +167,10 @@ async fn process_stream(
                 let pk: Vec<u8> = read_bytes.drain(0..pk_len as usize).collect();
                 Ok((pk, is_stable, read_bytes))
             }
-            Err(_e) => Err(()),
+            Err(e) => {
+                error!("TCP READ ERROR: {:?}", e);
+                Err(())
+            }
         }
     }
     .or(async {
@@ -220,7 +232,7 @@ async fn process_stream(
                     }
                     EndpointStreamMessage::Close => break,
                 },
-                Err(_) => break,
+                Err(_e) => break,
             }
         }
 

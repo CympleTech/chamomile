@@ -103,10 +103,12 @@ pub mod prelude {
     pub async fn start(
         config: Config,
     ) -> Result<(PeerId, Sender<SendMessage>, Receiver<ReceiveMessage>)> {
+        info!("start p2p service...");
         let (send_send, send_recv) = new_send_channel();
         let (recv_send, recv_recv) = new_receive_channel();
 
         let peer_id = super::server::start(config, recv_send, send_recv).await?;
+        info!("start p2p ok.");
 
         Ok((peer_id, send_send, recv_recv))
     }
