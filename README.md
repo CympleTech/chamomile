@@ -1,14 +1,22 @@
 [![crate](https://img.shields.io/badge/crates.io-v0.2-green.svg)](https://crates.io/crates/chamomile) [![doc](https://img.shields.io/badge/docs.rs-v0.2-blue.svg)](https://docs.rs/chamomile)
 
 # Chamomile
-*Another P2P Library*
+*Build a robust stable connection on p2p network*
 
-## Example
-- `cargo run --example test 0.0.0.0:8000`
-- `cargo run --example test 0.0.0.0:8001 0.0.0.0:8000`
-- `cargo run --example test 0.0.0.0:8002 0.0.0.0:8000`
+## Simple test.
+- `cargo run --example permissionless 0.0.0.0:8000`
+- `cargo run --example permissionless 0.0.0.0:8001 0.0.0.0:8000`
+- `cargo run --example permissionless 0.0.0.0:8002 0.0.0.0:8000`
+
+## Relay test.
+- `cargo run --example relay 192.168.xx.xx:8000` this ip is your LAN address, it will do relay work.
+- `cargo run --example relay 127.0.0.1:8001 192.168.xx.xx:8000` start waiting stable connected by relay.
+- `cargo run --example relay 127.0.0.1:8002 192.168.xx.xx:8000 0xNEEDCONNECTEDPEERID` 0x.. is above's network pper id which want to build a stable connection.
 
 ## features
+- Support build a robust stable connection between two peers on the p2p network.
+- Support permissionless network.
+- Support permissioned network (distributed network).
 - DHT-based & Relay connection.
 - Diff transports: UDP/TCP/UDP-Based Special Protocol.
 
@@ -19,7 +27,6 @@
 - Encrypted transmission and secure DHT protection
 - It can support all interconnections and single-center connections under the LAN, and can also support DHT in the public network environment.
 - Automatically switch the connection according to the number of connections and the network environment
-- Compatible with part of libp2p and Protocol Lab
 
 ## License
 

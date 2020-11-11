@@ -770,7 +770,7 @@ impl Session {
                                             peer: self.peer.clone(),
                                             peer_list: self.peer_list.clone(),
                                             transports: self.transports.clone(),
-                                            is_recv_data: self.is_recv_data,
+                                            is_recv_data: true, // this is stable connection.
                                             is_relay_data: self.is_relay_data,
                                             is_stable: true,
                                         }))

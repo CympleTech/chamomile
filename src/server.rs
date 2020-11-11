@@ -365,7 +365,7 @@ pub async fn start(
                                 peer: peer.clone(),
                                 peer_list: peer_list.clone(),
                                 transports: transports.clone(),
-                                is_recv_data: !only_stable_data,
+                                is_recv_data: true, // this is stable connection.
                                 is_relay_data: !permission,
                                 is_stable: true,
                             }))
