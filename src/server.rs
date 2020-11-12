@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chamomile_types::{
-    message::{ReceiveMessage, SendMessage},
+    message::{ReceiveMessage, SendMessage, StateRequest, StateResponse},
     types::{Broadcast, PeerId, TransportType},
 };
 
@@ -349,6 +349,7 @@ pub async fn start(
                                 to,
                                 session_sender.clone(),
                                 remote_peer.clone(),
+                                false,
                             );
 
                             smol::spawn(relay_stable(Session {
@@ -421,7 +422,7 @@ pub async fn start(
                 Ok(SendMessage::Broadcast(broadcast, data)) => match broadcast {
                     Broadcast::StableAll => {
                         let peer_list_lock = peer_list.read().await;
-                        for (_to, sender) in peer_list_lock.stable_all() {
+                        for (_to, (sender, _)) in peer_list_lock.stable_all() {
                             let _ = sender.send(SessionSendMessage::Data(data.clone())).await;
                         }
                         drop(peer_list_lock);
@@ -438,6 +439,26 @@ pub async fn start(
                 Ok(SendMessage::Stream(_symbol, _stream_type)) => {
                     todo!();
                 }
+                Ok(SendMessage::NetworkState(req, res_sender)) => match req {
+                    StateRequest::Stable => {
+                        let peers = peer_list
+                            .read()
+                            .await
+                            .stable_all()
+                            .iter()
+                            .map(|(id, (_, is_direct))| (*id, *is_direct))
+                            .collect();
+                        let _ = res_sender.send(StateResponse::Stable(peers)).await;
+                    }
+                    StateRequest::DHT => {
+                        let peers = peer_list.read().await.dht_keys();
+                        let _ = res_sender.send(StateResponse::DHT(peers)).await;
+                    }
+                    StateRequest::Seed => {
+                        let seeds = peer_list.read().await.bootstrap().clone();
+                        let _ = res_sender.send(StateResponse::Seed(seeds)).await;
+                    }
+                },
                 Err(_) => break,
             }
         }

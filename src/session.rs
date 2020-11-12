@@ -330,11 +330,12 @@ pub(crate) async fn direct_dht(
         session.is_recv_data = true;
         session.is_stable = true;
         let (my_sender, peer_info) = info.unwrap();
-        session
-            .peer_list
-            .write()
-            .await
-            .stable_add(session.remote_peer_id, my_sender, peer_info);
+        session.peer_list.write().await.stable_add(
+            session.remote_peer_id,
+            my_sender,
+            peer_info,
+            true,
+        );
 
         info!("start stable connection.");
         let _ = future::race(
@@ -764,6 +765,7 @@ impl Session {
                                             remote_peer_id,
                                             session_sender.clone(),
                                             remote_peer.clone(),
+                                            false,
                                         );
 
                                         smol::spawn(relay_stable(Session {
@@ -827,11 +829,19 @@ impl Session {
         Ok(())
     }
 
+    async fn heartbeat(&self) -> Result<()> {
+        //let mut hearts = vec![];
+        loop {
+            // 5s to ping/pong check.
+            let _ = smol::Timer::after(std::time::Duration::from_secs(5)).await;
+        }
+    }
+
     async fn robust(&self) -> Result<()> {
         loop {
             let _ = smol::Timer::after(std::time::Duration::from_secs(10)).await;
             // 10s to do something.
-            debug!("10s timer to do something, like: Ping/Pong");
+            debug!("10s timer to do robust check, check all connections is connected.");
         }
         //Ok(())
     }

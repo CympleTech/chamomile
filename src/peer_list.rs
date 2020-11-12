@@ -18,7 +18,7 @@ pub(crate) struct PeerList {
     /// PeerId => KadValue(Sender<SessionSendmessage>, Peer)
     dhts: KadTree,
     /// PeerId => KadValue(Sender<SessionSendMessage>, Peer)
-    stables: HashMap<PeerId, KadValue>,
+    stables: HashMap<PeerId, (KadValue, bool)>,
     tmp_stables: HashMap<PeerId, Option<RemotePublic>>,
     whites: (Vec<PeerId>, Vec<SocketAddr>),
     blacks: (Vec<PeerId>, Vec<IpAddr>),
@@ -85,15 +85,19 @@ impl PeerList {
         }
 
         for (p, v) in self.stables.iter() {
-            peers.insert(*p, &v.0);
+            peers.insert(*p, &v.0.0);
         }
 
         peers
     }
 
+    pub fn dht_keys(&self) -> Vec<PeerId> {
+        self.dhts.keys()
+    }
+
     /// get all stable peers in the peer list.
-    pub fn stable_all(&self) -> HashMap<PeerId, &Sender<SessionSendMessage>> {
-        self.stables.iter().map(|(k, v)| (*k, &v.0)).collect()
+    pub fn stable_all(&self) -> HashMap<PeerId, (&Sender<SessionSendMessage>, bool)> {
+        self.stables.iter().map(|(k, v)| (*k, (&v.0.0, v.1))).collect()
     }
 
     /// search in stable list and DHT table. result is channel sender and if is it.
@@ -110,7 +114,7 @@ impl PeerList {
 
     /// search in stable list.
     pub fn stable_get(&self, peer_id: &PeerId) -> Option<(&Sender<SessionSendMessage>, bool)> {
-        self.stables.get(peer_id).map(|v| (&v.0, true))
+        self.stables.get(peer_id).map(|v| (&v.0.0, true))
     }
 
     /// if peer has connected in peer list.
@@ -141,7 +145,7 @@ impl PeerList {
 
         for (p, v) in self.stables.iter() {
             if p != peer_id {
-                peers.insert(p, &v.1);
+                peers.insert(p, &v.0.1);
             }
         }
 
@@ -204,7 +208,7 @@ impl PeerList {
     /// 2. remove from stables.
     pub fn stable_remove(&mut self, peer_id: &PeerId) -> Option<Sender<SessionSendMessage>> {
         self.remove_white_peer(peer_id);
-        self.stables.remove(peer_id).map(|v| v.0)
+        self.stables.remove(peer_id).map(|v| v.0.0)
     }
 
     /// Peerl leave Step:
@@ -216,15 +220,16 @@ impl PeerList {
     /// Peer stable connect ok Step:
     /// 1. add to bootstrap;
     /// 2. add to stables;
-    pub fn stable_add(&mut self, peer_id: PeerId, sender: Sender<SessionSendMessage>, peer: Peer) {
+    pub fn stable_add(&mut self, peer_id: PeerId, sender: Sender<SessionSendMessage>, peer: Peer, is_direct: bool) {
         match self.stables.get_mut(&peer_id) {
-            Some(KadValue(s, p)) => {
+            Some((KadValue(s, p), direct)) => {
                 let _ = s.try_send(SessionSendMessage::Close);
                 *s = sender;
                 *p = peer;
+                *direct = is_direct;
             }
             None => {
-                self.stables.insert(peer_id, KadValue(sender, peer));
+                self.stables.insert(peer_id, (KadValue(sender, peer), is_direct));
             }
         }
     }

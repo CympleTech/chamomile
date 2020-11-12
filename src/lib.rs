@@ -84,7 +84,9 @@ pub mod prelude {
         io::Result,
     };
 
-    pub use chamomile_types::message::{ReceiveMessage, SendMessage, StreamType};
+    pub use chamomile_types::message::{
+        ReceiveMessage, SendMessage, StateRequest, StateResponse, StreamType,
+    };
     pub use chamomile_types::types::{Broadcast, PeerId};
 
     pub use super::config::Config;

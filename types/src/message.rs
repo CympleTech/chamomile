@@ -1,3 +1,4 @@
+use async_channel::Sender;
 use std::net::SocketAddr;
 
 use crate::types::{Broadcast, PeerId, TransportStream, TransportType};
@@ -14,7 +15,7 @@ pub enum StreamType {
 }
 
 /// main received message for outside channel, send from chamomile to outside.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum ReceiveMessage {
     /// when peer what to stable connect, send from chamomile to outside.
     /// params is `peer_id`, `socket_addr` and peer `connect_info`.
@@ -33,10 +34,12 @@ pub enum ReceiveMessage {
     /// (Only stable connected) Apply for build a stream between nodes.
     /// params is `u32` stream symbol, and `StreamType`.
     Stream(u32, StreamType),
+    // (Only stable connected) Delivery feedback. include StableConnect, StableResult, Data.
+    // Delivery(u32, bool),
 }
 
 /// main send message for outside channel, send from outside to chamomile.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum SendMessage {
     /// when peer request for join, outside decide connect or not.
     /// params is `peer_id`, `is_connect`, `is_force_close`, `result info`.
@@ -73,4 +76,26 @@ pub enum SendMessage {
     /// (Only Stable connected) Apply for build a stream between nodes.
     /// params is `u32` stream symbol, and `StreamType`.
     Stream(u32, StreamType),
+    /// Request for return the network current state info.
+    /// params is request type, and return channel's sender (async).
+    NetworkState(StateRequest, Sender<StateResponse>),
+}
+
+/// Network state info response.
+#[derive(Debug, Clone)]
+pub enum StateRequest {
+    Stable,
+    DHT,
+    Seed,
+}
+
+/// Network state info response.
+#[derive(Debug, Clone)]
+pub enum StateResponse {
+    /// response is peer list and peer is relay or directly.
+    Stable(Vec<(PeerId, bool)>),
+    /// response is peer list.
+    DHT(Vec<PeerId>),
+    /// response is socket list.
+    Seed(Vec<SocketAddr>),
 }
