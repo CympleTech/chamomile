@@ -2,7 +2,7 @@ use smol::{
     channel::{Receiver, Sender},
     fs,
     io::Result,
-    lock::RwLock,
+    lock::{Mutex, RwLock},
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -221,6 +221,7 @@ pub async fn start(
                             is_recv_data: !only_stable_data,
                             is_relay_data: !permission,
                             is_stable: false,
+                            heartbeat: Arc::new(Mutex::new(0)),
                         },
                         stream_receiver,
                     ))
@@ -369,6 +370,7 @@ pub async fn start(
                                 is_recv_data: true, // this is stable connection.
                                 is_relay_data: !permission,
                                 is_stable: true,
+                                heartbeat: Arc::new(Mutex::new(0)),
                             }))
                             .detach();
                         }
