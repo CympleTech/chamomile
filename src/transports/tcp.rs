@@ -2,110 +2,79 @@ use smol::{
     channel::{Receiver, Sender},
     future,
     io::Result,
-    lock::Mutex,
     net::{TcpListener, TcpStream},
     prelude::*,
 };
-use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
 
-use super::message::{EndpointIncomingMessage, EndpointSendMessage, EndpointStreamMessage};
-use super::new_endpoint_stream_channel;
+use super::{
+    new_endpoint_channel, EndpointMessage, RemotePublic, TransportRecvMessage, TransportSendMessage,
+};
 
-/// TCP Endpoint.
-pub struct TcpEndpoint {
-    streams: HashMap<SocketAddr, Sender<EndpointStreamMessage>>,
-}
-
-impl TcpEndpoint {
-    /// Init and run a UdpEndpoint object.
-    /// You need send a socketaddr str and udp send message's addr,
-    /// and receiver outside message addr.
-    pub async fn start(
-        bind_addr: SocketAddr,
-        send: Sender<EndpointIncomingMessage>,
-        recv: Receiver<EndpointSendMessage>,
-    ) -> Result<()> {
-        let endpoint = TcpEndpoint {
-            streams: HashMap::new(),
-        };
-
-        let m1 = Arc::new(Mutex::new(endpoint));
-        let m2 = m1.clone();
-
-        // TCP listen
-        smol::spawn(run_listen(bind_addr, send.clone(), m1)).detach();
-
-        // TCP listen from outside
-        smol::spawn(run_self_recv(recv, send, m2)).detach();
-
-        Ok(())
-    }
-}
-
-async fn run_listen(
-    socket_addr: SocketAddr,
-    out_send: Sender<EndpointIncomingMessage>,
-    endpoint: Arc<Mutex<TcpEndpoint>>,
+/// Init and run a TcpEndpoint object.
+/// You need send a socketaddr str and tcp send message's addr,
+/// and receiver outside message addr.
+pub async fn start(
+    bind_addr: SocketAddr,
+    send: Sender<TransportRecvMessage>,
+    recv: Receiver<TransportSendMessage>,
 ) -> Result<()> {
-    let listener = TcpListener::bind(socket_addr).await.map_err(|e| {
+    let listener = TcpListener::bind(bind_addr).await.map_err(|e| {
         error!("Chamomile TCP listen {:?}", e);
         std::io::Error::new(std::io::ErrorKind::Other, "TCP Listen")
     })?;
 
+    // TCP listen incoming.
+    smol::spawn(run_listen(listener, send.clone())).detach();
+
+    // TCP listen from outside.
+    smol::spawn(run_self_recv(recv, send)).detach();
+
+    Ok(())
+}
+
+async fn run_listen(listener: TcpListener, out_send: Sender<TransportRecvMessage>) -> Result<()> {
     let mut incoming = listener.incoming();
 
     while let Some(Ok(stream)) = incoming.next().await {
+        let (self_sender, self_receiver) = new_endpoint_channel();
+        let (out_sender, out_receiver) = new_endpoint_channel();
+
         smol::spawn(process_stream(
             stream,
-            out_send.clone(),
-            endpoint.clone(),
+            out_sender,
+            self_receiver,
+            OutType::DHT(out_send.clone(), self_sender, out_receiver),
             false,
         ))
         .detach();
     }
 
-    drop(incoming);
-    drop(listener);
+    error!("Tcp endpoint incoming failure.");
     Ok(())
 }
 
 async fn run_self_recv(
-    recv: Receiver<EndpointSendMessage>,
-    out_send: Sender<EndpointIncomingMessage>,
-    endpoint: Arc<Mutex<TcpEndpoint>>,
+    recv: Receiver<TransportSendMessage>,
+    out_send: Sender<TransportRecvMessage>,
 ) -> Result<()> {
     while let Ok(m) = recv.recv().await {
         match m {
-            EndpointSendMessage::Connect(addr, mut data, is_stable) => {
+            TransportSendMessage::Connect(addr, remote_pk) => {
                 if let Ok(mut stream) = TcpStream::connect(addr).await {
                     info!("TCP connect to {:?}", addr);
-                    let (is_stable_byte, mut stable_bytes) = if let Some(stable_bytes) = is_stable {
-                        (1u8, stable_bytes)
-                    } else {
-                        (0u8, vec![])
-                    };
+                    let bytes = EndpointMessage::Handshake(remote_pk).to_bytes();
+                    let _ = stream.write(&(bytes.len() as u32).to_be_bytes()).await;
+                    let _ = stream.write_all(&bytes[..]).await;
 
-                    let pk_len = data.len() as u16;
-                    let stable_len = stable_bytes.len() as u32;
-                    let mut bytes = vec![];
-                    bytes.push(1u8); // now setup version is 1u8.
-                    bytes.extend(&pk_len.to_be_bytes()[..]); // pk len is [0u8; 2].
-                    bytes.push(is_stable_byte); // is stable byte.
-                    bytes.extend(&stable_len.to_be_bytes()[..]); // stable len is [0u8; 4].
-                    bytes.append(&mut data); // append pk info.
-                    bytes.append(&mut stable_bytes); // append stable info.
-
-                    let _ = stream
-                        .write_all(&bytes)
-                        .await
-                        .map_err(|e| error!("TCP WRITE ERROR {:?}", e));
+                    let (self_sender, self_receiver) = new_endpoint_channel();
+                    let (out_sender, out_receiver) = new_endpoint_channel();
 
                     smol::spawn(process_stream(
                         stream,
-                        out_send.clone(),
-                        endpoint.clone(),
+                        out_sender,
+                        self_receiver,
+                        OutType::DHT(out_send.clone(), self_sender, out_receiver),
                         true,
                     ))
                     .detach();
@@ -113,12 +82,24 @@ async fn run_self_recv(
                     info!("TCP cannot connect to {:?}", addr);
                 }
             }
-            EndpointSendMessage::Close(ref addr) => {
-                if let Some(sender) = endpoint.lock().await.streams.remove(addr) {
-                    sender
-                        .send(EndpointStreamMessage::Close)
-                        .await
-                        .expect("Endpoint to Server (Close)");
+            TransportSendMessage::StableConnect(out_sender, self_receiver, addr, remote_pk) => {
+                if let Ok(mut stream) = TcpStream::connect(addr).await {
+                    info!("TCP stable connect to {:?}", addr);
+                    let bytes = EndpointMessage::Handshake(remote_pk).to_bytes();
+                    let _ = stream.write(&(bytes.len() as u32).to_be_bytes()).await;
+                    let _ = stream.write_all(&bytes[..]).await;
+
+                    smol::spawn(process_stream(
+                        stream,
+                        out_sender,
+                        self_receiver,
+                        OutType::Stable,
+                        true,
+                    ))
+                    .detach();
+                } else {
+                    info!("TCP cannot stable connect to {:?}", addr);
+                    let _ = out_sender.send(EndpointMessage::Close).await;
                 }
             }
         }
@@ -127,45 +108,54 @@ async fn run_self_recv(
     Ok(())
 }
 
+enum OutType {
+    DHT(
+        Sender<TransportRecvMessage>,
+        Sender<EndpointMessage>,
+        Receiver<EndpointMessage>,
+    ),
+    Stable,
+}
+
 async fn process_stream(
     stream: TcpStream,
-    sender: Sender<EndpointIncomingMessage>,
-    endpoint: Arc<Mutex<TcpEndpoint>>,
+    out_sender: Sender<EndpointMessage>,
+    self_receiver: Receiver<EndpointMessage>,
+    out_type: OutType,
     is_self: bool,
 ) -> Result<()> {
     let addr = stream.peer_addr()?;
     let mut reader = stream.clone();
     let mut writer = stream;
 
-    // bytes[0] is version, bytes[1..3] is public_info, bytes[3] is stable or not, bytes[4..8] is stable bytes.
-    let mut read_len = [0u8; 8];
-
-    let handshake: std::result::Result<(Vec<u8>, bool, Vec<u8>), ()> = async {
+    let mut read_len = [0u8; 4];
+    let handshake: std::result::Result<RemotePublic, ()> = async {
         match reader.read(&mut read_len).await {
             Ok(size) => {
-                if size != 8 {
+                if size != 4 {
                     return Err(());
                 }
-                let mut pk_len_bytes = [0u8; 2];
-                let mut stable_len_bytes = [0u8; 4];
-                pk_len_bytes.copy_from_slice(&read_len[1..3]);
-                let is_stable = read_len[3] == 1u8;
-                stable_len_bytes.copy_from_slice(&read_len[4..8]);
-                let pk_len: u16 = u16::from_be_bytes(pk_len_bytes);
-                let stable_len: u32 = u32::from_be_bytes(stable_len_bytes);
 
-                let next_len = pk_len as usize + stable_len as usize;
-                let mut read_bytes = vec![0u8; next_len];
+                let len: usize = u32::from_be_bytes(read_len) as usize;
+                let mut read_bytes = vec![0u8; len];
                 let mut received: usize = 0;
 
                 while let Ok(bytes_size) = reader.read(&mut read_bytes[received..]).await {
                     received += bytes_size;
-                    if received >= next_len {
-                        break;
+                    if received < len {
+                        continue;
+                    }
+
+                    if let Ok(EndpointMessage::Handshake(remote_pk)) =
+                        EndpointMessage::from_bytes(read_bytes)
+                    {
+                        return Ok(remote_pk);
+                    } else {
+                        return Err(());
                     }
                 }
-                let pk: Vec<u8> = read_bytes.drain(0..pk_len as usize).collect();
-                Ok((pk, is_stable, read_bytes))
+
+                Err(())
             }
             Err(e) => {
                 error!("TCP READ ERROR: {:?}", e);
@@ -184,54 +174,57 @@ async fn process_stream(
         debug!("Transport: connect read publics timeout, close it.");
         return Ok(());
     }
-    let (pk_info, is_stable, stable_bytes) = handshake.unwrap();
-    let stable_info = if is_stable { Some(stable_bytes) } else { None };
 
-    let (self_sender, self_receiver) = new_endpoint_stream_channel();
-    let (out_sender, out_receiver) = new_endpoint_stream_channel();
+    let remote_pk = handshake.unwrap();
 
-    endpoint
-        .lock()
-        .await
-        .streams
-        .entry(addr)
-        .and_modify(|s| *s = self_sender.clone())
-        .or_insert(self_sender.clone());
-
-    sender
-        .send(EndpointIncomingMessage(
-            addr,
-            pk_info,
-            stable_info,
-            is_self,
-            out_receiver,
-            self_sender,
-        ))
-        .await
-        .expect("Endpoint to Server (Incoming)");
+    match out_type {
+        OutType::Stable => {
+            out_sender
+                .send(EndpointMessage::Handshake(remote_pk))
+                .await
+                .map_err(|_e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, "endpoint channel missing")
+                })?;
+        }
+        OutType::DHT(sender, self_sender, out_receiver) => {
+            sender
+                .send(TransportRecvMessage(
+                    addr,
+                    remote_pk,
+                    is_self,
+                    out_sender.clone(),
+                    out_receiver,
+                    self_sender,
+                ))
+                .await
+                .map_err(|_e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, "server channel missing")
+                })?;
+        }
+    }
 
     let a = async move {
         loop {
             match self_receiver.recv().await {
-                Ok(msg) => match msg {
-                    EndpointStreamMessage::Handshake(mut data) => {
-                        let pk_len = data.len() as u16;
-                        let stable_len = 0u32;
-                        let mut bytes = vec![];
-                        bytes.push(1u8); // now setup version is 1u8.
-                        bytes.extend(&pk_len.to_be_bytes()[..]); // pk len is [0u8; 2].
-                        bytes.push(0u8); // default when handshake is not stable.
-                        bytes.extend(&stable_len.to_be_bytes()[..]); // stable len is [0u8; 4].
-                        bytes.append(&mut data); // append pk info.
+                Ok(msg) => {
+                    let is_close = match msg {
+                        EndpointMessage::Close => true,
+                        _ => false,
+                    };
+
+                    let bytes = msg.to_bytes();
+                    if writer
+                        .write(&(bytes.len() as u32).to_be_bytes())
+                        .await
+                        .is_ok()
+                    {
                         let _ = writer.write_all(&bytes[..]).await;
                     }
-                    EndpointStreamMessage::Bytes(bytes) => {
-                        let len = bytes.len() as u32;
-                        let _ = writer.write(&(len.to_be_bytes())).await;
-                        let _ = writer.write_all(&bytes[..]).await;
+
+                    if is_close {
+                        break;
                     }
-                    EndpointStreamMessage::Close => break,
-                },
+                }
                 Err(_e) => break,
             }
         }
@@ -249,7 +242,7 @@ async fn process_stream(
                     if size == 0 {
                         // when close or better when many Ok(0)
                         out_sender
-                            .send(EndpointStreamMessage::Close)
+                            .send(EndpointMessage::Close)
                             .await
                             .expect("Endpoint to Session (Size Close)");
                         break;
@@ -267,10 +260,12 @@ async fn process_stream(
                             continue;
                         }
 
-                        out_sender
-                            .send(EndpointStreamMessage::Bytes(read_bytes.clone()))
-                            .await
-                            .expect("Endpoint to Session (Bytes)");
+                        if let Ok(msg) = EndpointMessage::from_bytes(read_bytes) {
+                            out_sender
+                                .send(msg)
+                                .await
+                                .expect("Endpoint to Session (Bytes)");
+                        }
 
                         break;
                     }
@@ -279,7 +274,7 @@ async fn process_stream(
                 }
                 Err(_e) => {
                     out_sender
-                        .send(EndpointStreamMessage::Close)
+                        .send(EndpointMessage::Close)
                         .await
                         .expect("Endpoint to Session (Close)");
                     break;
@@ -292,8 +287,6 @@ async fn process_stream(
 
     let _ = future::try_zip(a, b).await;
 
-    //stream.close().await?;
-    endpoint.lock().await.streams.remove(&addr);
     debug!("close stream: {}", addr);
 
     Ok(())

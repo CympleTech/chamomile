@@ -9,17 +9,18 @@ use chamomile_types::types::PeerId;
 
 use crate::kad::{KadTree, KadValue};
 use crate::peer::Peer;
-use crate::session::{RemotePublic, SessionSendMessage};
+use crate::session::SessionMessage;
+use crate::transports::EndpointMessage;
 
 /// PeerList
 /// contains: dhts(DHT) & tmp_dhts(HashMap)
 pub(crate) struct PeerList {
     save_path: PathBuf,
-    /// PeerId => KadValue(Sender<SessionSendmessage>, Peer)
+    /// PeerId => KadValue(Sender<Sessionmessage>, Sender<EndpointMessage>, Peer)
     dhts: KadTree,
-    /// PeerId => KadValue(Sender<SessionSendMessage>, Peer)
+    /// PeerId => KadValue(Sender<SessionMessage>, Sender<EndpointMessage>, Peer)
     stables: HashMap<PeerId, (KadValue, bool)>,
-    tmp_stables: HashMap<PeerId, Option<RemotePublic>>,
+    tmp_stables: HashMap<PeerId, (Sender<SessionMessage>, Sender<EndpointMessage>)>,
     whites: (Vec<PeerId>, Vec<SocketAddr>),
     blacks: (Vec<PeerId>, Vec<IpAddr>),
     bootstraps: Vec<SocketAddr>,
@@ -76,16 +77,16 @@ impl PeerList {
     }
 
     /// get all peers in the peer list.
-    pub fn all(&self) -> HashMap<PeerId, &Sender<SessionSendMessage>> {
-        let mut peers: HashMap<PeerId, &Sender<SessionSendMessage>> = HashMap::new();
+    pub fn all(&self) -> HashMap<PeerId, &Sender<SessionMessage>> {
+        let mut peers: HashMap<PeerId, &Sender<SessionMessage>> = HashMap::new();
         for key in self.dhts.keys().into_iter() {
-            if let Some((sender, _)) = self.dht_get(&key) {
+            if let Some((sender, _, _)) = self.dht_get(&key) {
                 peers.insert(key, sender);
             }
         }
 
         for (p, v) in self.stables.iter() {
-            peers.insert(*p, &v.0.0);
+            peers.insert(*p, &(v.0).0);
         }
 
         peers
@@ -96,25 +97,39 @@ impl PeerList {
     }
 
     /// get all stable peers in the peer list.
-    pub fn stable_all(&self) -> HashMap<PeerId, (&Sender<SessionSendMessage>, bool)> {
-        self.stables.iter().map(|(k, v)| (*k, (&v.0.0, v.1))).collect()
+    pub fn stable_all(&self) -> HashMap<PeerId, (&Sender<SessionMessage>, bool)> {
+        self.stables
+            .iter()
+            .map(|(k, v)| (*k, (&(v.0).0, v.1)))
+            .collect()
     }
 
     /// search in stable list and DHT table. result is channel sender and if is it.
-    pub fn get(&self, peer_id: &PeerId) -> Option<(&Sender<SessionSendMessage>, bool)> {
+    pub fn get(
+        &self,
+        peer_id: &PeerId,
+    ) -> Option<(&Sender<SessionMessage>, &Sender<EndpointMessage>, bool)> {
         self.stable_get(peer_id).or(self.dht_get(peer_id))
     }
 
     /// search in dht table.
-    pub fn dht_get(&self, peer_id: &PeerId) -> Option<(&Sender<SessionSendMessage>, bool)> {
+    pub fn dht_get(
+        &self,
+        peer_id: &PeerId,
+    ) -> Option<(&Sender<SessionMessage>, &Sender<EndpointMessage>, bool)> {
         self.dhts
             .search(peer_id)
-            .map(|(_k, v, is_it)| (&v.0, is_it))
+            .map(|(_k, v, is_it)| (&v.0, &v.1, is_it))
     }
 
     /// search in stable list.
-    pub fn stable_get(&self, peer_id: &PeerId) -> Option<(&Sender<SessionSendMessage>, bool)> {
-        self.stables.get(peer_id).map(|v| (&v.0.0, true))
+    pub fn stable_get(
+        &self,
+        peer_id: &PeerId,
+    ) -> Option<(&Sender<SessionMessage>, &Sender<EndpointMessage>, bool)> {
+        self.stables
+            .get(peer_id)
+            .map(|v| (&(v.0).0, &(v.0).1, true))
     }
 
     /// if peer has connected in peer list.
@@ -136,7 +151,7 @@ impl PeerList {
             if &key == peer_id {
                 continue;
             }
-            if let Some((k, KadValue(_, peer), is_it)) = self.dhts.search(&key) {
+            if let Some((k, KadValue(_, _, peer), is_it)) = self.dhts.search(&key) {
                 if is_it {
                     peers.insert(k, peer);
                 }
@@ -145,7 +160,7 @@ impl PeerList {
 
         for (p, v) in self.stables.iter() {
             if p != peer_id {
-                peers.insert(p, &v.0.1);
+                peers.insert(p, &(v.0).2);
             }
         }
 
@@ -158,7 +173,8 @@ impl PeerList {
     pub async fn peer_add(
         &mut self,
         peer_id: PeerId,
-        sender: Sender<SessionSendMessage>,
+        sender: Sender<SessionMessage>,
+        stream_sender: Sender<EndpointMessage>,
         peer: Peer,
     ) -> bool {
         // 1. add to boostraps.
@@ -174,7 +190,8 @@ impl PeerList {
             .and_then(|(_k, _v, is_it)| if is_it { Some(()) } else { None })
             .is_none()
         {
-            self.dhts.add(peer_id, KadValue(sender, peer));
+            self.dhts
+                .add(peer_id, KadValue(sender, stream_sender, peer));
             true
         } else {
             false
@@ -183,8 +200,11 @@ impl PeerList {
 
     /// Step:
     /// 1. remove from kad;
-    pub fn peer_remove(&mut self, peer_id: &PeerId) -> Option<(Sender<SessionSendMessage>, Peer)> {
-        self.dhts.remove(peer_id).map(|v| (v.0, v.1))
+    pub fn peer_remove(
+        &mut self,
+        peer_id: &PeerId,
+    ) -> Option<(Sender<SessionMessage>, Sender<EndpointMessage>, Peer)> {
+        self.dhts.remove(peer_id).map(|v| (v.0, v.1, v.2))
     }
 
     /// Disconnect Step:
@@ -206,9 +226,9 @@ impl PeerList {
     /// PeerDisconnect Step:
     /// 1. remove from white_list;
     /// 2. remove from stables.
-    pub fn stable_remove(&mut self, peer_id: &PeerId) -> Option<Sender<SessionSendMessage>> {
+    pub fn stable_remove(&mut self, peer_id: &PeerId) -> Option<Sender<SessionMessage>> {
         self.remove_white_peer(peer_id);
-        self.stables.remove(peer_id).map(|v| v.0.0)
+        self.stables.remove(peer_id).map(|v| (v.0).0)
     }
 
     /// Peerl leave Step:
@@ -220,26 +240,54 @@ impl PeerList {
     /// Peer stable connect ok Step:
     /// 1. add to bootstrap;
     /// 2. add to stables;
-    pub fn stable_add(&mut self, peer_id: PeerId, sender: Sender<SessionSendMessage>, peer: Peer, is_direct: bool) {
+    pub fn stable_add(
+        &mut self,
+        peer_id: PeerId,
+        sender: Sender<SessionMessage>,
+        stream_sender: Sender<EndpointMessage>,
+        peer: Peer,
+        is_direct: bool,
+    ) {
         match self.stables.get_mut(&peer_id) {
-            Some((KadValue(s, p), direct)) => {
-                let _ = s.try_send(SessionSendMessage::Close);
+            Some((KadValue(s, ss, p), direct)) => {
+                let _ = s.try_send(SessionMessage::Close);
                 *s = sender;
+                *ss = stream_sender;
                 *p = peer;
                 *direct = is_direct;
             }
             None => {
-                self.stables.insert(peer_id, (KadValue(sender, peer), is_direct));
+                self.stables
+                    .insert(peer_id, (KadValue(sender, stream_sender, peer), is_direct));
             }
         }
     }
 
-    pub fn add_tmp_stable(&mut self, peer_id: PeerId, peer: Option<RemotePublic>) {
-        self.tmp_stables.insert(peer_id, peer);
+    pub fn get_tmp_stable(&self, peer_id: &PeerId) -> Option<&Sender<SessionMessage>> {
+        self.tmp_stables.get(peer_id).map(|v| &v.0).or(self
+            .dht_get(peer_id)
+            .map(|v| if v.2 { Some(v.0) } else { None })
+            .flatten())
     }
 
-    pub fn tmp_stable(&mut self, peer_id: &PeerId) -> Option<Option<RemotePublic>> {
-        self.tmp_stables.remove(peer_id)
+    pub fn get_endpoint_with_tmp(&self, peer_id: &PeerId) -> Option<&Sender<EndpointMessage>> {
+        self.tmp_stables.get(peer_id).map(|v| &v.1).or(self
+            .get(peer_id)
+            .map(|v| if v.2 { Some(v.1) } else { None })
+            .flatten())
+    }
+
+    pub fn remove_tmp_stable(&mut self, peer_id: &PeerId) {
+        let _ = self.tmp_stables.remove(peer_id);
+    }
+
+    pub fn add_tmp_stable(
+        &mut self,
+        peer_id: PeerId,
+        sender: Sender<SessionMessage>,
+        stream_sender: Sender<EndpointMessage>,
+    ) {
+        self.tmp_stables.insert(peer_id, (sender, stream_sender));
     }
 }
 

@@ -47,9 +47,14 @@ fn main() {
                 for i in 0..10u8 {
                     bytes.push(i);
                 }
-                send.send(SendMessage::StableConnect(peer_id, None, bytes))
-                    .await
-                    .expect("channel failure");
+                send.send(SendMessage::StableConnect(
+                    1,
+                    peer_id,
+                    Some("127.0.0.1:7365".parse().unwrap()),
+                    bytes,
+                ))
+                .await
+                .expect("channel failure");
             }
         }
 
@@ -59,14 +64,14 @@ fn main() {
             match message {
                 ReceiveMessage::Data(peer_id, bytes) => {
                     println!(
-                        "Recv permissioned data from: {}, {}-{:?}, start build a stable connection",
+                        "==========Recv permissioned data from: {}, {}-{:?}, start build a stable connection",
                         peer_id.short_show(),
                         bytes.len(),
                         bytes
                     );
 
                     if first_data {
-                        let _ = send.send(SendMessage::Data(peer_id, bytes)).await;
+                        let _ = send.send(SendMessage::Data(2, peer_id, bytes)).await;
                         first_data = false;
                     }
                 }
@@ -74,9 +79,13 @@ fn main() {
                     panic!("Nerver here (stream)");
                 }
                 ReceiveMessage::StableConnect(from, data) => {
-                    println!("Recv peer what to build a stable connected: {:?}", data);
+                    println!(
+                        "==========Recv peer what to build a stable connected: {:?}",
+                        data
+                    );
 
                     send.send(SendMessage::StableResult(
+                        3,
                         from,
                         true,
                         false,
@@ -86,19 +95,25 @@ fn main() {
                     .expect("channel failure");
                 }
                 ReceiveMessage::StableLeave(peer_id) => {
-                    println!("Recv stable connected leave: {}", peer_id.to_hex());
+                    println!(
+                        "===========Recv stable connected leave: {}",
+                        peer_id.to_hex()
+                    );
                 }
                 ReceiveMessage::StableResult(peer_id, is_ok, remark) => {
                     println!(
-                        "Recv stable connected result: {} {} {:?}",
+                        "=========Recv stable connected result: {} {} {:?}",
                         peer_id.to_hex(),
                         is_ok,
                         remark
                     );
 
                     let _ = send
-                        .send(SendMessage::Data(peer_id, vec![1, 2, 3, 4, 5]))
+                        .send(SendMessage::Data(4, peer_id, vec![1, 2, 3, 4, 5]))
                         .await;
+                }
+                ReceiveMessage::Delivery(tid, had) => {
+                    println!("======== ===== Recv Delivery: {} {}", tid, had);
                 }
             }
         }

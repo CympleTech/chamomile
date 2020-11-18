@@ -4,12 +4,17 @@ use core::cmp::Ordering;
 use smol::channel::Sender;
 
 use crate::peer::Peer;
-use crate::session::SessionSendMessage;
+use crate::session::SessionMessage;
+use crate::transports::EndpointMessage;
 
 const MAX_LEVEL: usize = 8;
 const K_BUCKET: usize = 8;
 
-pub(crate) struct KadValue(pub Sender<SessionSendMessage>, pub Peer);
+pub(crate) struct KadValue(
+    pub Sender<SessionMessage>,
+    pub Sender<EndpointMessage>,
+    pub Peer,
+);
 
 pub(crate) struct KadTree {
     root_key: PeerId,

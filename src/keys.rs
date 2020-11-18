@@ -247,6 +247,10 @@ impl Keypair {
         }
     }
 
+    pub fn session_key(&self, remote_keypair: &Keypair) -> SessionKey {
+        self.key.session_key(&self, remote_keypair)
+    }
+
     pub fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, ()> {
         self.key.sign(&self, msg).map_err(|_e| ())
     }

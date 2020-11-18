@@ -78,7 +78,10 @@ fn main() {
                 ReceiveMessage::StableConnect(from, data) => {
                     println!("Recv peer what to build a stable connected: {:?}", data);
 
+                    let tid = 2u32;
+
                     send.send(SendMessage::StableResult(
+                        tid,
                         from,
                         true,
                         false,
@@ -97,6 +100,9 @@ fn main() {
                         is_ok,
                         remark
                     );
+                }
+                ReceiveMessage::Delivery(tid, had) => {
+                    println!("Recv Delivery: {} {}", tid, had);
                 }
             }
         }

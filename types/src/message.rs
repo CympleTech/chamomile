@@ -34,26 +34,28 @@ pub enum ReceiveMessage {
     /// (Only stable connected) Apply for build a stream between nodes.
     /// params is `u32` stream symbol, and `StreamType`.
     Stream(u32, StreamType),
-    // (Only stable connected) Delivery feedback. include StableConnect, StableResult, Data.
-    // Delivery(u32, bool),
+    /// (Only stable connected) Delivery feedback. include StableConnect, StableResult, Data. `id(u32) != 0`.
+    Delivery(u32, bool),
 }
 
 /// main send message for outside channel, send from outside to chamomile.
 #[derive(Debug, Clone)]
 pub enum SendMessage {
     /// when peer request for join, outside decide connect or not.
-    /// params is `peer_id`, `is_connect`, `is_force_close`, `result info`.
+    /// params is `delivery_feedback_id`, `peer_id`, `is_connect`, `is_force_close`, `result info`.
+    /// if `delivery_feedback_id = 0` will not feedback.
     /// if `is_connect` is true, it will add to white directly list.
     /// we want to build a better network, add a `is_force_close`.
     /// if `is_connect` is false, but `is_force_close` if true, we
     /// will use this peer to build our DHT for better connection.
     /// if false, we will force close it.
-    StableResult(PeerId, bool, bool, Vec<u8>),
+    StableResult(u32, PeerId, bool, bool, Vec<u8>),
     /// when need add a peer to stable connect, send to chamomile from outside.
     /// if success connect, will start a stable connection, and add peer to kad, stables,
     /// bootstraps and whitelists. if failure, will send `PeerLeave` to outside.
-    /// params is `peer_id`, `socket_addr` and peer `join_info`.
-    StableConnect(PeerId, Option<SocketAddr>, Vec<u8>),
+    /// params is `delivery_feedback_id`, `peer_id`, `socket_addr` and peer `join_info`.
+    /// if `delivery_feedback_id = 0` will not feedback.
+    StableConnect(u32, PeerId, Option<SocketAddr>, Vec<u8>),
     /// when outside want to close a stable connectioned peer. use it force close.
     /// params is `peer_id`.
     StableDisconnect(PeerId),
@@ -67,8 +69,9 @@ pub enum SendMessage {
     DisConnect(SocketAddr),
     /// when need send a data to a peer, only need know the peer_id,
     /// the chamomile will help you send data to there.
-    /// params is `peer_id` and `data_bytes`.
-    Data(PeerId, Vec<u8>),
+    /// params is `delivery_feedback_id`, `peer_id` and `data_bytes`.
+    /// if `delivery_feedback_id = 0` will not feedback.
+    Data(u32, PeerId, Vec<u8>),
     /// when need broadcast a data to all network,
     /// chamomile support some common algorithm, use it, donnot worry.
     /// params is `broadcast_type` and `data_bytes`

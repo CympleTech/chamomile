@@ -2,6 +2,11 @@ use async_channel::{Receiver, Sender};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 
+#[inline]
+pub fn new_io_error(s: &str) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Other, s)
+}
+
 /// peer's network id.
 #[derive(Copy, Clone, Default, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
 pub struct PeerId(pub [u8; 32]);

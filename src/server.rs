@@ -2,14 +2,14 @@ use smol::{
     channel::{Receiver, Sender},
     fs,
     io::Result,
-    lock::{Mutex, RwLock},
+    lock::RwLock,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use chamomile_types::{
     message::{ReceiveMessage, SendMessage, StateRequest, StateResponse},
-    types::{Broadcast, PeerId, TransportType},
+    types::{new_io_error, Broadcast, PeerId, TransportType},
 };
 
 use crate::config::Config;
@@ -19,18 +19,51 @@ use crate::peer::Peer;
 use crate::peer_list::PeerList;
 use crate::primitives::{STORAGE_KEY_KEY, STORAGE_NAME, STORAGE_PEER_LIST_KEY};
 use crate::session::{
-    direct_dht, new_session_send_channel, relay_stable, ConnectType, EndpointMessage, RemotePublic,
-    Session, SessionSendMessage,
+    direct_stable, new_session_channel, relay_stable, session_run, ConnectType, Session,
+    SessionMessage,
 };
 use crate::transports::{
-    start as endpoint_start, EndpointIncomingMessage, EndpointSendMessage, EndpointStreamMessage,
+    start as transport_start, EndpointMessage, RemotePublic, TransportRecvMessage,
+    TransportSendMessage,
 };
+
+pub(crate) struct Global {
+    pub peer_id: PeerId,
+    pub peer: Peer,
+    pub key: Keypair,
+    pub remote_pk: RemotePublic,
+    pub transport_sender: Sender<TransportSendMessage>,
+    pub out_sender: Sender<ReceiveMessage>,
+}
+
+impl Global {
+    #[inline]
+    pub fn remote_pk(&self) -> RemotePublic {
+        RemotePublic(self.key.public(), self.peer.clone())
+    }
+
+    #[inline]
+    pub async fn trans_send(&self, msg: TransportSendMessage) -> Result<()> {
+        self.transport_sender
+            .send(msg)
+            .await
+            .map_err(|_e| new_io_error("Transport missing"))
+    }
+
+    #[inline]
+    pub async fn out_send(&self, msg: ReceiveMessage) -> Result<()> {
+        self.out_sender
+            .send(msg)
+            .await
+            .map_err(|_e| new_io_error("Outside missing"))
+    }
+}
 
 /// start server
 pub async fn start(
     config: Config,
-    out_send: Sender<ReceiveMessage>,
-    self_recv: Receiver<SendMessage>,
+    out_sender: Sender<ReceiveMessage>,
+    self_receiver: Receiver<SendMessage>,
 ) -> Result<PeerId> {
     let Config {
         mut db_dir,
@@ -76,65 +109,56 @@ pub async fn start(
 
     let peer = Peer::new(key.peer_id(), addr, default_transport, true);
 
-    let mut transports: HashMap<TransportType, Sender<EndpointSendMessage>> = HashMap::new();
+    let mut transports: HashMap<TransportType, Sender<TransportSendMessage>> = HashMap::new();
 
-    let (endpoint_send, endpoint_recv) = endpoint_start(peer.transport(), *peer.addr())
+    let (transport_sender, transport_receiver) = transport_start(peer.transport(), *peer.addr())
         .await
         .expect("Transport binding failure!");
 
-    transports.insert(default_transport, endpoint_send.clone());
-    let transports = Arc::new(RwLock::new(transports));
+    transports.insert(default_transport, transport_sender.clone());
+    let _transports = Arc::new(RwLock::new(transports)); // TODO more about multiple transports.
 
-    let remote_bytes = RemotePublic(key.public().clone(), peer.clone()).to_bytes();
+    let remote_pk = RemotePublic(key.public().clone(), peer.clone());
 
     // bootstrap white list.
     for a in peer_list.read().await.bootstrap() {
-        endpoint_send
-            .send(EndpointSendMessage::Connect(*a, remote_bytes.clone(), None))
+        transport_sender
+            .send(TransportSendMessage::Connect(*a, remote_pk.clone()))
             .await
             .expect("Server to Endpoint (Connect)");
     }
 
-    // use in below.
-    let peer_2 = peer.clone();
+    let global = Arc::new(Global {
+        peer_id,
+        peer,
+        key,
+        remote_pk,
+        transport_sender,
+        out_sender,
+    });
 
-    let peer = Arc::new(peer);
-    let key = Arc::new(key);
-
-    let out_send_1 = out_send.clone();
-    let endpoint_send_1 = endpoint_send.clone();
-    let peer_1 = peer.clone();
-    let key_1 = key.clone();
     let peer_list_1 = peer_list.clone();
-    let transports_1 = transports.clone();
-    let remote_bytes_1 = remote_bytes.clone();
+    let global_1 = global.clone();
 
     smol::spawn(async move {
         loop {
-            match endpoint_recv.recv().await {
-                Ok(EndpointIncomingMessage(
+            match transport_receiver.recv().await {
+                Ok(TransportRecvMessage(
                     addr,
-                    remote_public_bytes,
-                    is_stable,
+                    remote_pk,
                     is_self,
-                    stream_receiver,
                     stream_sender,
+                    stream_receiver,
+                    endpoint_sender,
                 )) => {
                     debug!("receiver incoming connect: {:?}", addr);
                     // check and start session
                     if peer_list_1.read().await.is_black_addr(&addr) {
                         debug!("receiver incoming connect is blocked");
-                        let _ = stream_sender.send(EndpointStreamMessage::Close).await;
+                        let _ = endpoint_sender.send(EndpointMessage::Close).await;
                         continue;
                     }
-                    // check pk info.
-                    let rpr = RemotePublic::from_bytes(remote_public_bytes);
-                    if rpr.is_err() {
-                        debug!("Debug: Session invalid pk, close it.");
-                        let _ = stream_sender.send(EndpointStreamMessage::Close).await;
-                        continue;
-                    }
-                    let RemotePublic(remote_peer_key, remote_peer) = rpr.unwrap();
+                    let RemotePublic(remote_peer_key, remote_peer) = remote_pk;
 
                     let remote_peer_id = remote_peer_key.peer_id();
                     debug!("Debug: Session connected: {}", remote_peer_id.short_show());
@@ -147,85 +171,65 @@ pub async fn start(
                         || peer_list_1.read().await.is_black_peer(&remote_peer_id)
                     {
                         debug!("session remote peer is blocked, close it.");
-                        let _ = stream_sender.send(EndpointStreamMessage::Close).await;
+                        let _ = endpoint_sender.send(EndpointMessage::Close).await;
                         continue;
                     }
 
-                    let (session_sender, session_receiver) = new_session_send_channel();
+                    let (session_sender, session_receiver) = new_session_channel();
 
                     // save to peer_list.
                     let mut peer_list_lock = peer_list_1.write().await;
                     let is_new = peer_list_lock
-                        .peer_add(remote_peer_id, session_sender.clone(), remote_peer)
+                        .peer_add(
+                            remote_peer_id,
+                            session_sender.clone(),
+                            stream_sender.clone(),
+                            remote_peer,
+                        )
                         .await;
                     drop(peer_list_lock);
 
                     // check if connection had.
                     if !is_new {
                         debug!("Session is had connected, close it.");
-                        let _ = stream_sender.send(EndpointStreamMessage::Close).await;
+                        let _ = endpoint_sender.send(EndpointMessage::Close).await;
                         continue;
                     }
 
                     // if not self, send self publics info.
                     if !is_self {
-                        stream_sender
-                            .send(EndpointStreamMessage::Handshake(remote_bytes_1.clone()))
+                        endpoint_sender
+                            .send(EndpointMessage::Handshake(global_1.remote_pk.clone()))
                             .await
                             .expect("Session to Endpoint (Data Key)");
                     }
 
-                    // TODO exchange first session_key.
-                    let session_key: SessionKey = key_1.key.session_key(&key_1, &remote_peer_key);
-                    stream_sender
-                        .send(EndpointStreamMessage::Bytes(
-                            EndpointMessage::Key(session_key.out_bytes()).to_bytes(),
-                        ))
-                        .await
-                        .expect("Session to Endpoint (Data SessionKey)");
+                    // first session_key.
+                    let session_key: SessionKey = global_1.key.session_key(&remote_peer_key);
 
                     // DHT help.
                     let peers = peer_list_1.read().await.get_dht_help(&remote_peer_id);
-                    stream_sender
-                        .send(EndpointStreamMessage::Bytes(
-                            EndpointMessage::DHT(DHT(peers)).to_bytes(),
-                        ))
+                    endpoint_sender
+                        .send(EndpointMessage::DHT(DHT(peers)))
                         .await
                         .expect("Sesssion to Endpoint (Data)");
 
-                    // check if it is stable connection.
-                    if !is_self {
-                        if let Some(stable_bytes) = is_stable {
-                            out_send_1
-                                .send(ReceiveMessage::StableConnect(remote_peer_id, stable_bytes))
-                                .await
-                                .expect("Server to Outside");
-                        }
-                    }
+                    let session = Session::new(
+                        peer_id.clone(),
+                        remote_peer,
+                        stream_sender,
+                        session_sender,
+                        session_receiver,
+                        ConnectType::Direct(endpoint_sender),
+                        session_key,
+                        global_1.clone(),
+                        peer_list_1.clone(),
+                        !only_stable_data,
+                        !permission,
+                        false,
+                    );
 
-                    smol::spawn(direct_dht(
-                        Session {
-                            my_sender: session_sender,
-                            my_peer_id: peer_id.clone(),
-                            remote_peer_id: remote_peer_id.clone(),
-                            remote_peer: remote_peer,
-                            endpoint_sender: endpoint_send_1.clone(),
-                            out_sender: out_send_1.clone(),
-                            connect: ConnectType::Direct(stream_sender),
-                            session_receiver: session_receiver,
-                            session_key: session_key,
-                            key: key_1.clone(),
-                            peer: peer_1.clone(),
-                            peer_list: peer_list_1.clone(),
-                            transports: transports_1.clone(),
-                            is_recv_data: !only_stable_data,
-                            is_relay_data: !permission,
-                            is_stable: false,
-                            heartbeat: Arc::new(Mutex::new(0)),
-                        },
-                        stream_receiver,
-                    ))
-                    .detach();
+                    smol::spawn(session_run(session, stream_receiver)).detach();
                 }
                 Err(_) => break,
             }
@@ -235,189 +239,124 @@ pub async fn start(
 
     smol::spawn(async move {
         loop {
-            match self_recv.recv().await {
-                Ok(SendMessage::StableConnect(to, socket, data)) => {
+            match self_receiver.recv().await {
+                Ok(SendMessage::StableConnect(tid, to, socket, data)) => {
                     debug!("Send stable connect to: {:?}", to);
                     if to == peer_id {
                         info!("Nerver here, stable connect to self.");
+                        if tid != 0 {
+                            let _ = global.out_send(ReceiveMessage::Delivery(tid, false)).await;
+                        }
                         continue;
                     }
 
                     if peer_list.read().await.stable_contains(&to) {
                         debug!("Aready stable connected");
-                        out_send
-                            .send(ReceiveMessage::StableResult(to, true, data))
-                            .await
-                            .expect("Server to Outside (Stable Result)");
+                        let _ = global
+                            .out_send(ReceiveMessage::StableResult(to, true, data))
+                            .await;
+                        if tid != 0 {
+                            let _ = global.out_send(ReceiveMessage::Delivery(tid, false)).await;
+                        }
                         continue;
                     }
 
-                    if let Some(addr) = socket {
-                        endpoint_send
-                            .send(EndpointSendMessage::Connect(
-                                addr,
-                                remote_bytes.clone(),
-                                Some(data),
-                            ))
-                            .await
-                            .expect("Server to Endpoint (Connect)");
-                    } else {
-                        let is_tmp = if let Some((sender, is_it)) = peer_list.read().await.get(&to)
-                        {
-                            if is_it {
-                                let _ = sender.send(SessionSendMessage::StableConnect(data)).await;
-                                false
-                            } else {
-                                let _ = sender
-                                    .send(SessionSendMessage::RelayStableConnect(
-                                        RemotePublic(key.public(), peer_2.clone()),
-                                        to,
-                                        data,
-                                    ))
-                                    .await;
-                                true
-                            }
+                    if let Some((s, ss, is_it)) = peer_list.read().await.get(&to) {
+                        if is_it {
+                            let _ = s.send(SessionMessage::StableConnect(tid, data)).await;
                         } else {
-                            false
-                        };
-
-                        if is_tmp {
-                            // save to tmp_stable.
-                            peer_list.write().await.add_tmp_stable(to, None);
+                            info!("Will use stable direct ? {}", socket.is_some());
+                            if let Some(addr) = socket {
+                                smol::spawn(direct_stable(
+                                    tid,
+                                    to,
+                                    data,
+                                    addr,
+                                    peer_id.clone(),
+                                    global.clone(),
+                                    peer_list.clone(),
+                                    !permission,
+                                ))
+                                .detach();
+                            } else {
+                                smol::spawn(relay_stable(
+                                    tid,
+                                    to,
+                                    data,
+                                    ss.clone(),
+                                    peer_id.clone(),
+                                    global.clone(),
+                                    peer_list.clone(),
+                                    !permission,
+                                ))
+                                .detach();
+                            }
                         }
-                    }
+                    } else {
+                        if tid != 0 {
+                            let _ = global.out_send(ReceiveMessage::Delivery(tid, false)).await;
+                        }
+                    };
                 }
-                Ok(SendMessage::StableResult(to, is_ok, is_force, data)) => {
+                Ok(SendMessage::StableResult(tid, to, is_ok, is_force, data)) => {
                     debug!("Send stable result {} to: {:?}", is_ok, to);
                     if to == peer_id {
                         info!("Nerver here, stable result to self.");
+                        if tid != 0 {
+                            let _ = global.out_send(ReceiveMessage::Delivery(tid, false)).await;
+                        }
                         continue;
                     }
 
-                    let is_sender = if let Some((sender, is_it)) = peer_list.read().await.get(&to) {
+                    if let Some(sender) = peer_list.read().await.get_tmp_stable(&to) {
                         debug!("Got peer to send stable result.");
-                        if is_ok || !is_force {
-                            debug!("ok to send.");
-                            if is_it {
-                                debug!("ok to send directly.");
-                                let _ = sender
-                                    .send(SessionSendMessage::StableResult(is_ok, data))
-                                    .await;
-                                None
-                            } else {
-                                debug!("ok to send relay.");
-                                Some((sender.clone(), data))
-                            }
-                        } else if is_force && is_it {
-                            let _ = sender.send(SessionSendMessage::Close).await;
-                            None
-                        } else {
-                            Some((sender.clone(), data))
-                        }
-                    } else {
-                        None
-                    };
-
-                    if let Some((sender, mut data)) = is_sender {
-                        debug!("start send by relay");
-                        let mut peer_list_lock = peer_list.write().await;
-                        let remote_pk_result = peer_list_lock.tmp_stable(&to);
-                        if remote_pk_result.is_none() {
-                            continue;
-                        }
-                        let remote_pk_value = remote_pk_result.unwrap(); // unwrap is safe, checked.
-                        if remote_pk_value.is_none() {
-                            continue;
-                        }
-                        let RemotePublic(remote_key, remote_peer) = remote_pk_value.unwrap(); // unwrap is safe, checked.
-                        let session_key: SessionKey = key.key.session_key(&key, &remote_key);
-                        let mut c_data = if is_ok { vec![1u8] } else { vec![0u8] };
-                        c_data.append(&mut data);
-                        let e_data = session_key.encrypt(c_data);
                         let _ = sender
-                            .send(SessionSendMessage::RelayStableResult(
-                                RemotePublic(key.public(), peer_2.clone()),
-                                to,
-                                e_data,
-                            ))
+                            .send(SessionMessage::StableResult(tid, is_ok, is_force, data))
                             .await;
-
-                        if is_ok {
-                            // create a new stable session.
-                            // only happen when the connection by relay.
-                            let (session_sender, session_receiver) = new_session_send_channel();
-                            peer_list_lock.stable_add(
-                                to,
-                                session_sender.clone(),
-                                remote_peer.clone(),
-                                false,
-                            );
-
-                            smol::spawn(relay_stable(Session {
-                                my_sender: session_sender,
-                                my_peer_id: peer_id.clone(),
-                                remote_peer_id: to,
-                                remote_peer: remote_peer,
-                                endpoint_sender: endpoint_send.clone(),
-                                out_sender: out_send.clone(),
-                                connect: ConnectType::Relay(vec![sender]),
-                                session_receiver: session_receiver,
-                                session_key: session_key,
-                                key: key.clone(),
-                                peer: peer.clone(),
-                                peer_list: peer_list.clone(),
-                                transports: transports.clone(),
-                                is_recv_data: true, // this is stable connection.
-                                is_relay_data: !permission,
-                                is_stable: true,
-                                heartbeat: Arc::new(Mutex::new(0)),
-                            }))
-                            .detach();
+                    } else {
+                        if tid != 0 {
+                            let _ = global.out_send(ReceiveMessage::Delivery(tid, false)).await;
                         }
-                        drop(peer_list_lock);
                     }
                 }
                 Ok(SendMessage::StableDisconnect(peer_id)) => {
                     debug!("Send stable disconnect to: {:?}", peer_id);
                     if let Some(session) = peer_list.write().await.stable_remove(&peer_id) {
-                        let _ = session.send(SessionSendMessage::Close).await;
+                        let _ = session.send(SessionMessage::Close).await;
                     }
                 }
                 Ok(SendMessage::Connect(addr)) => {
                     debug!("Send connect to: {:?}", addr);
-                    endpoint_send
-                        .send(EndpointSendMessage::Connect(
+                    let _ = global
+                        .trans_send(TransportSendMessage::Connect(
                             addr,
-                            remote_bytes.clone(),
-                            None,
+                            global.remote_pk.clone(),
                         ))
-                        .await
-                        .expect("Server to Endpoint (Connect)");
+                        .await;
                 }
                 Ok(SendMessage::DisConnect(addr)) => {
                     debug!("Send disconnect to: {:?}", addr);
                     peer_list.write().await.peer_disconnect(&addr).await;
-                    // send to endpoint, beacuse not konw session peer_id.
-                    endpoint_send
-                        .send(EndpointSendMessage::Close(addr))
-                        .await
-                        .expect("Server to Endpoint (DisConnect)");
                 }
-                Ok(SendMessage::Data(to, data)) => {
+                Ok(SendMessage::Data(tid, to, data)) => {
                     debug!(
                         "DEBUG: data is send to: {}, {}",
                         to.short_show(),
                         data.len()
                     );
                     let peer_list_lock = peer_list.read().await;
-                    if let Some((sender, is_it)) = peer_list_lock.get(&to) {
+                    if let Some((sender, stream_sender, is_it)) = peer_list_lock.get(&to) {
                         if is_it {
-                            let _ = sender.send(SessionSendMessage::Data(data)).await;
+                            let _ = sender.send(SessionMessage::Data(tid, data)).await;
                         } else {
-                            // only happen when the stable connection lost, or permissionless.
-                            let _ = sender
-                                .send(SessionSendMessage::RelayData(peer_id, to, data))
+                            // only happen on permissionless. link to session's Line439
+                            let _ = stream_sender
+                                .send(EndpointMessage::RelayData(peer_id, to, data))
                                 .await;
+                        }
+                    } else {
+                        if tid != 0 {
+                            let _ = global.out_send(ReceiveMessage::Delivery(tid, false)).await;
                         }
                     }
                 }
@@ -425,7 +364,7 @@ pub async fn start(
                     Broadcast::StableAll => {
                         let peer_list_lock = peer_list.read().await;
                         for (_to, (sender, _)) in peer_list_lock.stable_all() {
-                            let _ = sender.send(SessionSendMessage::Data(data.clone())).await;
+                            let _ = sender.send(SessionMessage::Data(0, data.clone())).await;
                         }
                         drop(peer_list_lock);
                     }
@@ -433,7 +372,7 @@ pub async fn start(
                         // TODO more Gossip base on Kad.
                         let peer_list_lock = peer_list.read().await;
                         for (_to, sender) in peer_list_lock.all() {
-                            let _ = sender.send(SessionSendMessage::Data(data.clone())).await;
+                            let _ = sender.send(SessionMessage::Data(0, data.clone())).await;
                         }
                         drop(peer_list_lock);
                     }

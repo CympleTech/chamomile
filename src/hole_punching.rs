@@ -6,16 +6,16 @@ use chamomile_types::types::{PeerId, TransportType};
 use super::peer::{Peer, PEER_LENGTH};
 use super::peer_list::PeerList;
 
-pub(crate) enum Hole {
+pub enum Hole {
     StunOne,
     StunTwo,
     Help,
 }
 
-pub(crate) struct DHT(pub Vec<Peer>);
+pub struct DHT(pub Vec<Peer>);
 
 impl Hole {
-    pub(crate) fn from_byte(byte: u8) -> std::result::Result<Self, ()> {
+    pub fn from_byte(byte: u8) -> std::result::Result<Self, ()> {
         match byte {
             0u8 => Ok(Hole::Help),
             1u8 => Ok(Hole::StunOne),
@@ -24,7 +24,7 @@ impl Hole {
         }
     }
 
-    pub(crate) fn to_byte(&self) -> u8 {
+    pub fn to_byte(&self) -> u8 {
         match self {
             Hole::Help => 0u8,
             Hole::StunOne => 1u8,
@@ -34,7 +34,7 @@ impl Hole {
 }
 
 impl DHT {
-    pub(crate) fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, ()> {
+    pub fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, ()> {
         if bytes.len() < 4 {
             return Err(());
         }
@@ -54,7 +54,7 @@ impl DHT {
         Ok(Self(peers))
     }
 
-    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = vec![];
         bytes.extend(&(self.0.len() as u32).to_le_bytes());
         for peer in &self.0 {
