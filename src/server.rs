@@ -273,7 +273,7 @@ pub async fn start(
                         continue;
                     }
 
-                    if let Some((s, ss, is_it)) = peer_list.read().await.get(&to) {
+                    if let Some((s, _, is_it)) = peer_list.read().await.get(&to) {
                         if is_it {
                             let _ = s.send(SessionMessage::StableConnect(tid, data)).await;
                         } else {
@@ -296,7 +296,7 @@ pub async fn start(
                                     tid,
                                     to,
                                     data,
-                                    ss.clone(),
+                                    s.clone(),
                                     peer_id.clone(),
                                     global.clone(),
                                     peer_list.clone(),

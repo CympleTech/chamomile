@@ -10,5 +10,5 @@ license = "MIT/Apache-2.0"
 edition = "2018"
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1.0", default-features = false, features = ["alloc", "derive"]}
 async-channel = "1.5"
