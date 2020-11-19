@@ -85,7 +85,7 @@ pub mod prelude {
     };
 
     pub use chamomile_types::message::{
-        ReceiveMessage, SendMessage, StateRequest, StateResponse, StreamType,
+        DeliveryType, ReceiveMessage, SendMessage, StateRequest, StateResponse, StreamType,
     };
     pub use chamomile_types::types::{Broadcast, PeerId};
 

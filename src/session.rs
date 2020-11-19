@@ -1,5 +1,5 @@
 use chamomile_types::{
-    message::ReceiveMessage,
+    message::{DeliveryType, ReceiveMessage},
     types::{new_io_error, PeerId},
 };
 use smol::{
@@ -25,11 +25,11 @@ use crate::transports::{
 /// server send to session message in channel.
 pub(crate) enum SessionMessage {
     /// send bytes to session what want to send to peer..
-    Data(u32, Vec<u8>),
+    Data(u64, Vec<u8>),
     /// when need build a stable connection.
-    StableConnect(u32, Vec<u8>),
+    StableConnect(u64, Vec<u8>),
     /// when receive a stable result.
-    StableResult(u32, bool, bool, Vec<u8>),
+    StableResult(u64, bool, bool, Vec<u8>),
     /// relay data help.
     RelayData(PeerId, PeerId, Vec<u8>),
     /// relay connect help.
@@ -48,13 +48,14 @@ pub(crate) fn new_session_channel() -> (Sender<SessionMessage>, Receiver<Session
 }
 
 pub(crate) async fn direct_stable(
-    tid: u32,
+    tid: u64,
     to: PeerId,
     data: Vec<u8>, // need as stable bytes to send.
     addr: SocketAddr,
     my_peer_id: PeerId,
     global: Arc<Global>,
     peer_list: Arc<RwLock<PeerList>>,
+    is_recv_data: bool,
     is_relay_data: bool,
 ) -> Result<()> {
     // 1. send stable connect.
@@ -81,7 +82,11 @@ pub(crate) async fn direct_stable(
             let _ = endpoint_sender.send(EndpointMessage::Close).await;
             if tid != 0 {
                 global
-                    .out_send(ReceiveMessage::Delivery(tid, false))
+                    .out_send(ReceiveMessage::Delivery(
+                        DeliveryType::StableConnect,
+                        tid,
+                        false,
+                    ))
                     .await?;
             }
             return Ok(());
@@ -108,7 +113,7 @@ pub(crate) async fn direct_stable(
             session_key,
             global,
             peer_list,
-            true,
+            is_recv_data,
             is_relay_data,
             false,
         );
@@ -139,13 +144,18 @@ pub(crate) async fn direct_stable(
                 my_peer_id,
                 global,
                 peer_list,
+                is_recv_data,
                 is_relay_data,
             )
             .await
         } else {
             if tid != 0 {
                 global
-                    .out_send(ReceiveMessage::Delivery(tid, false))
+                    .out_send(ReceiveMessage::Delivery(
+                        DeliveryType::StableConnect,
+                        tid,
+                        false,
+                    ))
                     .await?;
             }
 
@@ -155,13 +165,14 @@ pub(crate) async fn direct_stable(
 }
 
 pub(crate) async fn relay_stable(
-    tid: u32,
+    tid: u64,
     to: PeerId,
     data: Vec<u8>,
     relay_sender: Sender<EndpointMessage>,
     my_peer_id: PeerId,
     global: Arc<Global>,
     peer_list: Arc<RwLock<PeerList>>,
+    is_recv_data: bool,
     is_relay_data: bool,
 ) -> Result<()> {
     info!("start stable connection.");
@@ -198,7 +209,11 @@ pub(crate) async fn relay_stable(
             peer_list.write().await.remove_tmp_stable(&to);
             if tid != 0 {
                 global
-                    .out_send(ReceiveMessage::Delivery(tid, false))
+                    .out_send(ReceiveMessage::Delivery(
+                        DeliveryType::StableConnect,
+                        tid,
+                        false,
+                    ))
                     .await?;
             }
             return Ok(());
@@ -216,7 +231,7 @@ pub(crate) async fn relay_stable(
             session_key,
             global,
             peer_list,
-            true,
+            is_recv_data,
             is_relay_data,
             false,
         );
@@ -231,7 +246,11 @@ pub(crate) async fn relay_stable(
         peer_list.write().await.remove_tmp_stable(&to);
         if tid != 0 {
             global
-                .out_send(ReceiveMessage::Delivery(tid, false))
+                .out_send(ReceiveMessage::Delivery(
+                    DeliveryType::StableConnect,
+                    tid,
+                    false,
+                ))
                 .await?;
         }
 
@@ -378,6 +397,46 @@ impl Session {
         }
     }
 
+    async fn failure_send(&self, e_data: Vec<u8>) -> Result<()> {
+        if let Ok(bytes) = self.session_key.decrypt(e_data) {
+            if let Ok(msg) = CoreData::from_bytes(bytes) {
+                match msg {
+                    CoreData::Ping => {}
+                    CoreData::Pong => {}
+                    CoreData::Key(_) => {}
+                    CoreData::Delivery(..) => {}
+                    CoreData::Data(tid, _) => {
+                        if tid != 0 {
+                            self.out_send(ReceiveMessage::Delivery(DeliveryType::Data, tid, false))
+                                .await?;
+                        }
+                    }
+                    CoreData::StableConnect(tid, _) => {
+                        if tid != 0 {
+                            self.out_send(ReceiveMessage::Delivery(
+                                DeliveryType::StableConnect,
+                                tid,
+                                false,
+                            ))
+                            .await?;
+                        }
+                    }
+                    CoreData::StableResult(tid, ..) => {
+                        if tid != 0 {
+                            self.out_send(ReceiveMessage::Delivery(
+                                DeliveryType::StableResult,
+                                tid,
+                                false,
+                            ))
+                            .await?;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     #[inline]
     async fn out_send(&self, msg: ReceiveMessage) -> Result<()> {
         self.global.out_send(msg).await
@@ -457,20 +516,36 @@ impl Session {
                             self.out_send(ReceiveMessage::Data(self.remote_peer_id(), p_data))
                                 .await?;
                             if tid != 0 {
-                                self.send_core_data(CoreData::Delivery(tid)).await?;
+                                self.send_core_data(CoreData::Delivery(DeliveryType::Data, tid))
+                                    .await?;
                             }
                         }
                     }
-                    CoreData::Delivery(tid) => {
-                        if tid != 0 && self.is_recv_data {
-                            self.out_send(ReceiveMessage::Delivery(tid, true)).await?;
+                    CoreData::Delivery(t, tid) => {
+                        if tid != 0 {
+                            match t {
+                                DeliveryType::Data => {
+                                    if self.is_recv_data {
+                                        self.out_send(ReceiveMessage::Delivery(t, tid, true))
+                                            .await?;
+                                    }
+                                }
+                                _ => {
+                                    self.out_send(ReceiveMessage::Delivery(t, tid, true))
+                                        .await?;
+                                }
+                            }
                         }
                     }
                     CoreData::StableConnect(tid, data) => {
                         self.out_send(ReceiveMessage::StableConnect(self.remote_peer_id(), data))
                             .await?;
                         if tid != 0 {
-                            self.send_core_data(CoreData::Delivery(tid)).await?;
+                            self.send_core_data(CoreData::Delivery(
+                                DeliveryType::StableConnect,
+                                tid,
+                            ))
+                            .await?;
                         }
                     }
                     CoreData::StableResult(tid, is_ok, data) => {
@@ -481,7 +556,11 @@ impl Session {
                         ))
                         .await?;
                         if tid != 0 {
-                            self.send_core_data(CoreData::Delivery(tid)).await?;
+                            self.send_core_data(CoreData::Delivery(
+                                DeliveryType::StableResult,
+                                tid,
+                            ))
+                            .await?;
                         }
 
                         if !self.is_stable && is_ok {
@@ -544,6 +623,12 @@ impl Session {
                         to,
                         self.remote_peer.id()
                     );
+                    if &to == self.remote_peer.id() {
+                        // cannot send it.
+                        self.failure_send(data).await?;
+                        continue;
+                    }
+
                     if self.is_direct() {
                         self.direct_send(EndpointMessage::RelayData(from, to, data))
                             .await?;
@@ -558,6 +643,11 @@ impl Session {
                     }
                 }
                 Ok(SessionMessage::RelayConnect(from_peer, to)) => {
+                    if &to == self.remote_peer.id() {
+                        // cannot send it.
+                        continue;
+                    }
+
                     if self.is_direct() {
                         self.direct_send(EndpointMessage::RelayConnect(from_peer, to))
                             .await?;
@@ -642,10 +732,8 @@ impl Session {
                     if to == self.my_peer_id {
                         if &from == self.remote_peer.id() {
                             info!("Relay Data is send here.");
-                            if self.is_recv_data {
-                                if self.handle_core_data(data).await? {
-                                    return Ok(());
-                                }
+                            if self.handle_core_data(data).await? {
+                                return Ok(());
                             }
                         } else {
                             info!("Relay data is send to my peer's session.");
@@ -715,7 +803,7 @@ impl Session {
                             new_session_key,
                             self.global.clone(),
                             self.peer_list.clone(),
-                            true, // default is not recv data.
+                            false, // default is not recv data.
                             self.is_relay_data,
                             false,
                         );
@@ -787,10 +875,10 @@ pub(crate) enum CoreData {
     Ping,
     Pong,
     Key(Vec<u8>),
-    Data(u32, Vec<u8>),
-    Delivery(u32),
-    StableConnect(u32, Vec<u8>),
-    StableResult(u32, bool, Vec<u8>),
+    Data(u64, Vec<u8>),
+    Delivery(DeliveryType, u64),
+    StableConnect(u64, Vec<u8>),
+    StableResult(u64, bool, Vec<u8>),
 }
 
 impl CoreData {
@@ -812,8 +900,14 @@ impl CoreData {
                 bytes.extend(&tid.to_le_bytes()[..]);
                 bytes.append(&mut data);
             }
-            CoreData::Delivery(tid) => {
+            CoreData::Delivery(t, tid) => {
                 bytes[0] = 5u8;
+                let b = match t {
+                    DeliveryType::Data => 0u8,
+                    DeliveryType::StableConnect => 1u8,
+                    DeliveryType::StableResult => 2u8,
+                };
+                bytes.push(b);
                 bytes.extend(&tid.to_le_bytes()[..]);
             }
             CoreData::StableConnect(tid, mut data) => {
@@ -843,39 +937,45 @@ impl CoreData {
             2u8 => Ok(CoreData::Pong),
             3u8 => Ok(CoreData::Key(bytes)),
             4u8 => {
-                if bytes.len() < 4 {
+                if bytes.len() < 8 {
                     return Err(());
                 }
-                let mut tid_bytes = [0u8; 4];
-                tid_bytes.copy_from_slice(bytes.drain(0..4).as_slice());
-                let tid = u32::from_le_bytes(tid_bytes);
+                let mut tid_bytes = [0u8; 8];
+                tid_bytes.copy_from_slice(bytes.drain(0..8).as_slice());
+                let tid = u64::from_le_bytes(tid_bytes);
                 Ok(CoreData::Data(tid, bytes))
             }
             5u8 => {
-                if bytes.len() < 4 {
+                if bytes.len() < 9 {
                     return Err(());
                 }
-                let mut tid_bytes = [0u8; 4];
-                tid_bytes.copy_from_slice(bytes.drain(0..4).as_slice());
-                let tid = u32::from_le_bytes(tid_bytes);
-                Ok(CoreData::Delivery(tid))
+                let t = match bytes.drain(0..1).as_slice()[0] {
+                    0u8 => DeliveryType::Data,
+                    1u8 => DeliveryType::StableConnect,
+                    2u8 => DeliveryType::StableResult,
+                    _ => return Err(()),
+                };
+                let mut tid_bytes = [0u8; 8];
+                tid_bytes.copy_from_slice(bytes.drain(0..8).as_slice());
+                let tid = u64::from_le_bytes(tid_bytes);
+                Ok(CoreData::Delivery(t, tid))
             }
             6u8 => {
-                if bytes.len() < 5 {
+                if bytes.len() < 8 {
                     return Err(());
                 }
-                let mut tid_bytes = [0u8; 4];
-                tid_bytes.copy_from_slice(bytes.drain(0..4).as_slice());
-                let tid = u32::from_le_bytes(tid_bytes);
+                let mut tid_bytes = [0u8; 8];
+                tid_bytes.copy_from_slice(bytes.drain(0..8).as_slice());
+                let tid = u64::from_le_bytes(tid_bytes);
                 Ok(CoreData::StableConnect(tid, bytes))
             }
             7u8 => {
-                if bytes.len() < 5 {
+                if bytes.len() < 9 {
                     return Err(());
                 }
-                let mut tid_bytes = [0u8; 4];
-                tid_bytes.copy_from_slice(bytes.drain(0..4).as_slice());
-                let tid = u32::from_le_bytes(tid_bytes);
+                let mut tid_bytes = [0u8; 8];
+                tid_bytes.copy_from_slice(bytes.drain(0..8).as_slice());
+                let tid = u64::from_le_bytes(tid_bytes);
                 let is_ok = bytes.drain(0..1).as_slice()[0] == 1u8;
                 Ok(CoreData::StableResult(tid, is_ok, bytes))
             }

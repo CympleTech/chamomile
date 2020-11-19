@@ -2,8 +2,7 @@ use simplelog::{CombinedLogger, Config as LogConfig, LevelFilter, TermLogger, Te
 use std::env::args;
 use std::net::SocketAddr;
 
-use chamomile::prelude::{start, Config, ReceiveMessage, SendMessage};
-use chamomile_types::types::Broadcast;
+use chamomile::prelude::{start, Broadcast, Config, ReceiveMessage, SendMessage};
 use smol::Timer;
 use std::time::Duration;
 
@@ -78,7 +77,7 @@ fn main() {
                 ReceiveMessage::StableConnect(from, data) => {
                     println!("Recv peer what to build a stable connected: {:?}", data);
 
-                    let tid = 2u32;
+                    let tid = 2u64;
 
                     send.send(SendMessage::StableResult(
                         tid,
@@ -101,8 +100,8 @@ fn main() {
                         remark
                     );
                 }
-                ReceiveMessage::Delivery(tid, had) => {
-                    println!("Recv Delivery: {} {}", tid, had);
+                ReceiveMessage::Delivery(t, tid, had) => {
+                    println!("Recv {:?} Delivery: {} {}", t, tid, had);
                 }
             }
         }

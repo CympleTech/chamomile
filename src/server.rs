@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chamomile_types::{
-    message::{ReceiveMessage, SendMessage, StateRequest, StateResponse},
+    message::{DeliveryType, ReceiveMessage, SendMessage, StateRequest, StateResponse},
     types::{new_io_error, Broadcast, PeerId, TransportType},
 };
 
@@ -245,7 +245,13 @@ pub async fn start(
                     if to == peer_id {
                         info!("Nerver here, stable connect to self.");
                         if tid != 0 {
-                            let _ = global.out_send(ReceiveMessage::Delivery(tid, false)).await;
+                            let _ = global
+                                .out_send(ReceiveMessage::Delivery(
+                                    DeliveryType::StableConnect,
+                                    tid,
+                                    false,
+                                ))
+                                .await;
                         }
                         continue;
                     }
@@ -256,7 +262,13 @@ pub async fn start(
                             .out_send(ReceiveMessage::StableResult(to, true, data))
                             .await;
                         if tid != 0 {
-                            let _ = global.out_send(ReceiveMessage::Delivery(tid, false)).await;
+                            let _ = global
+                                .out_send(ReceiveMessage::Delivery(
+                                    DeliveryType::StableConnect,
+                                    tid,
+                                    false,
+                                ))
+                                .await;
                         }
                         continue;
                     }
@@ -275,6 +287,7 @@ pub async fn start(
                                     peer_id.clone(),
                                     global.clone(),
                                     peer_list.clone(),
+                                    !only_stable_data,
                                     !permission,
                                 ))
                                 .detach();
@@ -287,6 +300,7 @@ pub async fn start(
                                     peer_id.clone(),
                                     global.clone(),
                                     peer_list.clone(),
+                                    !only_stable_data,
                                     !permission,
                                 ))
                                 .detach();
@@ -294,7 +308,13 @@ pub async fn start(
                         }
                     } else {
                         if tid != 0 {
-                            let _ = global.out_send(ReceiveMessage::Delivery(tid, false)).await;
+                            let _ = global
+                                .out_send(ReceiveMessage::Delivery(
+                                    DeliveryType::StableConnect,
+                                    tid,
+                                    false,
+                                ))
+                                .await;
                         }
                     };
                 }
@@ -303,7 +323,13 @@ pub async fn start(
                     if to == peer_id {
                         info!("Nerver here, stable result to self.");
                         if tid != 0 {
-                            let _ = global.out_send(ReceiveMessage::Delivery(tid, false)).await;
+                            let _ = global
+                                .out_send(ReceiveMessage::Delivery(
+                                    DeliveryType::StableResult,
+                                    tid,
+                                    false,
+                                ))
+                                .await;
                         }
                         continue;
                     }
@@ -315,7 +341,13 @@ pub async fn start(
                             .await;
                     } else {
                         if tid != 0 {
-                            let _ = global.out_send(ReceiveMessage::Delivery(tid, false)).await;
+                            let _ = global
+                                .out_send(ReceiveMessage::Delivery(
+                                    DeliveryType::StableResult,
+                                    tid,
+                                    false,
+                                ))
+                                .await;
                         }
                     }
                 }
@@ -356,7 +388,9 @@ pub async fn start(
                         }
                     } else {
                         if tid != 0 {
-                            let _ = global.out_send(ReceiveMessage::Delivery(tid, false)).await;
+                            let _ = global
+                                .out_send(ReceiveMessage::Delivery(DeliveryType::Data, tid, false))
+                                .await;
                         }
                     }
                 }

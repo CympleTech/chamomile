@@ -50,7 +50,7 @@ fn main() {
                 send.send(SendMessage::StableConnect(
                     1,
                     peer_id,
-                    Some("127.0.0.1:7365".parse().unwrap()),
+                    Some("127.0.0.1:7367".parse().unwrap()),
                     bytes,
                 ))
                 .await
@@ -112,8 +112,8 @@ fn main() {
                         .send(SendMessage::Data(4, peer_id, vec![1, 2, 3, 4, 5]))
                         .await;
                 }
-                ReceiveMessage::Delivery(tid, had) => {
-                    println!("======== ===== Recv Delivery: {} {}", tid, had);
+                ReceiveMessage::Delivery(t, tid, had) => {
+                    println!("======== ===== Recv {:?} Delivery: {} {}", t, tid, had);
                 }
             }
         }

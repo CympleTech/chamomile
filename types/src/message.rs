@@ -14,6 +14,14 @@ pub enum StreamType {
     Ok(TransportStream),
 }
 
+/// delivery message type.
+#[derive(Debug, Clone)]
+pub enum DeliveryType {
+    Data,
+    StableConnect,
+    StableResult,
+}
+
 /// main received message for outside channel, send from chamomile to outside.
 #[derive(Debug, Clone)]
 pub enum ReceiveMessage {
@@ -35,7 +43,7 @@ pub enum ReceiveMessage {
     /// params is `u32` stream symbol, and `StreamType`.
     Stream(u32, StreamType),
     /// (Only stable connected) Delivery feedback. include StableConnect, StableResult, Data. `id(u32) != 0`.
-    Delivery(u32, bool),
+    Delivery(DeliveryType, u64, bool),
 }
 
 /// main send message for outside channel, send from outside to chamomile.
@@ -49,13 +57,13 @@ pub enum SendMessage {
     /// if `is_connect` is false, but `is_force_close` if true, we
     /// will use this peer to build our DHT for better connection.
     /// if false, we will force close it.
-    StableResult(u32, PeerId, bool, bool, Vec<u8>),
+    StableResult(u64, PeerId, bool, bool, Vec<u8>),
     /// when need add a peer to stable connect, send to chamomile from outside.
     /// if success connect, will start a stable connection, and add peer to kad, stables,
     /// bootstraps and whitelists. if failure, will send `PeerLeave` to outside.
     /// params is `delivery_feedback_id`, `peer_id`, `socket_addr` and peer `join_info`.
     /// if `delivery_feedback_id = 0` will not feedback.
-    StableConnect(u32, PeerId, Option<SocketAddr>, Vec<u8>),
+    StableConnect(u64, PeerId, Option<SocketAddr>, Vec<u8>),
     /// when outside want to close a stable connectioned peer. use it force close.
     /// params is `peer_id`.
     StableDisconnect(PeerId),
@@ -71,7 +79,7 @@ pub enum SendMessage {
     /// the chamomile will help you send data to there.
     /// params is `delivery_feedback_id`, `peer_id` and `data_bytes`.
     /// if `delivery_feedback_id = 0` will not feedback.
-    Data(u32, PeerId, Vec<u8>),
+    Data(u64, PeerId, Vec<u8>),
     /// when need broadcast a data to all network,
     /// chamomile support some common algorithm, use it, donnot worry.
     /// params is `broadcast_type` and `data_bytes`
