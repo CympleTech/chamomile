@@ -16,22 +16,22 @@ members = [
 
 [dependencies]
 #chamomile_types = "0.2"
-chamomile_types = { path = "./types" }
+chamomile_types = { version = "0.2", path = "./types" }
+
+# async runtime and channel
+smol = "1.2"
 
 toml = "0.5"
 rand = "0.7"
 log = "0.4"
-
-# async runtime and channel
-smol = "1.0"
+bit-vec = "0.6"
 
 # crypto
-sha3 = "0.9"
+sha3 = "0.9" #TODO replace to blake3 = "0.3"
 ed25519-dalek = "1.0"
 x25519-dalek = "1.1"
-aes-soft = "0.5"
-block-modes = "0.6"
-bit-vec = "0.6"
+aes-soft = "0.6"
+block-modes = "0.7"
 
 ## transport
 # QUIC
@@ -49,4 +49,4 @@ bit-vec = "0.6"
 # rpc
 
 [dev-dependencies]
-simplelog = "0.7"
+simplelog = "0.8"

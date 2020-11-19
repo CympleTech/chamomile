@@ -9,8 +9,7 @@ fn main() {
         LevelFilter::Debug,
         LogConfig::default(),
         TerminalMode::Mixed,
-    )
-    .unwrap()])
+    )])
     .unwrap();
 
     smol::block_on(async {
@@ -29,7 +28,7 @@ fn main() {
         if args().nth(2).is_some() {
             let remote_addr: SocketAddr = args().nth(2).unwrap().parse().expect("invalid addr");
             println!("start connect to remote: {}", remote_addr);
-            send.send(SendMessage::Connect(remote_addr, Some(vec![1])))
+            send.send(SendMessage::Connect(remote_addr))
                 .await
                 .expect("channel failure!");
         }
@@ -39,27 +38,25 @@ fn main() {
                 ReceiveMessage::Data(peer_id, bytes) => {
                     println!("Recv data from: {}, {:?}", peer_id.short_show(), bytes);
                 }
-                ReceiveMessage::PeerJoin(peer_id, addr, join_data) => {
-                    println!(
-                        "Peer join: {:?} {}, join data: {:?}",
-                        peer_id, addr, join_data
-                    );
-                    send.send(SendMessage::PeerJoinResult(peer_id, true, false, vec![1]))
+                ReceiveMessage::StableConnect(peer_id, join_data) => {
+                    println!("Peer join: {:?}, join data: {:?}", peer_id, join_data);
+                    send.send(SendMessage::StableResult(0, peer_id, true, false, vec![1]))
                         .await
                         .expect("channel failure!");
                 }
-                ReceiveMessage::PeerJoinResult(peer_id, is_ok, data) => {
+                ReceiveMessage::StableResult(peer_id, is_ok, data) => {
                     println!(
                         "Peer Join Result: {:?} {}, data: {:?}",
                         peer_id, is_ok, data
                     );
                 }
-                ReceiveMessage::PeerLeave(peer_id) => {
+                ReceiveMessage::StableLeave(peer_id) => {
                     println!("Peer_leave: {:?}", peer_id);
                 }
                 ReceiveMessage::Stream(..) => {
                     panic!("Not stream");
                 }
+                ReceiveMessage::Delivery(..) => {}
             }
         }
     });

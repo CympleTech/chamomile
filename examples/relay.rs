@@ -12,8 +12,7 @@ fn main() {
         LevelFilter::Debug,
         LogConfig::default(),
         TerminalMode::Mixed,
-    )
-    .unwrap()])
+    )])
     .unwrap();
 
     smol::block_on(async {
