@@ -294,7 +294,7 @@ pub(crate) async fn session_run(
             session.session_sender.clone(),
             session.stream_sender.clone(),
             session.remote_peer.clone(),
-            true,
+            session.is_direct(),
         );
 
         info!("start stable connection.");
