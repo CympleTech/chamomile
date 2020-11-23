@@ -142,10 +142,10 @@ impl PeerList {
         self.stables.contains_key(peer_id)
     }
 
-    pub fn stable_relay_contains(&self, peer_id: &PeerId) -> Option<&Sender<SessionMessage>> {
+    pub fn stable_check_relay(&self, peer_id: &PeerId) -> Option<&Sender<SessionMessage>> {
         self.stables
             .get(peer_id)
-            .map(|v| if v.1 { Some(&(v.0).0) } else { None })
+            .map(|v| if !v.1 { Some(&(v.0).0) } else { None })
             .flatten()
     }
 

@@ -42,9 +42,10 @@ pub(crate) enum SessionMessage {
     Close,
     /// Directly incoming.
     DirectIncoming(
-        Sender<EndpointMessage>,   // stream sender (endpoint -> session sender).
+        RemotePublic,
+        Sender<EndpointMessage>, // stream sender (endpoint -> session sender).
         Receiver<EndpointMessage>, // stream receiver (endpoint -> session receiver).
-        Sender<EndpointMessage>,   // endpoint sender (session -> endpointsender).
+        Sender<EndpointMessage>, // endpoint sender (session -> endpointsender).
     ),
 }
 
@@ -575,7 +576,7 @@ impl Session {
         Ok(())
     }
 
-    pub async fn listen(&mut self) -> Result<()> {
+    async fn forever(&mut self) -> Result<()> {
         loop {
             match future::race(
                 future::race(
@@ -621,7 +622,11 @@ impl Session {
                 Err(_) => break,
             }
         }
+        Ok(())
+    }
 
+    pub async fn listen(&mut self) -> Result<()> {
+        let _ = self.forever().await;
         debug!("Session broke: {:?}", self.remote_peer.id());
         self.close().await
     }
@@ -720,8 +725,19 @@ impl Session {
             SessionMessage::Close => {
                 debug!("Got outside close it");
             }
-            SessionMessage::DirectIncoming(_stream_sender, _stream_receiver, _endpoint_sender) => {
-                // TODO
+            SessionMessage::DirectIncoming(
+                RemotePublic(remote_key, remote_peer),
+                stream_sender,
+                stream_receiver,
+                endpoint_sender,
+            ) => {
+                debug!("Got directly stable connection");
+                self.stream_sender = stream_sender;
+                self.stream_receiver = stream_receiver;
+                self.endpoint = ConnectType::Direct(endpoint_sender);
+                self.session_key = self.global.key.session_key(&remote_key);
+                self.remote_peer = remote_peer;
+                self.upgrade().await?;
             }
         }
 

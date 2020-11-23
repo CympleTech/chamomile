@@ -175,22 +175,6 @@ pub async fn start(
                         continue;
                     }
 
-                    // check is stable relay connections.
-                    if let Some(sender) = peer_list_1
-                        .read()
-                        .await
-                        .stable_relay_contains(&remote_peer_id)
-                    {
-                        let _ = sender
-                            .send(SessionMessage::DirectIncoming(
-                                stream_sender,
-                                stream_receiver,
-                                endpoint_sender,
-                            ))
-                            .await;
-                        continue;
-                    }
-
                     // save to peer_list.
                     let (session_sender, session_receiver) = new_session_channel();
                     let mut peer_list_lock = peer_list_1.write().await;
@@ -219,15 +203,27 @@ pub async fn start(
                             .expect("Session to Endpoint (Data Key)");
                     }
 
-                    // first session_key.
-                    let session_key: SessionKey = global_1.key.session_key(&remote_peer_key);
-
                     // DHT help.
                     let peers = peer_list_1.read().await.get_dht_help(&remote_peer_id);
                     endpoint_sender
                         .send(EndpointMessage::DHT(DHT(peers)))
                         .await
                         .expect("Sesssion to Endpoint (Data)");
+
+                    // check is stable relay connections.
+                    if let Some(sender) =
+                        peer_list_1.read().await.stable_check_relay(&remote_peer_id)
+                    {
+                        let _ = sender
+                            .send(SessionMessage::DirectIncoming(
+                                RemotePublic(remote_peer_key, remote_peer),
+                                stream_sender,
+                                stream_receiver,
+                                endpoint_sender,
+                            ))
+                            .await;
+                        continue;
+                    }
 
                     session_spawn(Session::new(
                         peer_id.clone(),
@@ -237,7 +233,7 @@ pub async fn start(
                         stream_sender,
                         stream_receiver,
                         ConnectType::Direct(endpoint_sender),
-                        session_key,
+                        global_1.key.session_key(&remote_peer_key),
                         global_1.clone(),
                         peer_list_1.clone(),
                         !only_stable_data,

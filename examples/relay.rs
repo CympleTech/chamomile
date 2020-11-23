@@ -70,8 +70,18 @@ fn main() {
                     );
 
                     if first_data {
-                        let _ = send.send(SendMessage::Data(2, peer_id, bytes)).await;
+                        send.send(SendMessage::Data(2, peer_id, bytes))
+                            .await
+                            .unwrap();
                         first_data = false;
+
+                        if args().nth(3).is_some() {
+                            println!("=========== START DIRECTLY INCOMING TEST=============");
+                            // upgrade to directly
+                            send.send(SendMessage::Connect("127.0.0.1:7365".parse().unwrap()))
+                                .await
+                                .unwrap();
+                        }
                     }
                 }
                 ReceiveMessage::Stream(..) => {
