@@ -142,6 +142,13 @@ impl PeerList {
         self.stables.contains_key(peer_id)
     }
 
+    pub fn stable_relay_contains(&self, peer_id: &PeerId) -> Option<&Sender<SessionMessage>> {
+        self.stables
+            .get(peer_id)
+            .map(|v| if v.1 { Some(&(v.0).0) } else { None })
+            .flatten()
+    }
+
     /// get in DHT help
     pub fn get_dht_help(&self, peer_id: &PeerId) -> Vec<Peer> {
         // TODO better closest peers

@@ -19,7 +19,7 @@ use crate::peer::Peer;
 use crate::peer_list::PeerList;
 use crate::primitives::{STORAGE_KEY_KEY, STORAGE_NAME, STORAGE_PEER_LIST_KEY};
 use crate::session::{
-    direct_stable, new_session_channel, relay_stable, session_run, ConnectType, Session,
+    direct_stable, new_session_channel, relay_stable, session_spawn, ConnectType, Session,
     SessionMessage,
 };
 use crate::transports::{
@@ -175,9 +175,24 @@ pub async fn start(
                         continue;
                     }
 
-                    let (session_sender, session_receiver) = new_session_channel();
+                    // check is stable relay connections.
+                    if let Some(sender) = peer_list_1
+                        .read()
+                        .await
+                        .stable_relay_contains(&remote_peer_id)
+                    {
+                        let _ = sender
+                            .send(SessionMessage::DirectIncoming(
+                                stream_sender,
+                                stream_receiver,
+                                endpoint_sender,
+                            ))
+                            .await;
+                        continue;
+                    }
 
                     // save to peer_list.
+                    let (session_sender, session_receiver) = new_session_channel();
                     let mut peer_list_lock = peer_list_1.write().await;
                     let is_new = peer_list_lock
                         .peer_add(
@@ -214,12 +229,13 @@ pub async fn start(
                         .await
                         .expect("Sesssion to Endpoint (Data)");
 
-                    let session = Session::new(
+                    session_spawn(Session::new(
                         peer_id.clone(),
                         remote_peer,
-                        stream_sender,
                         session_sender,
                         session_receiver,
+                        stream_sender,
+                        stream_receiver,
                         ConnectType::Direct(endpoint_sender),
                         session_key,
                         global_1.clone(),
@@ -227,9 +243,7 @@ pub async fn start(
                         !only_stable_data,
                         !permission,
                         false,
-                    );
-
-                    smol::spawn(session_run(session, stream_receiver)).detach();
+                    ));
                 }
                 Err(_) => break,
             }
