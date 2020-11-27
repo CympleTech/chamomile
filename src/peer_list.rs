@@ -2,12 +2,12 @@ use smol::{channel::Sender, fs};
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::iter::Iterator;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 use chamomile_types::types::PeerId;
 
-use crate::kad::{KadTree, KadValue};
+use crate::kad::{DoubleKadTree, KadValue};
 use crate::peer::Peer;
 use crate::session::SessionMessage;
 use crate::transports::EndpointMessage;
@@ -17,7 +17,7 @@ use crate::transports::EndpointMessage;
 pub(crate) struct PeerList {
     save_path: PathBuf,
     /// PeerId => KadValue(Sender<Sessionmessage>, Sender<EndpointMessage>, Peer)
-    dhts: KadTree,
+    dhts: DoubleKadTree,
     /// PeerId => KadValue(Sender<SessionMessage>, Sender<EndpointMessage>, Peer)
     stables: HashMap<PeerId, (KadValue, bool)>,
     tmp_stables: HashMap<PeerId, (Sender<SessionMessage>, Sender<EndpointMessage>)>,
@@ -41,6 +41,7 @@ impl PeerList {
         whites: (Vec<PeerId>, Vec<SocketAddr>),
         blacks: (Vec<PeerId>, Vec<IpAddr>),
     ) -> Self {
+        let default_socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
         let mut bootstraps = whites.1.clone();
         match std::fs::File::open(&save_path) {
             Ok(file) => {
@@ -57,7 +58,7 @@ impl PeerList {
                 PeerList {
                     save_path,
                     bootstraps,
-                    dhts: KadTree::new(peer_id),
+                    dhts: DoubleKadTree::new(peer_id, default_socket),
                     stables: HashMap::new(),
                     tmp_stables: HashMap::new(),
                     whites: whites,
@@ -67,7 +68,7 @@ impl PeerList {
             Err(_) => PeerList {
                 save_path,
                 bootstraps,
-                dhts: KadTree::new(peer_id),
+                dhts: DoubleKadTree::new(peer_id, default_socket),
                 stables: HashMap::new(),
                 tmp_stables: HashMap::new(),
                 whites: whites,
@@ -112,6 +113,25 @@ impl PeerList {
         self.stable_get(peer_id).or(self.dht_get(peer_id))
     }
 
+    pub fn peer_next_closest(
+        &self,
+        peer_id: &PeerId,
+        prev: &PeerId,
+    ) -> Option<&Sender<SessionMessage>> {
+        self.stables
+            .get(peer_id)
+            .map(|v| &(v.0).0)
+            .or(self.dhts.peer_next_closest(peer_id, prev).map(|v| &v.0))
+    }
+
+    pub fn ip_next_closest(
+        &self,
+        ip: &SocketAddr,
+        prev: &SocketAddr,
+    ) -> Option<&Sender<SessionMessage>> {
+        self.dhts.ip_next_closest(ip, prev).map(|v| &v.0)
+    }
+
     /// search in dht table.
     pub fn dht_get(
         &self,
@@ -119,7 +139,7 @@ impl PeerList {
     ) -> Option<(&Sender<SessionMessage>, &Sender<EndpointMessage>, bool)> {
         self.dhts
             .search(peer_id)
-            .map(|(_k, v, is_it)| (&v.0, &v.1, is_it))
+            .map(|(v, is_it)| (&v.0, &v.1, is_it))
     }
 
     /// search in stable list.
@@ -158,9 +178,9 @@ impl PeerList {
             if &key == peer_id {
                 continue;
             }
-            if let Some((k, KadValue(_, _, peer), is_it)) = self.dhts.search(&key) {
+            if let Some((KadValue(_, _, peer), is_it)) = self.dhts.search(&key) {
                 if is_it {
-                    peers.insert(k, peer);
+                    peers.insert(peer.id(), peer);
                 }
             }
         }
@@ -179,7 +199,7 @@ impl PeerList {
     /// 2. add to kad.
     pub async fn peer_add(
         &mut self,
-        peer_id: PeerId,
+        peer_id: &PeerId,
         sender: Sender<SessionMessage>,
         stream_sender: Sender<EndpointMessage>,
         peer: Peer,
@@ -193,12 +213,11 @@ impl PeerList {
         // 2. add to kad.
         if self
             .dhts
-            .search(&peer_id)
-            .and_then(|(_k, _v, is_it)| if is_it { Some(()) } else { None })
+            .search(peer_id)
+            .and_then(|(_v, is_it)| if is_it { Some(()) } else { None })
             .is_none()
         {
-            self.dhts
-                .add(peer_id, KadValue(sender, stream_sender, peer));
+            self.dhts.add(KadValue(sender, stream_sender, peer));
             true
         } else {
             false

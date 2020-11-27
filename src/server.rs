@@ -31,15 +31,38 @@ pub(crate) struct Global {
     pub peer_id: PeerId,
     pub peer: Peer,
     pub key: Keypair,
-    pub remote_pk: RemotePublic,
     pub transport_sender: Sender<TransportSendMessage>,
     pub out_sender: Sender<ReceiveMessage>,
 }
 
 impl Global {
     #[inline]
-    pub fn remote_pk(&self) -> RemotePublic {
-        RemotePublic(self.key.public(), self.peer.clone())
+    pub fn generate_remote(&self) -> (SessionKey, RemotePublic) {
+        let session_key = self.key.generate_session_key();
+        let remote_pk = RemotePublic(
+            self.key.public(),
+            self.peer.clone(),
+            session_key.out_bytes(),
+        );
+        (session_key, remote_pk)
+    }
+
+    #[inline]
+    pub fn complete_remote(
+        &self,
+        remote_key: &Keypair,
+        dh_bytes: Vec<u8>,
+    ) -> Option<(SessionKey, RemotePublic)> {
+        if let Some(session_key) = self.key.complete_session_key(remote_key, dh_bytes) {
+            let remote_pk = RemotePublic(
+                self.key.public(),
+                self.peer.clone(),
+                session_key.out_bytes(),
+            );
+            Some((session_key, remote_pk))
+        } else {
+            None
+        }
     }
 
     #[inline]
@@ -118,24 +141,23 @@ pub async fn start(
     transports.insert(default_transport, transport_sender.clone());
     let _transports = Arc::new(RwLock::new(transports)); // TODO more about multiple transports.
 
-    let remote_pk = RemotePublic(key.public().clone(), peer.clone());
-
-    // bootstrap white list.
-    for a in peer_list.read().await.bootstrap() {
-        transport_sender
-            .send(TransportSendMessage::Connect(*a, remote_pk.clone()))
-            .await
-            .expect("Server to Endpoint (Connect)");
-    }
-
     let global = Arc::new(Global {
         peer_id,
         peer,
         key,
-        remote_pk,
         transport_sender,
         out_sender,
     });
+
+    // bootstrap white list.
+    for a in peer_list.read().await.bootstrap() {
+        let (session_key, remote_pk) = global.generate_remote();
+        global
+            .transport_sender
+            .send(TransportSendMessage::Connect(*a, remote_pk, session_key))
+            .await
+            .expect("Server to Endpoint (Connect)");
+    }
 
     let peer_list_1 = peer_list.clone();
     let global_1 = global.clone();
@@ -158,9 +180,9 @@ pub async fn start(
                         let _ = endpoint_sender.send(EndpointMessage::Close).await;
                         continue;
                     }
-                    let RemotePublic(remote_peer_key, remote_peer) = remote_pk;
+                    let RemotePublic(remote_key, remote_peer, dh_key) = remote_pk;
 
-                    let remote_peer_id = remote_peer_key.peer_id();
+                    let remote_peer_id = remote_key.peer_id();
                     debug!("Debug: Session connected: {}", remote_peer_id.short_show());
 
                     let remote_peer = nat(addr, remote_peer);
@@ -175,12 +197,37 @@ pub async fn start(
                         continue;
                     }
 
+                    // if not self, send self publics info.
+                    let session_key = if is_self.is_none() {
+                        if let Some((session_key, remote_pk)) =
+                            global_1.complete_remote(&remote_key, dh_key.clone())
+                        {
+                            let _ = endpoint_sender
+                                .send(EndpointMessage::Handshake(remote_pk))
+                                .await;
+                            session_key
+                        } else {
+                            debug!("Session key is error!");
+                            let _ = endpoint_sender.send(EndpointMessage::Close).await;
+                            continue;
+                        }
+                    } else {
+                        let mut session_key = is_self.unwrap();
+                        if session_key.complete(&remote_key.pk, dh_key.clone()) {
+                            session_key
+                        } else {
+                            debug!("Session key is error!");
+                            let _ = endpoint_sender.send(EndpointMessage::Close).await;
+                            continue;
+                        }
+                    };
+
                     // save to peer_list.
                     let (session_sender, session_receiver) = new_session_channel();
                     let mut peer_list_lock = peer_list_1.write().await;
                     let is_new = peer_list_lock
                         .peer_add(
-                            remote_peer_id,
+                            &remote_peer_id,
                             session_sender.clone(),
                             stream_sender.clone(),
                             remote_peer,
@@ -193,14 +240,6 @@ pub async fn start(
                         debug!("Session is had connected, close it.");
                         let _ = endpoint_sender.send(EndpointMessage::Close).await;
                         continue;
-                    }
-
-                    // if not self, send self publics info.
-                    if !is_self {
-                        endpoint_sender
-                            .send(EndpointMessage::Handshake(global_1.remote_pk.clone()))
-                            .await
-                            .expect("Session to Endpoint (Data Key)");
                     }
 
                     // DHT help.
@@ -216,7 +255,7 @@ pub async fn start(
                     {
                         let _ = sender
                             .send(SessionMessage::DirectIncoming(
-                                RemotePublic(remote_peer_key, remote_peer),
+                                RemotePublic(remote_key, remote_peer, dh_key),
                                 stream_sender,
                                 stream_receiver,
                                 endpoint_sender,
@@ -233,7 +272,7 @@ pub async fn start(
                         stream_sender,
                         stream_receiver,
                         ConnectType::Direct(endpoint_sender),
-                        global_1.key.session_key(&remote_peer_key),
+                        session_key,
                         global_1.clone(),
                         peer_list_1.clone(),
                         !only_stable_data,
@@ -369,11 +408,9 @@ pub async fn start(
                 }
                 Ok(SendMessage::Connect(addr)) => {
                     debug!("Send connect to: {:?}", addr);
+                    let (session_key, remote_pk) = global.generate_remote();
                     let _ = global
-                        .trans_send(TransportSendMessage::Connect(
-                            addr,
-                            global.remote_pk.clone(),
-                        ))
+                        .trans_send(TransportSendMessage::Connect(addr, remote_pk, session_key))
                         .await;
                 }
                 Ok(SendMessage::DisConnect(addr)) => {

@@ -27,26 +27,15 @@ log = "0.4"
 bit-vec = "0.6"
 
 # crypto
-sha3 = "0.9" #TODO replace to blake3 = "0.3"
+blake3 = "0.3"
 ed25519-dalek = "1.0"
 x25519-dalek = "1.1"
 aes-soft = "0.6"
 block-modes = "0.7"
 
 ## transport
-# QUIC
-#quinn = "~0.3.0"
 #webpki = "0.19"
-#rustls = { version = "0.15.2", features = ["quic", "dangerous_configuration"] }
-
-# TCP
 #socket2 = "0.3"
-#yamux = { git = "https://github.com/paritytech/yamux", version = "0.2.1" }
-
-# KCP
-#kcp = { path = "../kcp" }
-
-# rpc
 
 [dev-dependencies]
 simplelog = "0.8"

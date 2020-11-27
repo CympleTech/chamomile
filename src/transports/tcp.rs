@@ -7,6 +7,8 @@ use smol::{
 };
 use std::net::SocketAddr;
 
+use crate::keys::SessionKey;
+
 use super::{
     new_endpoint_channel, EndpointMessage, RemotePublic, TransportRecvMessage, TransportSendMessage,
 };
@@ -45,7 +47,7 @@ async fn run_listen(listener: TcpListener, out_send: Sender<TransportRecvMessage
             out_sender,
             self_receiver,
             OutType::DHT(out_send.clone(), self_sender, out_receiver),
-            false,
+            None,
         ))
         .detach();
     }
@@ -60,7 +62,7 @@ async fn run_self_recv(
 ) -> Result<()> {
     while let Ok(m) = recv.recv().await {
         match m {
-            TransportSendMessage::Connect(addr, remote_pk) => {
+            TransportSendMessage::Connect(addr, remote_pk, session_key) => {
                 if let Ok(mut stream) = TcpStream::connect(addr).await {
                     info!("TCP connect to {:?}", addr);
                     let bytes = EndpointMessage::Handshake(remote_pk).to_bytes();
@@ -75,7 +77,7 @@ async fn run_self_recv(
                         out_sender,
                         self_receiver,
                         OutType::DHT(out_send.clone(), self_sender, out_receiver),
-                        true,
+                        Some(session_key),
                     ))
                     .detach();
                 } else {
@@ -94,7 +96,7 @@ async fn run_self_recv(
                         out_sender,
                         self_receiver,
                         OutType::Stable,
-                        true,
+                        None,
                     ))
                     .detach();
                 } else {
@@ -122,7 +124,7 @@ async fn process_stream(
     out_sender: Sender<EndpointMessage>,
     self_receiver: Receiver<EndpointMessage>,
     out_type: OutType,
-    is_self: bool,
+    has_session: Option<SessionKey>,
 ) -> Result<()> {
     let addr = stream.peer_addr()?;
     let mut reader = stream.clone();
@@ -191,7 +193,7 @@ async fn process_stream(
                 .send(TransportRecvMessage(
                     addr,
                     remote_pk,
-                    is_self,
+                    has_session,
                     out_sender.clone(),
                     out_receiver,
                     self_sender,

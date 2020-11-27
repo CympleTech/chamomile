@@ -2,13 +2,51 @@ use bit_vec::BitVec;
 use chamomile_types::types::PeerId;
 use core::cmp::Ordering;
 use smol::channel::Sender;
+use std::collections::HashMap;
+use std::net::SocketAddr;
 
 use crate::peer::Peer;
 use crate::session::SessionMessage;
 use crate::transports::EndpointMessage;
 
+trait Key: Eq + Clone {
+    const KEY_LENGTH: usize;
+    fn distance(&self) -> Distance;
+    fn calc_distance(base: &Self, target: &Self) -> Distance {
+        let base = base.distance();
+        let target = target.distance();
+        base.xor(&target, Self::KEY_LENGTH)
+    }
+}
+
+impl Key for PeerId {
+    const KEY_LENGTH: usize = 256;
+    fn distance(&self) -> Distance {
+        // 256-bit
+        Distance(BitVec::from_bytes(self.as_bytes()))
+    }
+}
+
+impl Key for SocketAddr {
+    const KEY_LENGTH: usize = 144;
+    fn distance(&self) -> Distance {
+        let ip_bytes: [u8; 16] = match self {
+            SocketAddr::V4(ipv4) => ipv4.ip().to_ipv6_mapped().octets(),
+            SocketAddr::V6(ipv6) => ipv6.ip().octets(),
+        };
+        let port_bytes: [u8; 2] = self.port().to_le_bytes();
+        // 144-bit = 128 + 16
+        Distance(BitVec::from_bytes(
+            &[&ip_bytes[..], &port_bytes[..]].concat(),
+        ))
+    }
+}
+
 const MAX_LEVEL: usize = 8;
-const K_BUCKET: usize = 8;
+
+// max peer-id is 4 * 256 = 1024
+// max ip-address is 4 * 128 = 512
+const K_BUCKET: usize = 4;
 
 pub(crate) struct KadValue(
     pub Sender<SessionMessage>,
@@ -16,24 +54,92 @@ pub(crate) struct KadValue(
     pub Peer,
 );
 
-pub(crate) struct KadTree {
-    root_key: PeerId,
-    left: TreeNode,
-    right: TreeNode,
+pub(crate) struct DoubleKadTree {
+    values: HashMap<u32, KadValue>,
+    peers: KadTree<PeerId>,
+    ips: KadTree<SocketAddr>,
 }
 
-type TreeNode = Option<Box<Node>>;
-
-struct Node {
-    left: TreeNode,
-    right: TreeNode,
-    list: Vec<Cell>,
+struct KadTree<K: Key> {
+    root_key: K,
+    left: TreeNode<K>,
+    right: TreeNode<K>,
 }
 
-struct Cell(PeerId, KadValue, Distance);
+type TreeNode<K> = Option<Box<Node<K>>>;
 
-impl KadTree {
-    pub fn new(key: PeerId) -> Self {
+struct Node<K: Key> {
+    left: TreeNode<K>,
+    right: TreeNode<K>,
+    list: Vec<Cell<K>>,
+}
+
+struct Cell<K>(K, u32, Distance);
+
+impl DoubleKadTree {
+    pub fn new(root_peer: PeerId, root_ip: SocketAddr) -> Self {
+        DoubleKadTree {
+            peers: KadTree::new(root_peer),
+            ips: KadTree::new(root_ip),
+            values: HashMap::new(),
+        }
+    }
+
+    pub fn add(&mut self, value: KadValue) -> bool {
+        let value_key = self.values.len() as u32;
+        let peer_id = value.2.id().clone();
+        let ip_addr = value.2.addr().clone();
+        if self.peers.add(peer_id, value_key) {
+            self.ips.add(ip_addr, value_key);
+            self.values.insert(value_key, value);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn peer_next_closest(&self, key: &PeerId, prev: &PeerId) -> Option<&KadValue> {
+        self.peers
+            .next_closest(key, prev)
+            .map(|k| self.values.get(k))
+            .flatten()
+    }
+
+    pub fn ip_next_closest(&self, key: &SocketAddr, prev: &SocketAddr) -> Option<&KadValue> {
+        self.ips
+            .next_closest(key, prev)
+            .map(|k| self.values.get(k))
+            .flatten()
+    }
+
+    pub fn search(&self, key: &PeerId) -> Option<(&KadValue, bool)> {
+        self.peers
+            .search(key)
+            .map(|(_, k, is_it)| self.values.get(k).map(|v| (v, is_it)))
+            .flatten()
+    }
+
+    pub fn remove(&mut self, key: &PeerId) -> Option<KadValue> {
+        if let Some(k) = self.peers.remove(key) {
+            if let Some(value) = self.values.remove(&k) {
+                self.ips.remove(value.2.addr());
+                return Some(value);
+            }
+        }
+        None
+    }
+
+    pub fn contains(&self, key: &PeerId) -> bool {
+        self.peers.contains(key)
+    }
+
+    pub fn keys(&self) -> Vec<PeerId> {
+        self.peers.keys()
+    }
+}
+
+impl<K: Key> KadTree<K> {
+    fn new(key: K) -> Self {
         KadTree {
             root_key: key,
             left: None,
@@ -41,8 +147,8 @@ impl KadTree {
         }
     }
 
-    pub fn add(&mut self, key: PeerId, value: KadValue) -> bool {
-        let distance = Distance::new(&self.root_key, &key);
+    fn add(&mut self, key: K, value: u32) -> bool {
+        let distance = K::calc_distance(&self.root_key, &key);
 
         if distance.get(0) {
             if self.right.is_none() {
@@ -63,8 +169,14 @@ impl KadTree {
         }
     }
 
-    pub fn search(&self, key: &PeerId) -> Option<(&PeerId, &KadValue, bool)> {
-        let distance = Distance::new(&self.root_key, &key);
+    fn next_closest(&self, key: &K, prev: &K) -> Option<&u32> {
+        self.search(key)
+            .map(|v| if v.0 == prev { None } else { Some(v.1) })
+            .flatten()
+    }
+
+    fn search(&self, key: &K) -> Option<(&K, &u32, bool)> {
+        let distance = K::calc_distance(&self.root_key, &key);
 
         if distance.get(0) {
             if self.right.is_none() {
@@ -101,8 +213,8 @@ impl KadTree {
         }
     }
 
-    pub fn remove(&mut self, key: &PeerId) -> Option<KadValue> {
-        let distance = Distance::new(&self.root_key, &key);
+    fn remove(&mut self, key: &K) -> Option<u32> {
+        let distance = K::calc_distance(&self.root_key, &key);
         if distance.get(0) {
             self.right
                 .as_mut()
@@ -112,7 +224,7 @@ impl KadTree {
         }
     }
 
-    pub fn contains(&self, key: &PeerId) -> bool {
+    fn contains(&self, key: &K) -> bool {
         if let Some((_, _, true)) = self.search(key) {
             true
         } else {
@@ -120,7 +232,7 @@ impl KadTree {
         }
     }
 
-    pub fn keys(&self) -> Vec<PeerId> {
+    fn keys(&self) -> Vec<K> {
         let mut vec = Vec::new();
         if self.left.is_some() {
             self.left.as_ref().unwrap().keys(&mut vec);
@@ -132,7 +244,7 @@ impl KadTree {
     }
 }
 
-impl Node {
+impl<K: Key> Node<K> {
     fn default() -> Self {
         Node {
             left: None,
@@ -141,7 +253,7 @@ impl Node {
         }
     }
 
-    fn insert(&mut self, mut cell: Cell, index: usize, k_bucket: usize) -> bool {
+    fn insert(&mut self, mut cell: Cell<K>, index: usize, k_bucket: usize) -> bool {
         if self.right.is_some() || self.left.is_some() {
             if cell.2.get(index) {
                 if self.right.is_none() {
@@ -198,20 +310,15 @@ impl Node {
         }
     }
 
-    pub fn search(
-        &self,
-        key: &PeerId,
-        distance: &Distance,
-        index: usize,
-    ) -> Option<(&PeerId, &KadValue, bool)> {
+    pub fn search(&self, key: &K, distance: &Distance, index: usize) -> Option<(&K, &u32, bool)> {
         let mut closest_index = usize::MAX;
-        let mut closest_distance = Distance::max();
+        let mut closest_distance = Distance::max(K::KEY_LENGTH);
 
         for (index, cell) in self.list.iter().enumerate() {
             if &cell.0 == key {
                 return Some((&cell.0, &cell.1, true));
             } else {
-                let dis = distance.xor(&cell.2);
+                let dis = distance.xor(&cell.2, K::KEY_LENGTH);
                 if dis < closest_distance {
                     closest_distance = dis;
                     closest_index = index;
@@ -240,7 +347,7 @@ impl Node {
             .and_then(|cell| Some((&cell.0, &cell.1, false)))
     }
 
-    pub fn remove(&mut self, key: &PeerId, distance: &Distance, index: usize) -> Option<KadValue> {
+    pub fn remove(&mut self, key: &K, distance: &Distance, index: usize) -> Option<u32> {
         let mut deleted_index = usize::MAX;
         for (i, cell) in self.list.iter().enumerate() {
             if &cell.0 == key {
@@ -266,7 +373,7 @@ impl Node {
         None
     }
 
-    pub fn keys(&self, vec: &mut Vec<PeerId>) {
+    pub fn keys(&self, vec: &mut Vec<K>) {
         for i in self.list.iter() {
             vec.push(i.key().clone());
         }
@@ -281,28 +388,28 @@ impl Node {
     }
 }
 
-impl Ord for Cell {
-    fn cmp(&self, other: &Cell) -> Ordering {
+impl<K: Key> Ord for Cell<K> {
+    fn cmp(&self, other: &Self) -> Ordering {
         self.2.cmp(&other.2)
     }
 }
 
-impl PartialOrd for Cell {
-    fn partial_cmp(&self, other: &Cell) -> Option<Ordering> {
+impl<K: Key> PartialOrd for Cell<K> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Eq for Cell {}
+impl<K: Key> Eq for Cell<K> {}
 
-impl PartialEq for Cell {
-    fn eq(&self, other: &Cell) -> bool {
+impl<K: Key> PartialEq for Cell<K> {
+    fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
     }
 }
 
-impl Cell {
-    fn key(&self) -> &PeerId {
+impl<K: Key> Cell<K> {
+    fn key(&self) -> &K {
         &self.0
     }
 }
@@ -311,25 +418,15 @@ impl Cell {
 pub struct Distance(BitVec);
 
 impl Distance {
-    pub fn max() -> Self {
-        Distance(BitVec::from_elem(160, true))
+    fn max(len: usize) -> Self {
+        Distance(BitVec::from_elem(len, true))
     }
 
-    pub fn min() -> Self {
-        Distance(BitVec::from_elem(160, false))
+    fn min(len: usize) -> Self {
+        Distance(BitVec::from_elem(len, false))
     }
 
-    pub fn new(base: &PeerId, target: &PeerId) -> Self {
-        let base_source = BitVec::from_bytes(base.as_bytes());
-        let base = Distance((0..160).map(|i| base_source[i]).collect());
-
-        let target_source = BitVec::from_bytes(target.as_bytes());
-        let target = Distance((0..160).map(|i| target_source[i]).collect());
-
-        base.xor(&target)
-    }
-
-    pub fn get(&self, index: usize) -> bool {
+    fn get(&self, index: usize) -> bool {
         if index >= 160 {
             false
         } else {
@@ -337,10 +434,10 @@ impl Distance {
         }
     }
 
-    pub fn xor(&self, other: &Distance) -> Distance {
-        let mut new_binary = BitVec::from_elem(160, false);
+    fn xor(&self, other: &Distance, len: usize) -> Distance {
+        let mut new_binary = BitVec::from_elem(len, false);
 
-        for i in 0..160 {
+        for i in 0..len {
             if self.0[i] != other.0[i] {
                 new_binary.set(i, true);
             } else {
@@ -354,6 +451,6 @@ impl Distance {
 
 impl Default for Distance {
     fn default() -> Self {
-        Distance::min()
+        Distance::min(256)
     }
 }

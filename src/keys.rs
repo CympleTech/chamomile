@@ -5,7 +5,6 @@ use ed25519_dalek::{
     Keypair as Ed25519_Keypair, PublicKey as Ed25519_PublicKey, Signature as Ed25519_Signature,
     Signer, Verifier, KEYPAIR_LENGTH, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH,
 };
-use sha3::{Digest, Sha3_256};
 use std::convert::TryFrom;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use x25519_dalek::{PublicKey as Ed25519_DH_Public, StaticSecret as Ed25519_DH_Secret};
@@ -120,7 +119,7 @@ impl KeyType {
         }
     }
 
-    pub fn session_key(&self, self_keypair: &Keypair, remote_keypair: &Keypair) -> SessionKey {
+    pub fn session_key(&self, self_keypair: &Keypair) -> SessionKey {
         match self {
             KeyType::Ed25519 => {
                 let alice_secret = Ed25519_DH_Secret::new(&mut rand::thread_rng());
@@ -132,7 +131,6 @@ impl KeyType {
                     sk: alice_secret.to_bytes().to_vec(),
                     pk: alice_public,
                     sign: sign,
-                    remote: remote_keypair.pk.clone(),
                     is_ok: false,
                     ss: [0u8; 32],
                     iv: [0u8; 16],
@@ -163,18 +161,6 @@ pub struct Keypair {
     pub key: KeyType, // [u8, 1]
     pub sk: Vec<u8>,  // [u8; key.psk_len]
     pub pk: Vec<u8>,  // [u8; key.sk_len]
-}
-
-#[derive(Clone)]
-pub struct SessionKey {
-    key: KeyType,
-    sk: Vec<u8>,
-    pk: Vec<u8>,
-    sign: Vec<u8>,
-    remote: Vec<u8>,
-    is_ok: bool,
-    ss: [u8; 32],
-    iv: [u8; 16],
 }
 
 impl Keypair {
@@ -232,10 +218,8 @@ impl Keypair {
     }
 
     pub fn peer_id(&self) -> PeerId {
-        let mut sha = Sha3_256::new();
-        sha.update(&self.pk);
         let mut peer_bytes = [0u8; 32];
-        peer_bytes.copy_from_slice(&sha.finalize()[..]);
+        peer_bytes.copy_from_slice(blake3::hash(&self.pk).as_bytes());
         PeerId(peer_bytes)
     }
 
@@ -247,8 +231,17 @@ impl Keypair {
         }
     }
 
-    pub fn session_key(&self, remote_keypair: &Keypair) -> SessionKey {
-        self.key.session_key(&self, remote_keypair)
+    pub fn generate_session_key(&self) -> SessionKey {
+        self.key.session_key(self)
+    }
+
+    pub fn complete_session_key(&self, remote: &Keypair, dh_bytes: Vec<u8>) -> Option<SessionKey> {
+        let mut session = self.generate_session_key();
+        if session.complete(&remote.pk, dh_bytes) {
+            Some(session)
+        } else {
+            None
+        }
     }
 
     pub fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, ()> {
@@ -272,6 +265,17 @@ impl Keypair {
     }
 }
 
+#[derive(Clone)]
+pub struct SessionKey {
+    key: KeyType,
+    sk: Vec<u8>,
+    pk: Vec<u8>,
+    sign: Vec<u8>,
+    is_ok: bool,
+    ss: [u8; 32],
+    iv: [u8; 16],
+}
+
 /// Simple DH on 25519 to get AES-256 session key.
 /// 1. new a tmp public_key and sign it.
 /// 2. send tmp public key and signature to remote.
@@ -289,26 +293,23 @@ impl SessionKey {
             .unwrap()
     }
 
-    pub fn in_bytes(&mut self, bytes: Vec<u8>) -> bool {
-        if bytes.len() < self.key.dh_pk_len() {
+    pub fn complete(&mut self, remote_pk: &[u8], remote_dh: Vec<u8>) -> bool {
+        if self.key.pk_len() != remote_pk.len()
+            || (self.key.dh_pk_len() + self.key.sign_len()) != remote_dh.len()
+        {
             return false;
         }
 
-        let (tmp_pk, tmp_sign) = bytes.split_at(self.key.dh_pk_len());
+        let (tmp_pk, tmp_sign) = remote_dh.split_at(self.key.dh_pk_len());
 
-        if self.key.verify(&self.remote, tmp_pk, tmp_sign) {
+        if self.key.verify(&remote_pk, tmp_pk, tmp_sign) {
             self.key
                 .dh(&self.sk, tmp_pk)
                 .map(|session_key| {
-                    let mut sha = Sha3_256::new();
-                    sha.update(session_key);
-                    let result = sha.finalize();
-                    self.ss.copy_from_slice(&result[..]);
-                    let mut n_sha = Sha3_256::new();
-                    n_sha.update(&result[..]);
-                    self.iv.copy_from_slice(&n_sha.finalize()[..16]);
+                    self.ss
+                        .copy_from_slice(blake3::hash(&session_key).as_bytes());
+                    self.iv.copy_from_slice(&session_key[..16]);
                     self.is_ok = true;
-                    debug!("{:?}", self);
                 })
                 .is_ok()
         } else {

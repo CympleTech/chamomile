@@ -71,16 +71,18 @@ pub(crate) async fn direct_stable(
     let (endpoint_sender, endpoint_receiver) = new_endpoint_channel(); // transpot's use.
     let (stream_sender, stream_receiver) = new_endpoint_channel(); // session's use.
 
+    let (mut session_key, remote_pk) = global.generate_remote();
+
     global
         .trans_send(TransportSendMessage::StableConnect(
             stream_sender.clone(),
             endpoint_receiver,
             addr,
-            global.remote_pk(),
+            remote_pk,
         ))
         .await?;
 
-    if let Ok(EndpointMessage::Handshake(RemotePublic(remote_key, remote_peer))) =
+    if let Ok(EndpointMessage::Handshake(RemotePublic(remote_key, remote_peer, dh_key))) =
         stream_receiver.recv().await
     {
         // ok connected.
@@ -99,9 +101,12 @@ pub(crate) async fn direct_stable(
             return Ok(());
         }
 
+        if !session_key.complete(&remote_key.pk, dh_key) {
+            return Ok(());
+        }
+
         let remote_peer = nat(addr, remote_peer);
         let (session_sender, session_receiver) = new_session_channel(); // server's use.
-        let session_key: SessionKey = global.key.session_key(&remote_key);
 
         // save to tmp stable connection.
         peer_list.write().await.add_tmp_stable(
@@ -191,6 +196,7 @@ pub(crate) async fn relay_stable(
 
     let (stream_sender, stream_receiver) = new_endpoint_channel(); // session's use.
     let (session_sender, session_receiver) = new_session_channel(); // server's use.
+    let (mut session_key, remote_pk) = global.generate_remote();
 
     peer_list
         .write()
@@ -198,7 +204,7 @@ pub(crate) async fn relay_stable(
         .add_tmp_stable(to, session_sender.clone(), stream_sender.clone());
 
     relay_sender
-        .send(SessionMessage::RelayConnect(global.remote_pk(), to))
+        .send(SessionMessage::RelayConnect(remote_pk, to))
         .await
         .map_err(|_e| new_io_error("Session missing"))?;
     drop(relay_sender);
@@ -211,7 +217,9 @@ pub(crate) async fn relay_stable(
         })
         .await;
 
-    if let Ok(SessionMessage::RelayResult(RemotePublic(remote_key, remote_peer), recv_ss)) = msg {
+    if let Ok(SessionMessage::RelayResult(RemotePublic(remote_key, remote_peer, dh_key), recv_ss)) =
+        msg
+    {
         // ok connected.
         let remote_peer_id = remote_key.peer_id();
         if remote_peer_id == my_peer_id {
@@ -228,7 +236,9 @@ pub(crate) async fn relay_stable(
             return Ok(());
         }
 
-        let session_key: SessionKey = global.key.session_key(&remote_key);
+        if !session_key.complete(&remote_key.pk, dh_key) {
+            return Ok(());
+        }
 
         let mut session = Session::new(
             my_peer_id,
@@ -383,7 +393,6 @@ impl Session {
                 match msg {
                     CoreData::Ping => {}
                     CoreData::Pong => {}
-                    CoreData::Key(_) => {}
                     CoreData::Delivery(..) => {}
                     CoreData::Data(tid, _) => {
                         if tid != 0 {
@@ -465,29 +474,6 @@ impl Session {
                     }
                     CoreData::Pong => {
                         self.heartbeat = 0;
-                    }
-                    CoreData::Key(_key) => {
-                        debug!("TODO session rebuild new encrypt key.");
-                        // if !session_key.is_ok() {
-                        //     if !session_key.in_bytes(bytes) {
-                        //         server_send
-                        //             .send(SessionReceiveEndpointMessage::Close(remote_peer_id))
-                        //             .await
-                        //             .expect("Session to Server (Key Close)");
-                        //         endpoint_sender
-                        //             .send(EndpointMessage::Close)
-                        //             .await
-                        //             .expect("Session to Endpoint (Key Close)");
-                        //         break;
-                        //     }
-
-                        //     endpoint_sender
-                        //         .send(EndpointMessage::Bytes(
-                        //             EndpointMessage::Key(session_key.out_bytes()).to_bytes(),
-                        //         ))
-                        //         .await
-                        //         .expect("Session to Endpoint (Bytes)");
-                        // }
                     }
                     CoreData::Data(tid, p_data) => {
                         if self.is_recv_data {
@@ -726,16 +712,19 @@ impl Session {
                 debug!("Got outside close it");
             }
             SessionMessage::DirectIncoming(
-                RemotePublic(remote_key, remote_peer),
+                RemotePublic(remote_key, remote_peer, dh_key),
                 stream_sender,
                 stream_receiver,
                 endpoint_sender,
             ) => {
                 debug!("Got directly stable connection");
+                if !self.session_key.complete(&remote_key.pk, dh_key) {
+                    return Ok(());
+                }
+
                 self.stream_sender = stream_sender;
                 self.stream_receiver = stream_receiver;
                 self.endpoint = ConnectType::Direct(endpoint_sender);
-                self.session_key = self.global.key.session_key(&remote_key);
                 self.remote_peer = remote_peer;
                 self.upgrade().await?;
             }
@@ -754,16 +743,20 @@ impl Session {
             }
             EndpointMessage::DHT(DHT(peers)) => {
                 if peers.len() > 0 {
-                    let remote_pk = self.global.remote_pk();
                     let sender = &self.global.transport_sender;
 
                     for p in peers {
                         if p.id() != &self.my_peer_id
                             && !self.peer_list.read().await.contains(p.id())
                         {
+                            let (session_key, remote_pk) = self.global.generate_remote();
                             //if let Some(sender) = self.global.transports.read().await.get(p.transport()) {}
                             let _ = sender
-                                .send(TransportSendMessage::Connect(*p.addr(), remote_pk.clone()))
+                                .send(TransportSendMessage::Connect(
+                                    *p.addr(),
+                                    remote_pk,
+                                    session_key,
+                                ))
                                 .await;
                         }
                     }
@@ -802,7 +795,12 @@ impl Session {
                     }
                 } else {
                     if self.is_relay_data {
-                        if let Some((sender, _, _)) = self.peer_list.read().await.get(&to) {
+                        if let Some(sender) = self
+                            .peer_list
+                            .read()
+                            .await
+                            .peer_next_closest(&to, self.remote_peer.id())
+                        {
                             let _ = sender.send(SessionMessage::RelayData(from, to, data)).await;
                         }
                     }
@@ -830,7 +828,13 @@ impl Session {
                     }
 
                     // this is relay connect receiver.
-                    let RemotePublic(remote_key, remote_peer) = from_peer;
+                    let RemotePublic(remote_key, remote_peer, dh_key) = from_peer;
+
+                    let result = self.global.complete_remote(&remote_key, dh_key);
+                    if result.is_none() {
+                        return Ok(());
+                    }
+                    let (new_session_key, new_remote_pk) = result.unwrap();
 
                     let (new_stream_sender, new_stream_receiver) = new_endpoint_channel(); // session's use.
                     let (new_session_sender, new_session_receiver) = new_session_channel(); // server's use.
@@ -841,7 +845,6 @@ impl Session {
                         new_stream_sender.clone(),
                     );
 
-                    let new_session_key: SessionKey = self.global.key.session_key(&remote_key);
                     let new_session = Session::new(
                         self.my_peer_id.clone(),
                         remote_peer,
@@ -861,15 +864,16 @@ impl Session {
                     // if use session_run directly, it will cycle error in rust check.
                     session_spawn(new_session);
 
-                    self.direct_send(EndpointMessage::RelayConnect(
-                        self.global.remote_pk(),
-                        remote_peer_id,
-                    ))
-                    .await?;
+                    self.direct_send(EndpointMessage::RelayConnect(new_remote_pk, remote_peer_id))
+                        .await?;
                 } else {
                     if self.is_relay_data {
-                        if let Some((sender, _, is_it)) = self.peer_list.read().await.get(&to) {
-                            debug!("Relay Again Connect is it: {:?}", is_it);
+                        if let Some(sender) = self
+                            .peer_list
+                            .read()
+                            .await
+                            .peer_next_closest(&to, self.remote_peer.id())
+                        {
                             let _ = sender
                                 .send(SessionMessage::RelayConnect(from_peer, to))
                                 .await;
@@ -903,7 +907,6 @@ impl Session {
 pub(crate) enum CoreData {
     Ping,
     Pong,
-    Key(Vec<u8>),
     Data(u64, Vec<u8>),
     Delivery(DeliveryType, u64),
     StableConnect(u64, Vec<u8>),
@@ -920,17 +923,13 @@ impl CoreData {
             CoreData::Pong => {
                 bytes[0] = 2u8;
             }
-            CoreData::Key(mut data) => {
-                bytes[0] = 3u8;
-                bytes.append(&mut data);
-            }
             CoreData::Data(tid, mut data) => {
-                bytes[0] = 4u8;
+                bytes[0] = 3u8;
                 bytes.extend(&tid.to_le_bytes()[..]);
                 bytes.append(&mut data);
             }
             CoreData::Delivery(t, tid) => {
-                bytes[0] = 5u8;
+                bytes[0] = 4u8;
                 let b = match t {
                     DeliveryType::Data => 0u8,
                     DeliveryType::StableConnect => 1u8,
@@ -940,12 +939,12 @@ impl CoreData {
                 bytes.extend(&tid.to_le_bytes()[..]);
             }
             CoreData::StableConnect(tid, mut data) => {
-                bytes[0] = 6u8;
+                bytes[0] = 5u8;
                 bytes.extend(&tid.to_le_bytes()[..]);
                 bytes.append(&mut data);
             }
             CoreData::StableResult(tid, is_ok, mut data) => {
-                bytes[0] = 7u8;
+                bytes[0] = 6u8;
                 bytes.extend(&tid.to_le_bytes()[..]);
                 bytes.push(if is_ok { 1u8 } else { 0u8 });
                 bytes.append(&mut data);
@@ -964,8 +963,7 @@ impl CoreData {
         match t[0] {
             1u8 => Ok(CoreData::Ping),
             2u8 => Ok(CoreData::Pong),
-            3u8 => Ok(CoreData::Key(bytes)),
-            4u8 => {
+            3u8 => {
                 if bytes.len() < 8 {
                     return Err(());
                 }
@@ -974,7 +972,7 @@ impl CoreData {
                 let tid = u64::from_le_bytes(tid_bytes);
                 Ok(CoreData::Data(tid, bytes))
             }
-            5u8 => {
+            4u8 => {
                 if bytes.len() < 9 {
                     return Err(());
                 }
@@ -989,7 +987,7 @@ impl CoreData {
                 let tid = u64::from_le_bytes(tid_bytes);
                 Ok(CoreData::Delivery(t, tid))
             }
-            6u8 => {
+            5u8 => {
                 if bytes.len() < 8 {
                     return Err(());
                 }
@@ -998,7 +996,7 @@ impl CoreData {
                 let tid = u64::from_le_bytes(tid_bytes);
                 Ok(CoreData::StableConnect(tid, bytes))
             }
-            7u8 => {
+            6u8 => {
                 if bytes.len() < 9 {
                     return Err(());
                 }

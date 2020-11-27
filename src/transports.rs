@@ -11,7 +11,7 @@ mod tcp;
 mod udt;
 
 use crate::hole_punching::{Hole, DHT};
-use crate::keys::Keypair;
+use crate::keys::{Keypair, SessionKey};
 use crate::peer::{Peer, PEER_LENGTH};
 
 /// new a channel for send TransportSendMessage.
@@ -35,7 +35,7 @@ pub fn new_endpoint_channel() -> (Sender<EndpointMessage>, Receiver<EndpointMess
 pub enum TransportSendMessage {
     /// connect to a socket address.
     /// params is `socket_addr`, `remote_pk bytes`.
-    Connect(SocketAddr, RemotePublic),
+    Connect(SocketAddr, RemotePublic, SessionKey),
     /// params is `delivery_id`, `socket_addr`, `remote_pk bytes`.
     StableConnect(
         Sender<EndpointMessage>,
@@ -51,7 +51,7 @@ pub enum TransportSendMessage {
 pub struct TransportRecvMessage(
     pub SocketAddr,                // remote addr.
     pub RemotePublic,              // remote public info.
-    pub bool,                      // is send by self.
+    pub Option<SessionKey>,        // is send by self and the send session_key.
     pub Sender<EndpointMessage>,   // session's endpoint sender.
     pub Receiver<EndpointMessage>, // session's endpoint receiver.
     pub Sender<EndpointMessage>,   // transport's receiver.
@@ -95,43 +95,37 @@ pub async fn start(
     Ok((send_send, recv_recv))
 }
 
-/// Rtemote Public Info, include local transport and public key bytes.
+/// Rtemote Public Info, include local transport and public key bytes, session_key out_bytes.
 #[derive(Clone)]
-pub struct RemotePublic(pub Keypair, pub Peer);
+pub struct RemotePublic(pub Keypair, pub Peer, pub Vec<u8>);
 
 impl RemotePublic {
     pub fn id(&self) -> &PeerId {
         self.1.id()
     }
 
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
-        if bytes.len() < PEER_LENGTH {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "serialize remote public error",
-            ));
+    pub fn from_bytes(mut bytes: Vec<u8>) -> std::result::Result<Self, ()> {
+        if bytes.len() < PEER_LENGTH + 2 {
+            return Err(());
         }
-        let peer = Peer::from_bytes(&bytes[..PEER_LENGTH]).map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::Other, "serialize remote public error")
-        })?;
-        let keypair = Keypair::from_bytes(&bytes[PEER_LENGTH..]).map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::Other, "serialize remote public error")
-        })?;
-
-        Ok(Self(keypair, peer))
+        let peer = Peer::from_bytes(bytes.drain(0..PEER_LENGTH).as_slice())?;
+        let mut keypair_len_bytes = [0u8; 2];
+        keypair_len_bytes.copy_from_slice(bytes.drain(0..2).as_slice());
+        let keypair_len = u16::from_be_bytes(keypair_len_bytes) as usize;
+        if bytes.len() < keypair_len {
+            return Err(());
+        }
+        let keypair = Keypair::from_bytes(bytes.drain(0..keypair_len).as_slice())?;
+        Ok(Self(keypair, peer, bytes))
     }
 
-    pub fn ref_to_bytes(key: &Keypair, peer: &Peer) -> Vec<u8> {
-        let mut bytes = vec![];
-        bytes.append(&mut peer.to_bytes());
-        bytes.append(&mut key.to_bytes());
-        bytes
-    }
-
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(mut self) -> Vec<u8> {
         let mut bytes = vec![];
         bytes.append(&mut self.1.to_bytes());
-        bytes.append(&mut self.0.to_bytes());
+        let mut keypair_bytes = self.0.to_bytes();
+        bytes.extend(&(keypair_bytes.len() as u16).to_be_bytes()[..]);
+        bytes.append(&mut keypair_bytes);
+        bytes.append(&mut self.2);
         bytes
     }
 }
