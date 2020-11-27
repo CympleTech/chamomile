@@ -200,7 +200,7 @@ pub async fn start(
                     // if not self, send self publics info.
                     let session_key = if is_self.is_none() {
                         if let Some((session_key, remote_pk)) =
-                            global_1.complete_remote(&remote_key, dh_key.clone())
+                            global_1.complete_remote(&remote_key, dh_key)
                         {
                             let _ = endpoint_sender
                                 .send(EndpointMessage::Handshake(remote_pk))
@@ -213,7 +213,7 @@ pub async fn start(
                         }
                     } else {
                         let mut session_key = is_self.unwrap();
-                        if session_key.complete(&remote_key.pk, dh_key.clone()) {
+                        if session_key.complete(&remote_key.pk, dh_key) {
                             session_key
                         } else {
                             debug!("Session key is error!");
@@ -221,6 +221,21 @@ pub async fn start(
                             continue;
                         }
                     };
+
+                    // check is stable relay connections.
+                    if let Some(sender) =
+                        peer_list_1.read().await.stable_check_relay(&remote_peer_id)
+                    {
+                        let _ = sender
+                            .send(SessionMessage::DirectIncoming(
+                                remote_peer,
+                                stream_sender,
+                                stream_receiver,
+                                endpoint_sender,
+                            ))
+                            .await;
+                        continue;
+                    }
 
                     // save to peer_list.
                     let (session_sender, session_receiver) = new_session_channel();
@@ -248,21 +263,6 @@ pub async fn start(
                         .send(EndpointMessage::DHT(DHT(peers)))
                         .await
                         .expect("Sesssion to Endpoint (Data)");
-
-                    // check is stable relay connections.
-                    if let Some(sender) =
-                        peer_list_1.read().await.stable_check_relay(&remote_peer_id)
-                    {
-                        let _ = sender
-                            .send(SessionMessage::DirectIncoming(
-                                RemotePublic(remote_key, remote_peer, dh_key),
-                                stream_sender,
-                                stream_receiver,
-                                endpoint_sender,
-                            ))
-                            .await;
-                        continue;
-                    }
 
                     session_spawn(Session::new(
                         peer_id.clone(),

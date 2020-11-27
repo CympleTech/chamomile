@@ -42,7 +42,7 @@ pub(crate) enum SessionMessage {
     Close,
     /// Directly incoming.
     DirectIncoming(
-        RemotePublic,
+        Peer,
         Sender<EndpointMessage>, // stream sender (endpoint -> session sender).
         Receiver<EndpointMessage>, // stream receiver (endpoint -> session receiver).
         Sender<EndpointMessage>, // endpoint sender (session -> endpointsender).
@@ -535,6 +535,8 @@ impl Session {
                     }
                 }
             }
+        } else {
+            warn!("Session Key decrypt failure!");
         }
 
         Ok(())
@@ -712,16 +714,12 @@ impl Session {
                 debug!("Got outside close it");
             }
             SessionMessage::DirectIncoming(
-                RemotePublic(remote_key, remote_peer, dh_key),
+                remote_peer,
                 stream_sender,
                 stream_receiver,
                 endpoint_sender,
             ) => {
                 debug!("Got directly stable connection");
-                if !self.session_key.complete(&remote_key.pk, dh_key) {
-                    return Ok(());
-                }
-
                 self.stream_sender = stream_sender;
                 self.stream_receiver = stream_receiver;
                 self.endpoint = ConnectType::Direct(endpoint_sender);
