@@ -3,6 +3,13 @@
 # Chamomile
 *Build a robust stable connection on p2p network*
 
+## features
+- Support build a robust stable connection between two peers on the p2p network.
+- Support permissionless network.
+- Support permissioned network (distributed network).
+- DHT-based & Relay connection.
+- Diff transports: UDP/TCP/UDP-Based Special Protocol.
+
 ## Simple test.
 - `cargo run --example permissionless 0.0.0.0:8000`
 - `cargo run --example permissionless 0.0.0.0:8001 0.0.0.0:8000`
@@ -15,13 +22,6 @@
   - start waiting stable connected by relay.
 - `cargo run --example relay 127.0.0.1:8002 192.168.xx.xx:8000 XX..`
   - XX.. is above's network peer id will connected it.
-
-## features
-- Support build a robust stable connection between two peers on the p2p network.
-- Support permissionless network.
-- Support permissioned network (distributed network).
-- DHT-based & Relay connection.
-- Diff transports: UDP/TCP/UDP-Based Special Protocol.
 
 ## Design point
 - Mobile phones, IoT devices, PC and servers are first-class citizens

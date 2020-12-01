@@ -64,12 +64,11 @@
 #[macro_use]
 extern crate log;
 
-mod broadcast;
 mod config;
 mod hole_punching;
 mod kad;
 mod keys;
-mod multicasting;
+mod lan;
 mod peer;
 mod peer_list;
 mod server;
