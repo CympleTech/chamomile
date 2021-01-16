@@ -366,16 +366,16 @@ impl Session {
                 .write()
                 .await
                 .stable_leave(self.remote_peer.id());
+
+            let _ = self
+                .out_send(ReceiveMessage::StableLeave(self.remote_peer_id()))
+                .await;
         } else {
             let mut peer_list_lock = self.peer_list.write().await;
             peer_list_lock.peer_remove(self.remote_peer.id());
             peer_list_lock.remove_tmp_stable(self.remote_peer.id());
             drop(peer_list_lock);
         }
-
-        let _ = self
-            .out_send(ReceiveMessage::StableLeave(self.remote_peer_id()))
-            .await;
 
         Ok(())
     }

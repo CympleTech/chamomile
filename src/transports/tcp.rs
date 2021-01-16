@@ -63,46 +63,53 @@ async fn run_self_recv(
     while let Ok(m) = recv.recv().await {
         match m {
             TransportSendMessage::Connect(addr, remote_pk, session_key) => {
-                if let Ok(mut stream) = TcpStream::connect(addr).await {
-                    info!("TCP connect to {:?}", addr);
-                    let bytes = EndpointMessage::Handshake(remote_pk).to_bytes();
-                    let _ = stream.write(&(bytes.len() as u32).to_be_bytes()).await;
-                    let _ = stream.write_all(&bytes[..]).await;
+                let server_send = out_send.clone();
+                smol::spawn(async move {
+                    if let Ok(mut stream) = TcpStream::connect(addr).await {
+                        info!("TCP connect to {:?}", addr);
+                        let bytes = EndpointMessage::Handshake(remote_pk).to_bytes();
+                        let _ = stream.write(&(bytes.len() as u32).to_be_bytes()).await;
+                        let _ = stream.write_all(&bytes[..]).await;
 
-                    let (self_sender, self_receiver) = new_endpoint_channel();
-                    let (out_sender, out_receiver) = new_endpoint_channel();
+                        let (self_sender, self_receiver) = new_endpoint_channel();
+                        let (out_sender, out_receiver) = new_endpoint_channel();
 
-                    smol::spawn(process_stream(
-                        stream,
-                        out_sender,
-                        self_receiver,
-                        OutType::DHT(out_send.clone(), self_sender, out_receiver),
-                        Some(session_key),
-                    ))
-                    .detach();
-                } else {
-                    info!("TCP cannot connect to {:?}", addr);
-                }
+                        let _ = process_stream(
+                            stream,
+                            out_sender,
+                            self_receiver,
+                            OutType::DHT(server_send, self_sender, out_receiver),
+                            Some(session_key),
+                        )
+                        .await;
+                    } else {
+                        info!("TCP cannot connect to {:?}", addr);
+                    }
+                })
+                .detach();
             }
             TransportSendMessage::StableConnect(out_sender, self_receiver, addr, remote_pk) => {
-                if let Ok(mut stream) = TcpStream::connect(addr).await {
-                    info!("TCP stable connect to {:?}", addr);
-                    let bytes = EndpointMessage::Handshake(remote_pk).to_bytes();
-                    let _ = stream.write(&(bytes.len() as u32).to_be_bytes()).await;
-                    let _ = stream.write_all(&bytes[..]).await;
+                smol::spawn(async move {
+                    if let Ok(mut stream) = TcpStream::connect(addr).await {
+                        info!("TCP stable connect to {:?}", addr);
+                        let bytes = EndpointMessage::Handshake(remote_pk).to_bytes();
+                        let _ = stream.write(&(bytes.len() as u32).to_be_bytes()).await;
+                        let _ = stream.write_all(&bytes[..]).await;
 
-                    smol::spawn(process_stream(
-                        stream,
-                        out_sender,
-                        self_receiver,
-                        OutType::Stable,
-                        None,
-                    ))
-                    .detach();
-                } else {
-                    info!("TCP cannot stable connect to {:?}", addr);
-                    let _ = out_sender.send(EndpointMessage::Close).await;
-                }
+                        let _ = process_stream(
+                            stream,
+                            out_sender,
+                            self_receiver,
+                            OutType::Stable,
+                            None,
+                        )
+                        .await;
+                    } else {
+                        info!("TCP cannot stable connect to {:?}", addr);
+                        let _ = out_sender.send(EndpointMessage::Close).await;
+                    }
+                })
+                .detach();
             }
         }
     }
