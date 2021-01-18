@@ -157,7 +157,7 @@ impl<K: Key> KadTree<K> {
             self.right
                 .as_mut()
                 .and_then(|v| Some(v.insert(Cell(key, value, distance), 1, K_BUCKET)))
-                .unwrap()
+                .unwrap() // safe checked.
         } else {
             if self.left.is_none() {
                 self.left = Some(Box::new(Node::default()));
@@ -165,7 +165,7 @@ impl<K: Key> KadTree<K> {
             self.left
                 .as_mut()
                 .and_then(|v| Some(v.insert(Cell(key, value, distance), 1, K_BUCKET)))
-                .unwrap()
+                .unwrap() // safe checked.
         }
     }
 
@@ -186,13 +186,13 @@ impl<K: Key> KadTree<K> {
                     self.left
                         .as_ref()
                         .and_then(|v| Some(v.search(key, &distance, 1)))
-                        .unwrap()
+                        .unwrap() // safe checked.
                 }
             } else {
                 self.right
                     .as_ref()
                     .and_then(|v| Some(v.search(key, &distance, 1)))
-                    .unwrap()
+                    .unwrap() // safe chekced.
             }
         } else {
             if self.left.is_none() {
@@ -202,13 +202,13 @@ impl<K: Key> KadTree<K> {
                     self.right
                         .as_ref()
                         .and_then(|v| Some(v.search(key, &distance, 1)))
-                        .unwrap()
+                        .unwrap() // safe checked.
                 }
             } else {
                 self.left
                     .as_ref()
                     .and_then(|v| Some(v.search(key, &distance, 1)))
-                    .unwrap()
+                    .unwrap() // safe checked.
             }
         }
     }
@@ -235,10 +235,10 @@ impl<K: Key> KadTree<K> {
     fn keys(&self) -> Vec<K> {
         let mut vec = Vec::new();
         if self.left.is_some() {
-            self.left.as_ref().unwrap().keys(&mut vec);
+            self.left.as_ref().unwrap().keys(&mut vec); // safe checked.
         }
         if self.right.is_some() {
-            self.right.as_ref().unwrap().keys(&mut vec);
+            self.right.as_ref().unwrap().keys(&mut vec); // safe checked.
         }
         vec
     }
@@ -262,7 +262,7 @@ impl<K: Key> Node<K> {
                 self.right
                     .as_mut()
                     .and_then(|v| Some(v.insert(cell, index + 1, k_bucket)))
-                    .unwrap()
+                    .unwrap() // safe checked.
             } else {
                 if self.left.is_none() {
                     self.left = Some(Box::new(Node::default()));
@@ -270,7 +270,7 @@ impl<K: Key> Node<K> {
                 self.left
                     .as_mut()
                     .and_then(|v| Some(v.insert(cell, index + 1, k_bucket)))
-                    .unwrap()
+                    .unwrap() // safe checked.
             }
         } else {
             let mut need_deleted = usize::MAX;

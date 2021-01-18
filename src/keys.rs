@@ -94,39 +94,42 @@ impl KeyType {
         }
     }
 
-    fn sign(&self, keypair: &Keypair, msg: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    fn sign(&self, keypair: &Keypair, msg: &[u8]) -> Result<Vec<u8>, ()> {
         match self {
             KeyType::Ed25519 => {
                 let mut keypair_bytes: [u8; KEYPAIR_LENGTH] = [0u8; KEYPAIR_LENGTH];
                 keypair_bytes[..SECRET_KEY_LENGTH].copy_from_slice(&keypair.sk);
                 keypair_bytes[SECRET_KEY_LENGTH..].copy_from_slice(&keypair.pk);
-                let keypair = Ed25519_Keypair::from_bytes(&keypair_bytes).unwrap();
+                let keypair = Ed25519_Keypair::from_bytes(&keypair_bytes).map_err(|_e| ())?;
                 Ok(keypair.sign(msg).to_bytes().to_vec())
             }
             _ => Ok(Default::default()),
         }
     }
 
-    fn verify(&self, pk: &[u8], msg: &[u8], sign: &[u8]) -> bool {
+    fn verify(&self, pk: &[u8], msg: &[u8], sign: &[u8]) -> Result<bool, ()> {
         match self {
             KeyType::Ed25519 => {
-                let ed_pk = Ed25519_PublicKey::from_bytes(&pk[..]).unwrap();
-                ed_pk
-                    .verify(msg, &Ed25519_Signature::try_from(&sign[..]).unwrap())
-                    .is_ok()
+                let ed_pk = Ed25519_PublicKey::from_bytes(&pk[..]).map_err(|_e| ())?;
+                Ok(ed_pk
+                    .verify(
+                        msg,
+                        &Ed25519_Signature::try_from(&sign[..]).map_err(|_e| ())?,
+                    )
+                    .is_ok())
             }
-            _ => true,
+            _ => Ok(false),
         }
     }
 
-    pub fn session_key(&self, self_keypair: &Keypair) -> SessionKey {
+    pub fn session_key(&self, self_keypair: &Keypair) -> Result<SessionKey, ()> {
         match self {
             KeyType::Ed25519 => {
                 let alice_secret = Ed25519_DH_Secret::new(&mut rand::thread_rng());
                 let alice_public = Ed25519_DH_Public::from(&alice_secret).as_bytes().to_vec();
 
-                let sign = self_keypair.sign(&alice_public[..]).unwrap();
-                SessionKey {
+                let sign = self_keypair.sign(&alice_public[..])?;
+                Ok(SessionKey {
                     key: *self,
                     sk: alice_secret.to_bytes().to_vec(),
                     pk: alice_public,
@@ -134,9 +137,9 @@ impl KeyType {
                     is_ok: false,
                     ss: [0u8; 32],
                     iv: [0u8; 16],
-                }
+                })
             }
-            _ => panic!("Not Support"),
+            _ => Err(()),
         }
     }
 
@@ -231,17 +234,17 @@ impl Keypair {
         }
     }
 
-    pub fn generate_session_key(&self) -> SessionKey {
+    pub fn generate_session_key(&self) -> Result<SessionKey, ()> {
         self.key.session_key(self)
     }
 
     pub fn complete_session_key(&self, remote: &Keypair, dh_bytes: Vec<u8>) -> Option<SessionKey> {
-        let mut session = self.generate_session_key();
-        if session.complete(&remote.pk, dh_bytes) {
-            Some(session)
-        } else {
-            None
+        if let Ok(mut session) = self.generate_session_key() {
+            if session.complete(&remote.pk, dh_bytes) {
+                return Some(session);
+            }
         }
+        None
     }
 
     pub fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, ()> {
@@ -249,7 +252,7 @@ impl Keypair {
     }
 
     pub fn verify(&self, msg: &[u8], sign: &[u8]) -> bool {
-        self.key.verify(&self.pk, msg, sign)
+        self.key.verify(&self.pk, msg, sign).unwrap_or(false)
     }
 
     pub fn from_pk(key: KeyType, bytes: Vec<u8>) -> Result<Self, ()> {
@@ -287,10 +290,8 @@ impl SessionKey {
         self.is_ok
     }
 
-    fn cipher(&self) -> Aes256Cbc {
-        Aes256Cbc::new_var(&self.ss, &self.iv)
-            .map_err(|e| debug!("{:?}", e))
-            .unwrap()
+    fn cipher(&self) -> Result<Aes256Cbc, ()> {
+        Aes256Cbc::new_var(&self.ss, &self.iv).map_err(|_e| ())
     }
 
     pub fn complete(&mut self, remote_pk: &[u8], remote_dh: Vec<u8>) -> bool {
@@ -302,7 +303,7 @@ impl SessionKey {
 
         let (tmp_pk, tmp_sign) = remote_dh.split_at(self.key.dh_pk_len());
 
-        if self.key.verify(&remote_pk, tmp_pk, tmp_sign) {
+        if let Ok(true) = self.key.verify(&remote_pk, tmp_pk, tmp_sign) {
             self.key
                 .dh(&self.sk, tmp_pk)
                 .map(|session_key| {
@@ -324,11 +325,15 @@ impl SessionKey {
     }
 
     pub fn encrypt(&self, msg: Vec<u8>) -> Vec<u8> {
-        self.cipher().encrypt_vec(&msg)
+        if let Ok(cbc) = self.cipher() {
+            cbc.encrypt_vec(&msg)
+        } else {
+            vec![]
+        }
     }
 
     pub fn decrypt(&self, msg: Vec<u8>) -> Result<Vec<u8>, ()> {
-        self.cipher().decrypt_vec(&msg).map_err(|_e| ())
+        self.cipher()?.decrypt_vec(&msg).map_err(|_e| ())
     }
 }
 

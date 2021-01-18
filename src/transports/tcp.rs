@@ -184,7 +184,7 @@ async fn process_stream(
         return Ok(());
     }
 
-    let remote_pk = handshake.unwrap();
+    let remote_pk = handshake.unwrap(); // safe. checked.
 
     match out_type {
         OutType::Stable => {

@@ -148,12 +148,12 @@ pub(crate) async fn direct_stable(
             None
         };
 
-        if ss.is_some() {
+        if let Some(ss) = ss {
             relay_stable(
                 tid,
                 to,
                 data,
-                ss.unwrap(),
+                ss,
                 my_peer_id,
                 global,
                 peer_list,
@@ -832,7 +832,7 @@ impl Session {
                     if result.is_none() {
                         return Ok(());
                     }
-                    let (new_session_key, new_remote_pk) = result.unwrap();
+                    let (new_session_key, new_remote_pk) = result.unwrap(); // safe checked.
 
                     let (new_stream_sender, new_stream_receiver) = new_endpoint_channel(); // session's use.
                     let (new_session_sender, new_session_receiver) = new_session_channel(); // server's use.

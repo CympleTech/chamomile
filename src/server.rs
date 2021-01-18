@@ -38,13 +38,17 @@ pub(crate) struct Global {
 impl Global {
     #[inline]
     pub fn generate_remote(&self) -> (SessionKey, RemotePublic) {
-        let session_key = self.key.generate_session_key();
-        let remote_pk = RemotePublic(
-            self.key.public(),
-            self.peer.clone(),
-            session_key.out_bytes(),
-        );
-        (session_key, remote_pk)
+        // random gennerate, so must return. no keep-loop.
+        loop {
+            if let Ok(session_key) = self.key.generate_session_key() {
+                let remote_pk = RemotePublic(
+                    self.key.public(),
+                    self.peer.clone(),
+                    session_key.out_bytes(),
+                );
+                return (session_key, remote_pk);
+            }
+        }
     }
 
     #[inline]
@@ -105,7 +109,7 @@ pub async fn start(
     }
     let mut key_path = db_dir.clone();
     key_path.push(STORAGE_KEY_KEY);
-    let key_bytes = fs::read(&key_path).await.unwrap_or(vec![]);
+    let key_bytes = fs::read(&key_path).await.unwrap_or(vec![]); // safe.
 
     let key = match Keypair::from_db_bytes(&key_bytes) {
         Ok(keypair) => keypair,
@@ -198,13 +202,8 @@ pub async fn start(
                     }
 
                     // if not self, send self publics info.
-                    let session_key = if is_self.is_none() {
-                        if let Some((session_key, remote_pk)) =
-                            global_1.complete_remote(&remote_key, dh_key)
-                        {
-                            let _ = endpoint_sender
-                                .send(EndpointMessage::Handshake(remote_pk))
-                                .await;
+                    let session_key = if let Some(mut session_key) = is_self {
+                        if session_key.complete(&remote_key.pk, dh_key) {
                             session_key
                         } else {
                             debug!("Session key is error!");
@@ -212,8 +211,12 @@ pub async fn start(
                             continue;
                         }
                     } else {
-                        let mut session_key = is_self.unwrap();
-                        if session_key.complete(&remote_key.pk, dh_key) {
+                        if let Some((session_key, remote_pk)) =
+                            global_1.complete_remote(&remote_key, dh_key)
+                        {
+                            let _ = endpoint_sender
+                                .send(EndpointMessage::Handshake(remote_pk))
+                                .await;
                             session_key
                         } else {
                             debug!("Session key is error!");
