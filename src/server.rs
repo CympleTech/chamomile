@@ -96,10 +96,10 @@ pub async fn start(
         mut db_dir,
         addr,
         transport,
-        white_list,
-        black_list,
-        white_peer_list,
-        black_peer_list,
+        allowlist,
+        blocklist,
+        allow_peer_list,
+        block_peer_list,
         permission,
         only_stable_data,
     } = config;
@@ -128,8 +128,8 @@ pub async fn start(
     let peer_list = Arc::new(RwLock::new(PeerList::load(
         peer_id,
         peer_list_path,
-        (white_peer_list, white_list),
-        (black_peer_list, black_list),
+        (allow_peer_list, allowlist),
+        (block_peer_list, blocklist),
     )));
 
     let default_transport = TransportType::from_str(&transport);
@@ -153,7 +153,7 @@ pub async fn start(
         out_sender,
     });
 
-    // bootstrap white list.
+    // bootstrap allow list.
     for a in peer_list.read().await.bootstrap() {
         let (session_key, remote_pk) = global.generate_remote();
         global
@@ -179,7 +179,7 @@ pub async fn start(
                 )) => {
                     debug!("receiver incoming connect: {:?}", addr);
                     // check and start session
-                    if peer_list_1.read().await.is_black_addr(&addr) {
+                    if peer_list_1.read().await.is_block_addr(&addr) {
                         debug!("receiver incoming connect is blocked");
                         let _ = endpoint_sender.send(EndpointMessage::Close).await;
                         continue;
@@ -194,7 +194,7 @@ pub async fn start(
 
                     // check and save tmp and save outside
                     if remote_peer_id == peer_id
-                        || peer_list_1.read().await.is_black_peer(&remote_peer_id)
+                        || peer_list_1.read().await.is_block_peer(&remote_peer_id)
                     {
                         debug!("session remote peer is blocked, close it.");
                         let _ = endpoint_sender.send(EndpointMessage::Close).await;

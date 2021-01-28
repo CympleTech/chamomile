@@ -13,13 +13,13 @@ pub struct Config {
     /// Default transport type.
     pub transport: String,
     /// Allowed Ip's list.
-    pub white_list: Vec<SocketAddr>,
+    pub allowlist: Vec<SocketAddr>,
     /// Blocked Ip's list.
-    pub black_list: Vec<IpAddr>,
+    pub blocklist: Vec<IpAddr>,
     /// Allowed peer's `PeerId` list.
-    pub white_peer_list: Vec<PeerId>,
+    pub allow_peer_list: Vec<PeerId>,
     /// Blocked peers's `PeerId` list.
-    pub black_peer_list: Vec<PeerId>,
+    pub block_peer_list: Vec<PeerId>,
     /// If set permission is true, that server is permissioned,
     /// not receive DHT's peer message, only stable connect.
     /// if set permissionless is false, that server is permissionless,
@@ -38,10 +38,10 @@ impl Config {
             db_dir: PathBuf::from("./"),
             addr: addr,
             transport: "tcp".to_owned(), // TODO Default
-            white_list: vec![],
-            black_list: vec![],
-            white_peer_list: vec![],
-            black_peer_list: vec![],
+            allowlist: vec![],
+            blocklist: vec![],
+            allow_peer_list: vec![],
+            block_peer_list: vec![],
             permission: false,
             only_stable_data: false,
         }
@@ -51,10 +51,10 @@ impl Config {
         db_dir: PathBuf,
         addr: SocketAddr,
         transport: String,
-        white_list: Vec<SocketAddr>,
-        black_list: Vec<IpAddr>,
-        white_peer_list: Vec<PeerId>,
-        black_peer_list: Vec<PeerId>,
+        allowlist: Vec<SocketAddr>,
+        blocklist: Vec<IpAddr>,
+        allow_peer_list: Vec<PeerId>,
+        block_peer_list: Vec<PeerId>,
         permission: bool,
         only_stable_data: bool,
     ) -> Self {
@@ -62,10 +62,10 @@ impl Config {
             db_dir,
             addr,
             transport,
-            white_list,
-            black_list,
-            white_peer_list,
-            black_peer_list,
+            allowlist,
+            blocklist,
+            allow_peer_list,
+            block_peer_list,
             permission,
             only_stable_data,
         }

@@ -52,7 +52,7 @@ pub enum SendMessage {
     /// when peer request for join, outside decide connect or not.
     /// params is `delivery_feedback_id`, `peer_id`, `is_connect`, `is_force_close`, `result info`.
     /// if `delivery_feedback_id = 0` will not feedback.
-    /// if `is_connect` is true, it will add to white directly list.
+    /// if `is_connect` is true, it will add to allow directly list.
     /// we want to build a better network, add a `is_force_close`.
     /// if `is_connect` is false, but `is_force_close` if true, we
     /// will use this peer to build our DHT for better connection.
@@ -60,7 +60,7 @@ pub enum SendMessage {
     StableResult(u64, PeerId, bool, bool, Vec<u8>),
     /// when need add a peer to stable connect, send to chamomile from outside.
     /// if success connect, will start a stable connection, and add peer to kad, stables,
-    /// bootstraps and whitelists. if failure, will send `PeerLeave` to outside.
+    /// bootstraps and allowlists. if failure, will send `PeerLeave` to outside.
     /// params is `delivery_feedback_id`, `peer_id`, `socket_addr` and peer `join_info`.
     /// if `delivery_feedback_id = 0` will not feedback.
     StableConnect(u64, PeerId, Option<SocketAddr>, Vec<u8>),

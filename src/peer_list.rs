@@ -21,8 +21,8 @@ pub(crate) struct PeerList {
     /// PeerId => KadValue(Sender<SessionMessage>, Sender<EndpointMessage>, Peer)
     stables: HashMap<PeerId, (KadValue, bool)>,
     tmp_stables: HashMap<PeerId, (Sender<SessionMessage>, Sender<EndpointMessage>)>,
-    whites: (Vec<PeerId>, Vec<SocketAddr>),
-    blacks: (Vec<PeerId>, Vec<IpAddr>),
+    allows: (Vec<PeerId>, Vec<SocketAddr>),
+    blocks: (Vec<PeerId>, Vec<IpAddr>),
     bootstraps: Vec<SocketAddr>,
 }
 
@@ -38,11 +38,11 @@ impl PeerList {
     pub fn load(
         peer_id: PeerId,
         save_path: PathBuf,
-        whites: (Vec<PeerId>, Vec<SocketAddr>),
-        blacks: (Vec<PeerId>, Vec<IpAddr>),
+        allows: (Vec<PeerId>, Vec<SocketAddr>),
+        blocks: (Vec<PeerId>, Vec<IpAddr>),
     ) -> Self {
         let default_socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
-        let mut bootstraps = whites.1.clone();
+        let mut bootstraps = allows.1.clone();
         match std::fs::File::open(&save_path) {
             Ok(file) => {
                 let addrs = std::io::BufReader::new(file).lines();
@@ -61,8 +61,8 @@ impl PeerList {
                     dhts: DoubleKadTree::new(peer_id, default_socket),
                     stables: HashMap::new(),
                     tmp_stables: HashMap::new(),
-                    whites: whites,
-                    blacks: blacks,
+                    allows: allows,
+                    blocks: blocks,
                 }
             }
             Err(_) => PeerList {
@@ -71,8 +71,8 @@ impl PeerList {
                 dhts: DoubleKadTree::new(peer_id, default_socket),
                 stables: HashMap::new(),
                 tmp_stables: HashMap::new(),
-                whites: whites,
-                blacks: blacks,
+                allows: allows,
+                blocks: blocks,
             },
         }
     }
@@ -250,10 +250,10 @@ impl PeerList {
     }
 
     /// PeerDisconnect Step:
-    /// 1. remove from white_list;
+    /// 1. remove from allowlist;
     /// 2. remove from stables.
     pub fn stable_remove(&mut self, peer_id: &PeerId) -> Option<Sender<SessionMessage>> {
-        self.remove_white_peer(peer_id);
+        self.remove_allow_peer(peer_id);
         self.stables.remove(peer_id).map(|v| (v.0).0)
     }
 
@@ -317,7 +317,7 @@ impl PeerList {
     }
 }
 
-// Black and white list.
+// Block and allow list.
 impl PeerList {
     pub fn bootstrap(&self) -> &Vec<SocketAddr> {
         &self.bootstraps
@@ -329,75 +329,75 @@ impl PeerList {
         }
     }
 
-    pub fn is_white_peer(&self, peer: &PeerId) -> bool {
-        self.whites.0.contains(peer)
+    pub fn is_allow_peer(&self, peer: &PeerId) -> bool {
+        self.allows.0.contains(peer)
     }
 
-    pub fn is_white_addr(&self, addr: &SocketAddr) -> bool {
-        self.whites.1.contains(addr)
+    pub fn is_allow_addr(&self, addr: &SocketAddr) -> bool {
+        self.allows.1.contains(addr)
     }
 
-    pub fn add_white_peer(&mut self, peer: PeerId) {
-        if !self.whites.0.contains(&peer) {
-            self.whites.0.push(peer)
+    pub fn add_allow_peer(&mut self, peer: PeerId) {
+        if !self.allows.0.contains(&peer) {
+            self.allows.0.push(peer)
         }
     }
 
-    pub fn add_white_addr(&mut self, addr: SocketAddr) {
-        if !self.whites.1.contains(&addr) {
-            self.whites.1.push(addr)
+    pub fn add_allow_addr(&mut self, addr: SocketAddr) {
+        if !self.allows.1.contains(&addr) {
+            self.allows.1.push(addr)
         }
     }
 
-    pub fn remove_white_peer(&mut self, peer: &PeerId) -> Option<PeerId> {
-        let pos = match self.whites.0.iter().position(|x| *x == *peer) {
+    pub fn remove_allow_peer(&mut self, peer: &PeerId) -> Option<PeerId> {
+        let pos = match self.allows.0.iter().position(|x| *x == *peer) {
             Some(x) => x,
             None => return None,
         };
-        Some(self.whites.0.remove(pos))
+        Some(self.allows.0.remove(pos))
     }
 
-    pub fn remove_white_addr(&mut self, addr: &SocketAddr) -> Option<SocketAddr> {
-        let pos = match self.whites.1.iter().position(|x| *x == *addr) {
+    pub fn remove_allow_addr(&mut self, addr: &SocketAddr) -> Option<SocketAddr> {
+        let pos = match self.allows.1.iter().position(|x| *x == *addr) {
             Some(x) => x,
             None => return None,
         };
-        Some(self.whites.1.remove(pos))
+        Some(self.allows.1.remove(pos))
     }
 
-    pub fn is_black_peer(&self, peer: &PeerId) -> bool {
-        self.blacks.0.contains(peer)
+    pub fn is_block_peer(&self, peer: &PeerId) -> bool {
+        self.blocks.0.contains(peer)
     }
 
-    pub fn is_black_addr(&self, addr: &SocketAddr) -> bool {
-        self.blacks.1.contains(&addr.ip())
+    pub fn is_block_addr(&self, addr: &SocketAddr) -> bool {
+        self.blocks.1.contains(&addr.ip())
     }
 
-    pub fn add_black_peer(&mut self, peer: PeerId) {
-        if !self.blacks.0.contains(&peer) {
-            self.blacks.0.push(peer)
+    pub fn add_block_peer(&mut self, peer: PeerId) {
+        if !self.blocks.0.contains(&peer) {
+            self.blocks.0.push(peer)
         }
     }
 
-    pub fn add_black_addr(&mut self, addr: SocketAddr) {
-        if !self.blacks.1.contains(&addr.ip()) {
-            self.blacks.1.push(addr.ip())
+    pub fn add_block_addr(&mut self, addr: SocketAddr) {
+        if !self.blocks.1.contains(&addr.ip()) {
+            self.blocks.1.push(addr.ip())
         }
     }
 
-    pub fn remove_black_peer(&mut self, peer: &PeerId) -> Option<PeerId> {
-        let pos = match self.blacks.0.iter().position(|x| *x == *peer) {
+    pub fn remove_block_peer(&mut self, peer: &PeerId) -> Option<PeerId> {
+        let pos = match self.blocks.0.iter().position(|x| *x == *peer) {
             Some(x) => x,
             None => return None,
         };
-        Some(self.blacks.0.remove(pos))
+        Some(self.blocks.0.remove(pos))
     }
 
-    pub fn remove_black_addr(&mut self, addr: &SocketAddr) -> Option<IpAddr> {
-        let pos = match self.blacks.1.iter().position(|x| *x == addr.ip()) {
+    pub fn remove_block_addr(&mut self, addr: &SocketAddr) -> Option<IpAddr> {
+        let pos = match self.blocks.1.iter().position(|x| *x == addr.ip()) {
             Some(x) => x,
             None => return None,
         };
-        Some(self.blacks.1.remove(pos))
+        Some(self.blocks.1.remove(pos))
     }
 }
