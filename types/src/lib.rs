@@ -5,6 +5,10 @@ pub mod types;
 #[macro_export]
 macro_rules! delivery_split {
     ($data:expr, $length:expr) => {
-        $data[0..core::cmp::min($data.len(), $length)].to_vec()
+        if $data.len() < $length {
+            $data.clone()
+        } else {
+            $data[0..$length].to_vec()
+        }
     };
 }
