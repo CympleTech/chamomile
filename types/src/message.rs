@@ -7,9 +7,9 @@ use crate::types::{Broadcast, PeerId, TransportStream, TransportType};
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum StreamType {
     /// request for build a stream, params is peer id, transport type and request custom info.
-    Req(PeerId, TransportType, Vec<u8>),
+    Req(PeerId, TransportType),
     /// response for build a stream, params is is_ok, and response custom info.
-    Res(bool, Vec<u8>),
+    Res(bool),
     /// if response is ok, will build a stream, and return the stream to ouside.
     Ok(TransportStream),
 }
@@ -41,9 +41,9 @@ pub enum ReceiveMessage {
     Data(PeerId, Vec<u8>),
     /// (Only stable connected) Apply for build a stream between nodes.
     /// params is `u32` stream symbol, and `StreamType`.
-    Stream(u32, StreamType),
+    Stream(u32, StreamType, Vec<u8>),
     /// (Only stable connected) Delivery feedback. include StableConnect, StableResult, Data. `id(u32) != 0`.
-    Delivery(DeliveryType, u64, bool),
+    Delivery(DeliveryType, u64, bool, Vec<u8>),
 }
 
 /// main send message for outside channel, send from outside to chamomile.
@@ -86,7 +86,7 @@ pub enum SendMessage {
     Broadcast(Broadcast, Vec<u8>),
     /// (Only Stable connected) Apply for build a stream between nodes.
     /// params is `u32` stream symbol, and `StreamType`.
-    Stream(u32, StreamType),
+    Stream(u32, StreamType, Vec<u8>),
     /// Request for return the network current state info.
     /// params is request type, and return channel's sender (async).
     NetworkState(StateRequest, Sender<StateResponse>),

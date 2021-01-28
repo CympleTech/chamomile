@@ -1,4 +1,5 @@
 use chamomile_types::{
+    delivery_split,
     message::{DeliveryType, ReceiveMessage},
     types::{new_io_error, PeerId},
 };
@@ -64,6 +65,7 @@ pub(crate) async fn direct_stable(
     peer_list: Arc<RwLock<PeerList>>,
     is_recv_data: bool,
     is_relay_data: bool,
+    delivery_length: usize,
 ) -> Result<()> {
     // 1. send stable connect.
     // 2. if stable connected, keep it.
@@ -95,6 +97,7 @@ pub(crate) async fn direct_stable(
                         DeliveryType::StableConnect,
                         tid,
                         false,
+                        delivery_split!(data, delivery_length),
                     ))
                     .await?;
             }
@@ -128,6 +131,7 @@ pub(crate) async fn direct_stable(
             peer_list,
             is_recv_data,
             is_relay_data,
+            delivery_length,
             false,
         );
 
@@ -159,6 +163,7 @@ pub(crate) async fn direct_stable(
                 peer_list,
                 is_recv_data,
                 is_relay_data,
+                delivery_length,
             )
             .await
         } else {
@@ -168,6 +173,7 @@ pub(crate) async fn direct_stable(
                         DeliveryType::StableConnect,
                         tid,
                         false,
+                        delivery_split!(data, delivery_length),
                     ))
                     .await?;
             }
@@ -187,6 +193,7 @@ pub(crate) async fn relay_stable(
     peer_list: Arc<RwLock<PeerList>>,
     is_recv_data: bool,
     is_relay_data: bool,
+    delivery_length: usize,
 ) -> Result<()> {
     info!("start stable connection.");
 
@@ -230,6 +237,7 @@ pub(crate) async fn relay_stable(
                         DeliveryType::StableConnect,
                         tid,
                         false,
+                        delivery_split!(data, delivery_length),
                     ))
                     .await?;
             }
@@ -253,6 +261,7 @@ pub(crate) async fn relay_stable(
             peer_list,
             is_recv_data,
             is_relay_data,
+            delivery_length,
             false,
         );
 
@@ -270,6 +279,7 @@ pub(crate) async fn relay_stable(
                     DeliveryType::StableConnect,
                     tid,
                     false,
+                    delivery_split!(data, delivery_length),
                 ))
                 .await?;
         }
@@ -300,6 +310,7 @@ pub(crate) struct Session {
     pub peer_list: Arc<RwLock<PeerList>>,
     pub is_recv_data: bool,
     pub is_relay_data: bool,
+    pub delivery_length: usize,
     pub is_stable: bool,
     pub heartbeat: u32,
     pub relay_sessions: HashMap<PeerId, Sender<SessionMessage>>,
@@ -326,6 +337,7 @@ impl Session {
         peer_list: Arc<RwLock<PeerList>>,
         is_recv_data: bool,
         is_relay_data: bool,
+        delivery_length: usize,
         is_stable: bool,
     ) -> Session {
         Session {
@@ -341,6 +353,7 @@ impl Session {
             peer_list,
             is_recv_data,
             is_relay_data,
+            delivery_length,
             is_stable,
             heartbeat: 0,
             relay_sessions: HashMap::new(),
@@ -394,28 +407,35 @@ impl Session {
                     CoreData::Ping => {}
                     CoreData::Pong => {}
                     CoreData::Delivery(..) => {}
-                    CoreData::Data(tid, _) => {
+                    CoreData::Data(tid, data) => {
                         if tid != 0 {
-                            self.out_send(ReceiveMessage::Delivery(DeliveryType::Data, tid, false))
-                                .await?;
+                            self.out_send(ReceiveMessage::Delivery(
+                                DeliveryType::Data,
+                                tid,
+                                false,
+                                delivery_split!(data, self.delivery_length),
+                            ))
+                            .await?;
                         }
                     }
-                    CoreData::StableConnect(tid, _) => {
+                    CoreData::StableConnect(tid, data) => {
                         if tid != 0 {
                             self.out_send(ReceiveMessage::Delivery(
                                 DeliveryType::StableConnect,
                                 tid,
                                 false,
+                                delivery_split!(data, self.delivery_length),
                             ))
                             .await?;
                         }
                     }
-                    CoreData::StableResult(tid, ..) => {
+                    CoreData::StableResult(tid, _, data) => {
                         if tid != 0 {
                             self.out_send(ReceiveMessage::Delivery(
                                 DeliveryType::StableResult,
                                 tid,
                                 false,
+                                delivery_split!(data, self.delivery_length),
                             ))
                             .await?;
                         }
@@ -477,42 +497,50 @@ impl Session {
                     }
                     CoreData::Data(tid, p_data) => {
                         if self.is_recv_data {
+                            let delivery_data = delivery_split!(p_data, self.delivery_length);
                             self.out_send(ReceiveMessage::Data(self.remote_peer_id(), p_data))
                                 .await?;
                             if tid != 0 {
-                                self.send_core_data(CoreData::Delivery(DeliveryType::Data, tid))
-                                    .await?;
+                                self.send_core_data(CoreData::Delivery(
+                                    DeliveryType::Data,
+                                    tid,
+                                    delivery_data,
+                                ))
+                                .await?;
                             }
                         }
                     }
-                    CoreData::Delivery(t, tid) => {
+                    CoreData::Delivery(t, tid, data) => {
                         if tid != 0 {
                             match t {
                                 DeliveryType::Data => {
                                     if self.is_recv_data {
-                                        self.out_send(ReceiveMessage::Delivery(t, tid, true))
+                                        self.out_send(ReceiveMessage::Delivery(t, tid, true, data))
                                             .await?;
                                     }
                                 }
                                 _ => {
-                                    self.out_send(ReceiveMessage::Delivery(t, tid, true))
+                                    self.out_send(ReceiveMessage::Delivery(t, tid, true, data))
                                         .await?;
                                 }
                             }
                         }
                     }
                     CoreData::StableConnect(tid, data) => {
+                        let delivery_data = delivery_split!(data, self.delivery_length);
                         self.out_send(ReceiveMessage::StableConnect(self.remote_peer_id(), data))
                             .await?;
                         if tid != 0 {
                             self.send_core_data(CoreData::Delivery(
                                 DeliveryType::StableConnect,
                                 tid,
+                                delivery_data,
                             ))
                             .await?;
                         }
                     }
                     CoreData::StableResult(tid, is_ok, data) => {
+                        let delivery_data = delivery_split!(data, self.delivery_length);
                         self.out_send(ReceiveMessage::StableResult(
                             self.remote_peer_id(),
                             is_ok,
@@ -523,6 +551,7 @@ impl Session {
                             self.send_core_data(CoreData::Delivery(
                                 DeliveryType::StableResult,
                                 tid,
+                                delivery_data,
                             ))
                             .await?;
                         }
@@ -856,6 +885,7 @@ impl Session {
                         self.peer_list.clone(),
                         false, // default is not recv data.
                         self.is_relay_data,
+                        self.delivery_length,
                         false,
                     );
 
@@ -906,7 +936,7 @@ pub(crate) enum CoreData {
     Ping,
     Pong,
     Data(u64, Vec<u8>),
-    Delivery(DeliveryType, u64),
+    Delivery(DeliveryType, u64, Vec<u8>),
     StableConnect(u64, Vec<u8>),
     StableResult(u64, bool, Vec<u8>),
 }
@@ -926,7 +956,7 @@ impl CoreData {
                 bytes.extend(&tid.to_le_bytes()[..]);
                 bytes.append(&mut data);
             }
-            CoreData::Delivery(t, tid) => {
+            CoreData::Delivery(t, tid, data) => {
                 bytes[0] = 4u8;
                 let b = match t {
                     DeliveryType::Data => 0u8,
@@ -935,6 +965,7 @@ impl CoreData {
                 };
                 bytes.push(b);
                 bytes.extend(&tid.to_le_bytes()[..]);
+                bytes.extend(data);
             }
             CoreData::StableConnect(tid, mut data) => {
                 bytes[0] = 5u8;
@@ -983,7 +1014,7 @@ impl CoreData {
                 let mut tid_bytes = [0u8; 8];
                 tid_bytes.copy_from_slice(bytes.drain(0..8).as_slice());
                 let tid = u64::from_le_bytes(tid_bytes);
-                Ok(CoreData::Delivery(t, tid))
+                Ok(CoreData::Delivery(t, tid, bytes))
             }
             5u8 => {
                 if bytes.len() < 8 {

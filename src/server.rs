@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chamomile_types::{
+    delivery_split,
     message::{DeliveryType, ReceiveMessage, SendMessage, StateRequest, StateResponse},
     types::{new_io_error, Broadcast, PeerId, TransportType},
 };
@@ -102,6 +103,7 @@ pub async fn start(
         block_peer_list,
         permission,
         only_stable_data,
+        delivery_length,
     } = config;
     db_dir.push(STORAGE_NAME);
     if !db_dir.exists() {
@@ -280,6 +282,7 @@ pub async fn start(
                         peer_list_1.clone(),
                         !only_stable_data,
                         !permission,
+                        delivery_length,
                         false,
                     ));
                 }
@@ -302,6 +305,7 @@ pub async fn start(
                                     DeliveryType::StableConnect,
                                     tid,
                                     false,
+                                    delivery_split!(data, delivery_length),
                                 ))
                                 .await;
                         }
@@ -310,6 +314,7 @@ pub async fn start(
 
                     if peer_list.read().await.stable_contains(&to) {
                         debug!("Aready stable connected");
+                        let delivery_data = delivery_split!(data, delivery_length);
                         let _ = global
                             .out_send(ReceiveMessage::StableResult(to, true, data))
                             .await;
@@ -319,6 +324,7 @@ pub async fn start(
                                     DeliveryType::StableConnect,
                                     tid,
                                     false,
+                                    delivery_data,
                                 ))
                                 .await;
                         }
@@ -341,6 +347,7 @@ pub async fn start(
                                     peer_list.clone(),
                                     !only_stable_data,
                                     !permission,
+                                    delivery_length,
                                 ))
                                 .detach();
                             } else {
@@ -354,6 +361,7 @@ pub async fn start(
                                     peer_list.clone(),
                                     !only_stable_data,
                                     !permission,
+                                    delivery_length,
                                 ))
                                 .detach();
                             }
@@ -365,6 +373,7 @@ pub async fn start(
                                     DeliveryType::StableConnect,
                                     tid,
                                     false,
+                                    delivery_split!(data, delivery_length),
                                 ))
                                 .await;
                         }
@@ -380,6 +389,7 @@ pub async fn start(
                                     DeliveryType::StableResult,
                                     tid,
                                     false,
+                                    delivery_split!(data, delivery_length),
                                 ))
                                 .await;
                         }
@@ -398,6 +408,7 @@ pub async fn start(
                                     DeliveryType::StableResult,
                                     tid,
                                     false,
+                                    delivery_split!(data, delivery_length),
                                 ))
                                 .await;
                         }
@@ -439,7 +450,12 @@ pub async fn start(
                     } else {
                         if tid != 0 {
                             let _ = global
-                                .out_send(ReceiveMessage::Delivery(DeliveryType::Data, tid, false))
+                                .out_send(ReceiveMessage::Delivery(
+                                    DeliveryType::Data,
+                                    tid,
+                                    false,
+                                    delivery_split!(data, delivery_length),
+                                ))
                                 .await;
                         }
                     }
@@ -461,7 +477,7 @@ pub async fn start(
                         drop(peer_list_lock);
                     }
                 },
-                Ok(SendMessage::Stream(_symbol, _stream_type)) => {
+                Ok(SendMessage::Stream(_symbol, _stream_type, _data)) => {
                     todo!();
                 }
                 Ok(SendMessage::NetworkState(req, res_sender)) => match req {

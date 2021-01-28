@@ -30,6 +30,14 @@ pub struct Config {
     pub permission: bool,
     /// If `only_stable_data` is true, only receive stable connected peer's data.
     pub only_stable_data: bool,
+    /// When delivery feedback has set length, it will split length of data to return.
+    /// For example. set `delivery_length = 8`,
+    /// and when a `Data(1u64, PeerId, vec![1u8, 2u8, ..., 100u8]),
+    /// if send success, will return:
+    /// `Delivery(DeliveryType::Data, 1u64, true, vec![1u8, 2u8, ..., 8u8])`
+    /// if send failure, will return:
+    /// `Delivery(DeliveryType::Data, 1u64, false, vec![1u8, 2u8, ..., 8u8])`
+    pub delivery_length: usize,
 }
 
 impl Config {
@@ -44,6 +52,7 @@ impl Config {
             block_peer_list: vec![],
             permission: false,
             only_stable_data: false,
+            delivery_length: 0,
         }
     }
 
@@ -57,6 +66,7 @@ impl Config {
         block_peer_list: Vec<PeerId>,
         permission: bool,
         only_stable_data: bool,
+        delivery_length: usize,
     ) -> Self {
         Self {
             db_dir,
@@ -68,6 +78,7 @@ impl Config {
             block_peer_list,
             permission,
             only_stable_data,
+            delivery_length,
         }
     }
 }
