@@ -316,11 +316,7 @@ pub async fn start(
                         debug!("Aready stable connected");
                         let delivery_data = delivery_split!(data, delivery_length);
                         let _ = global
-                            .out_send(ReceiveMessage::StableResult(
-                                to,
-                                true,
-                                delivery_data.clone(),
-                            ))
+                            .out_send(ReceiveMessage::StableResult(to, true, data))
                             .await;
                         if tid != 0 {
                             let _ = global
