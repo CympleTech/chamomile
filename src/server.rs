@@ -382,16 +382,26 @@ pub async fn start(
                         let _ = sender
                             .send(SessionMessage::StableResult(tid, is_ok, is_force, data))
                             .await;
-                    } else {
-                        if tid != 0 {
-                            let _ = global
-                                .out_send(ReceiveMessage::Delivery(
-                                    DeliveryType::StableResult,
-                                    tid,
-                                    false,
-                                    delivery_split!(data, delivery_length),
-                                ))
+                        continue;
+                    }
+
+                    // multiple times stable connection.
+                    if let Some((s, _, is_it)) = peer_list.read().await.get(&to) {
+                        if is_it {
+                            let _ = s
+                                .send(SessionMessage::StableResult(tid, is_ok, is_force, data))
                                 .await;
+                        } else {
+                            if tid != 0 {
+                                let _ = global
+                                    .out_send(ReceiveMessage::Delivery(
+                                        DeliveryType::StableResult,
+                                        tid,
+                                        false,
+                                        delivery_split!(data, delivery_length),
+                                    ))
+                                    .await;
+                            }
                         }
                     }
                 }

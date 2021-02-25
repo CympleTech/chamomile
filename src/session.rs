@@ -740,6 +740,7 @@ impl Session {
                 self.relay_sessions.remove(&peer_id);
             }
             SessionMessage::Close => {
+                // TODO remove from stable
                 debug!("Got outside close it");
             }
             SessionMessage::DirectIncoming(
