@@ -312,25 +312,6 @@ pub async fn start(
                         continue;
                     }
 
-                    if peer_list.read().await.stable_contains(&to) {
-                        debug!("Aready stable connected");
-                        let delivery_data = delivery_split!(data, delivery_length);
-                        let _ = global
-                            .out_send(ReceiveMessage::StableResult(to, true, data))
-                            .await;
-                        if tid != 0 {
-                            let _ = global
-                                .out_send(ReceiveMessage::Delivery(
-                                    DeliveryType::StableConnect,
-                                    tid,
-                                    false,
-                                    delivery_data,
-                                ))
-                                .await;
-                        }
-                        continue;
-                    }
-
                     if let Some((s, _, is_it)) = peer_list.read().await.get(&to) {
                         if is_it {
                             let _ = s.send(SessionMessage::StableConnect(tid, data)).await;
