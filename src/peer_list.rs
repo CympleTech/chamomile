@@ -16,14 +16,21 @@ use crate::transports::EndpointMessage;
 /// contains: dhts(DHT) & tmp_dhts(HashMap)
 pub(crate) struct PeerList {
     save_path: PathBuf,
+    bootstraps: Vec<SocketAddr>,
+    allows: (Vec<PeerId>, Vec<SocketAddr>),
+    blocks: (Vec<PeerId>, Vec<IpAddr>),
+
     /// PeerId => KadValue(Sender<Sessionmessage>, Sender<EndpointMessage>, Peer)
     dhts: DoubleKadTree,
     /// PeerId => KadValue(Sender<SessionMessage>, Sender<EndpointMessage>, Peer)
     stables: HashMap<PeerId, (KadValue, bool)>,
-    tmp_stables: HashMap<PeerId, (Sender<SessionMessage>, Sender<EndpointMessage>)>,
-    allows: (Vec<PeerId>, Vec<SocketAddr>),
-    blocks: (Vec<PeerId>, Vec<IpAddr>),
-    bootstraps: Vec<SocketAddr>,
+
+    /// queue for connect to ip addr. if has one, not send aggin.
+    _buffer_queue_ip: Vec<SocketAddr>,
+    /// queue for stable connect to peer id. if has one, add to queue buffer.
+    buffer_queue_peer_id: HashMap<PeerId, Vec<(u64, Vec<u8>)>>,
+    /// tmp stable waiting outside to stable result.
+    buffer_tmp_stable: HashMap<PeerId, (Sender<SessionMessage>, Sender<EndpointMessage>)>,
 }
 
 impl PeerList {
@@ -58,21 +65,25 @@ impl PeerList {
                 PeerList {
                     save_path,
                     bootstraps,
-                    dhts: DoubleKadTree::new(peer_id, default_socket),
-                    stables: HashMap::new(),
-                    tmp_stables: HashMap::new(),
                     allows: allows,
                     blocks: blocks,
+                    dhts: DoubleKadTree::new(peer_id, default_socket),
+                    stables: HashMap::new(),
+                    _buffer_queue_ip: vec![],
+                    buffer_queue_peer_id: HashMap::new(),
+                    buffer_tmp_stable: HashMap::new(),
                 }
             }
             Err(_) => PeerList {
                 save_path,
                 bootstraps,
-                dhts: DoubleKadTree::new(peer_id, default_socket),
-                stables: HashMap::new(),
-                tmp_stables: HashMap::new(),
                 allows: allows,
                 blocks: blocks,
+                dhts: DoubleKadTree::new(peer_id, default_socket),
+                stables: HashMap::new(),
+                _buffer_queue_ip: vec![],
+                buffer_queue_peer_id: HashMap::new(),
+                buffer_tmp_stable: HashMap::new(),
             },
         }
     }
@@ -199,7 +210,6 @@ impl PeerList {
     /// 2. add to kad.
     pub async fn peer_add(
         &mut self,
-        peer_id: &PeerId,
         sender: Sender<SessionMessage>,
         stream_sender: Sender<EndpointMessage>,
         peer: Peer,
@@ -211,13 +221,7 @@ impl PeerList {
         }
 
         // 2. add to kad.
-        if self
-            .dhts
-            .search(peer_id)
-            .and_then(|(_v, is_it)| if is_it { Some(()) } else { None })
-            .is_none()
-        {
-            self.dhts.add(KadValue(sender, stream_sender, peer));
+        if self.dhts.add(KadValue(sender, stream_sender, peer)) {
             true
         } else {
             false
@@ -230,6 +234,7 @@ impl PeerList {
         &mut self,
         peer_id: &PeerId,
     ) -> Option<(Sender<SessionMessage>, Sender<EndpointMessage>, Peer)> {
+        self.remove_tmp_stable(peer_id);
         self.dhts.remove(peer_id).map(|v| (v.0, v.1, v.2))
     }
 
@@ -252,12 +257,20 @@ impl PeerList {
     /// PeerDisconnect Step:
     /// 1. remove from allowlist;
     /// 2. remove from stables.
-    pub fn stable_remove(&mut self, peer_id: &PeerId) -> Option<Sender<SessionMessage>> {
+    pub fn stable_remove(&mut self, peer_id: &PeerId) -> bool {
         self.remove_allow_peer(peer_id);
-        self.stables.remove(peer_id).map(|v| (v.0).0)
+        // check save to DHT.
+        if let Some((v, is_direct)) = self.stables.remove(peer_id) {
+            if is_direct {
+                if self.dhts.add(v) {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
-    /// Peerl leave Step:
+    /// Peer leave Step:
     /// 1. remove from stables.
     pub fn stable_leave(&mut self, peer_id: &PeerId) {
         self.stables.remove(peer_id);
@@ -289,22 +302,60 @@ impl PeerList {
         }
     }
 
+    pub fn _add_buffer_ip(&mut self, ip: &SocketAddr) -> bool {
+        if self._buffer_queue_ip.contains(ip) {
+            false
+        } else {
+            self._buffer_queue_ip.push(*ip);
+            true
+        }
+    }
+
+    pub fn _remove_buffer_ip(&mut self, ip: &SocketAddr) {
+        if let Some(pos) = self._buffer_queue_ip.iter().position(|x| x == ip) {
+            self._buffer_queue_ip.remove(pos);
+        }
+    }
+
+    pub fn contains_buffer_peer_id(&mut self, peer_id: &PeerId) -> bool {
+        debug!(
+            "DEBUG: ======= BUFFER PEER: {:?}",
+            self.buffer_queue_peer_id.keys()
+        );
+        if self.buffer_queue_peer_id.contains_key(peer_id) {
+            true
+        } else {
+            self.buffer_queue_peer_id.insert(*peer_id, vec![]);
+            false
+        }
+    }
+
+    pub fn add_buffer_peer_id(&mut self, peer_id: &PeerId, tid: u64, data: Vec<u8>) {
+        if let Some(v) = self.buffer_queue_peer_id.get_mut(peer_id) {
+            v.push((tid, data));
+        }
+    }
+
+    pub fn remove_buffer_peer_id(&mut self, peer_id: &PeerId) -> Option<Vec<(u64, Vec<u8>)>> {
+        self.buffer_queue_peer_id.remove(peer_id)
+    }
+
     pub fn get_tmp_stable(&self, peer_id: &PeerId) -> Option<&Sender<SessionMessage>> {
-        self.tmp_stables.get(peer_id).map(|v| &v.0).or(self
+        self.buffer_tmp_stable.get(peer_id).map(|v| &v.0).or(self
             .dht_get(peer_id)
             .map(|v| if v.2 { Some(v.0) } else { None })
             .flatten())
     }
 
     pub fn get_endpoint_with_tmp(&self, peer_id: &PeerId) -> Option<&Sender<EndpointMessage>> {
-        self.tmp_stables.get(peer_id).map(|v| &v.1).or(self
+        self.buffer_tmp_stable.get(peer_id).map(|v| &v.1).or(self
             .get(peer_id)
             .map(|v| if v.2 { Some(v.1) } else { None })
             .flatten())
     }
 
     pub fn remove_tmp_stable(&mut self, peer_id: &PeerId) {
-        let _ = self.tmp_stables.remove(peer_id);
+        let _ = self.buffer_tmp_stable.remove(peer_id);
     }
 
     pub fn add_tmp_stable(
@@ -313,7 +364,8 @@ impl PeerList {
         sender: Sender<SessionMessage>,
         stream_sender: Sender<EndpointMessage>,
     ) {
-        self.tmp_stables.insert(peer_id, (sender, stream_sender));
+        self.buffer_tmp_stable
+            .insert(peer_id, (sender, stream_sender));
     }
 }
 

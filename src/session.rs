@@ -195,7 +195,7 @@ pub(crate) async fn relay_stable(
     is_relay_data: bool,
     delivery_length: usize,
 ) -> Result<()> {
-    info!("start stable connection.");
+    debug!("start stable connection.");
 
     // 1. try relay connect. (timeout).
     // 2. send stable connect.
@@ -365,32 +365,40 @@ impl Session {
         self.remote_peer.id().clone()
     }
 
-    async fn close(&self) -> Result<()> {
-        if self.is_direct() {
-            let _ = self.direct_send(EndpointMessage::Close).await;
-        } else {
+    async fn close(&mut self, is_leave: bool) -> Result<()> {
+        let peer_id = self.remote_peer.id();
+
+        if !self.is_direct() && self.is_stable {
+            let _ = self.out_send(ReceiveMessage::StableLeave(*peer_id)).await;
             let _ = self
                 .relay_send(SessionMessage::RelayClose(self.my_peer_id))
                 .await;
-        }
 
-        if self.is_stable {
-            self.peer_list
-                .write()
-                .await
-                .stable_leave(self.remote_peer.id());
+            if is_leave {
+                self.peer_list.write().await.stable_leave(peer_id);
+            } else {
+                self.peer_list.write().await.stable_remove(peer_id);
+            }
+        } else if self.is_direct() && self.is_stable {
+            let _ = self.out_send(ReceiveMessage::StableLeave(*peer_id)).await;
 
-            let _ = self
-                .out_send(ReceiveMessage::StableLeave(self.remote_peer_id()))
-                .await;
+            if is_leave {
+                self.peer_list.write().await.stable_leave(peer_id);
+                let _ = self.direct_send(EndpointMessage::Close).await;
+            } else {
+                if self.peer_list.write().await.stable_remove(peer_id) {
+                    self.send_core_data(CoreData::Unstable).await?;
+                    self.is_stable = false;
+                    return Ok(()); // keep no-stable
+                } else {
+                    let _ = self.direct_send(EndpointMessage::Close).await;
+                }
+            }
         } else {
-            let mut peer_list_lock = self.peer_list.write().await;
-            peer_list_lock.peer_remove(self.remote_peer.id());
-            peer_list_lock.remove_tmp_stable(self.remote_peer.id());
-            drop(peer_list_lock);
+            self.peer_list.write().await.peer_remove(peer_id);
         }
 
-        Ok(())
+        Err(new_io_error("close session"))
     }
 
     fn is_direct(&self) -> bool {
@@ -406,6 +414,7 @@ impl Session {
                 match msg {
                     CoreData::Ping => {}
                     CoreData::Pong => {}
+                    CoreData::Unstable => {}
                     CoreData::Delivery(..) => {}
                     CoreData::Data(tid, data) => {
                         if tid != 0 {
@@ -556,12 +565,30 @@ impl Session {
                             .await?;
                         }
 
+                        if !self.is_stable {
+                            // continue handle connections buffer.
+                            let buffers = self
+                                .peer_list
+                                .write()
+                                .await
+                                .remove_buffer_peer_id(&self.remote_peer.id());
+                            if let Some(connections) = buffers {
+                                for buffer in connections {
+                                    self.send_core_data(CoreData::StableConnect(
+                                        buffer.0, buffer.1,
+                                    ))
+                                    .await?;
+                                }
+                            }
+                        }
+
                         if !self.is_stable && is_ok {
                             // upgrade to stable connection.
-                            info!("Upgrade to stable connection controller");
+                            debug!("Upgrade to stable connection controller");
                             self.upgrade().await?;
                         }
                     }
+                    CoreData::Unstable => self.close(false).await?,
                 }
             }
         } else {
@@ -645,18 +672,12 @@ impl Session {
     pub async fn listen(&mut self) -> Result<()> {
         let _ = self.forever().await;
         debug!("Session broke: {:?}", self.remote_peer.id());
-        self.close().await
+        self.close(true).await
     }
 
     async fn handle_outside(&mut self, msg: SessionMessage) -> Result<()> {
         match msg {
             SessionMessage::Data(tid, data) => {
-                debug!(
-                    "Got outside data {:?} to remote: {:?}",
-                    data.len(),
-                    self.remote_peer.id()
-                );
-
                 self.send_core_data(CoreData::Data(tid, data)).await?;
             }
             SessionMessage::StableConnect(tid, data) => {
@@ -678,10 +699,24 @@ impl Session {
                 self.send_core_data(CoreData::StableResult(tid, is_ok, data))
                     .await?;
 
-                if !self.is_stable && is_ok {
-                    // upgrade session to stable.
-                    info!("Upgrade to stable connection controller");
-                    self.upgrade().await?;
+                if !self.is_stable {
+                    if is_ok {
+                        // upgrade session to stable.
+                        debug!("Upgrade to stable connection controller");
+                        self.upgrade().await?;
+                    } else {
+                        // TODO Better for waiting this.
+                        //
+                        // let _ = self
+                        //     .relay_send(SessionMessage::RelayClose(self.my_peer_id))
+                        //     .await;
+                        // self.peer_list
+                        //     .write()
+                        //     .await
+                        //     .remove_tmp_stable(self.remote_peer.id());
+
+                        // return Err(new_io_error("force close"));
+                    }
                 }
 
                 if is_force {
@@ -689,11 +724,6 @@ impl Session {
                 }
             }
             SessionMessage::RelayData(from, to, data) => {
-                info!(
-                    "Got relay data need send to: {:?}, my: {:?}",
-                    to,
-                    self.remote_peer.id()
-                );
                 if &to == self.remote_peer.id() && from == self.my_peer_id {
                     // cannot send it.
                     self.failure_send(data).await?;
@@ -719,7 +749,7 @@ impl Session {
                 }
 
                 if self.is_direct() {
-                    info!("Send to remote stream direct");
+                    debug!("Send to remote stream direct");
                     self.direct_send(EndpointMessage::RelayConnect(from_peer, to))
                         .await?;
                 } else {
@@ -740,8 +770,7 @@ impl Session {
                 self.relay_sessions.remove(&peer_id);
             }
             SessionMessage::Close => {
-                // TODO remove from stable
-                debug!("Got outside close it");
+                self.close(false).await?;
             }
             SessionMessage::DirectIncoming(
                 remote_peer,
@@ -749,7 +778,6 @@ impl Session {
                 stream_receiver,
                 endpoint_sender,
             ) => {
-                debug!("Got directly stable connection");
                 self.stream_sender = stream_sender;
                 self.stream_receiver = stream_receiver;
                 self.endpoint = ConnectType::Direct(endpoint_sender);
@@ -800,13 +828,10 @@ impl Session {
                 self.handle_core_data(e_data).await?;
             }
             EndpointMessage::RelayData(from, to, data) => {
-                debug!("Endpoint recv relay data to: {:?}", to);
                 if to == self.my_peer_id {
                     if &from == self.remote_peer.id() {
-                        info!("Relay Data is send here.");
                         self.handle_core_data(data).await?;
                     } else {
-                        info!("Relay data is send to my peer's session.");
                         if let Some(stream_sender) =
                             self.peer_list.read().await.get_endpoint_with_tmp(&from)
                         {
@@ -814,7 +839,7 @@ impl Session {
                                 .send(EndpointMessage::RelayData(from, to, data))
                                 .await;
                         } else {
-                            info!("Relay data session not found");
+                            debug!("Relay data session not found");
                             if self.is_recv_data {
                                 // only happen permissionless
                                 self.out_send(ReceiveMessage::Data(from, data)).await?;
@@ -940,6 +965,7 @@ pub(crate) enum CoreData {
     Delivery(DeliveryType, u64, Vec<u8>),
     StableConnect(u64, Vec<u8>),
     StableResult(u64, bool, Vec<u8>),
+    Unstable,
 }
 
 impl CoreData {
@@ -978,6 +1004,9 @@ impl CoreData {
                 bytes.extend(&tid.to_le_bytes()[..]);
                 bytes.push(if is_ok { 1u8 } else { 0u8 });
                 bytes.append(&mut data);
+            }
+            CoreData::Unstable => {
+                bytes[0] = 7u8;
             }
         }
 
@@ -1036,6 +1065,7 @@ impl CoreData {
                 let is_ok = bytes.drain(0..1).as_slice()[0] == 1u8;
                 Ok(CoreData::StableResult(tid, is_ok, bytes))
             }
+            7u8 => Ok(CoreData::Unstable),
             _ => Err(()),
         }
     }

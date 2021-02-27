@@ -168,6 +168,8 @@ pub async fn start(
     let peer_list_1 = peer_list.clone();
     let global_1 = global.clone();
 
+    // Timer: every 10s to check tmp_stable is ok, if not ok, close it.
+
     smol::spawn(async move {
         loop {
             match transport_receiver.recv().await {
@@ -246,12 +248,7 @@ pub async fn start(
                     let (session_sender, session_receiver) = new_session_channel();
                     let mut peer_list_lock = peer_list_1.write().await;
                     let is_new = peer_list_lock
-                        .peer_add(
-                            &remote_peer_id,
-                            session_sender.clone(),
-                            stream_sender.clone(),
-                            remote_peer,
-                        )
+                        .peer_add(session_sender.clone(), stream_sender.clone(), remote_peer)
                         .await;
                     drop(peer_list_lock);
 
@@ -298,7 +295,7 @@ pub async fn start(
                 Ok(SendMessage::StableConnect(tid, to, socket, data)) => {
                     debug!("Send stable connect to: {:?}", to);
                     if to == peer_id {
-                        info!("Nerver here, stable connect to self.");
+                        debug!("Nerver here, stable connect to self.");
                         if tid != 0 {
                             let _ = global
                                 .out_send(ReceiveMessage::Delivery(
@@ -312,42 +309,10 @@ pub async fn start(
                         continue;
                     }
 
-                    if let Some((s, _, is_it)) = peer_list.read().await.get(&to) {
-                        if is_it {
-                            let _ = s.send(SessionMessage::StableConnect(tid, data)).await;
-                        } else {
-                            info!("Will use stable direct ? {}", socket.is_some());
-                            if let Some(addr) = socket {
-                                smol::spawn(direct_stable(
-                                    tid,
-                                    to,
-                                    data,
-                                    addr,
-                                    peer_id.clone(),
-                                    global.clone(),
-                                    peer_list.clone(),
-                                    !only_stable_data,
-                                    !permission,
-                                    delivery_length,
-                                ))
-                                .detach();
-                            } else {
-                                smol::spawn(relay_stable(
-                                    tid,
-                                    to,
-                                    data,
-                                    s.clone(),
-                                    peer_id.clone(),
-                                    global.clone(),
-                                    peer_list.clone(),
-                                    !only_stable_data,
-                                    !permission,
-                                    delivery_length,
-                                ))
-                                .detach();
-                            }
-                        }
-                    } else {
+                    let peer_read_lock = peer_list.read().await;
+                    let results = peer_read_lock.get(&to);
+                    if results.is_none() {
+                        drop(peer_read_lock);
                         if tid != 0 {
                             let _ = global
                                 .out_send(ReceiveMessage::Delivery(
@@ -358,12 +323,73 @@ pub async fn start(
                                 ))
                                 .await;
                         }
-                    };
+                        continue;
+                    }
+
+                    let (s, _, is_it) = results.unwrap(); // safe checked.
+                    if is_it {
+                        let _ = s.send(SessionMessage::StableConnect(tid, data)).await;
+                        drop(peer_read_lock);
+                    } else {
+                        let s_clone = s.clone();
+                        drop(peer_read_lock);
+
+                        let mut peer_lock = peer_list.write().await;
+                        if peer_lock.contains_buffer_peer_id(&to) {
+                            debug!("Got stable connect again, save to buffer");
+                            peer_lock.add_buffer_peer_id(&to, tid, data);
+                            drop(peer_lock);
+                            continue;
+                        }
+                        drop(peer_lock);
+
+                        let pid = peer_id.clone();
+                        let global = global.clone();
+                        let plist = peer_list.clone();
+
+                        if let Some(addr) = socket {
+                            smol::spawn(async move {
+                                let _ = direct_stable(
+                                    tid,
+                                    to,
+                                    data,
+                                    addr,
+                                    pid,
+                                    global,
+                                    plist.clone(),
+                                    !only_stable_data,
+                                    !permission,
+                                    delivery_length,
+                                )
+                                .await;
+                                plist.write().await.remove_buffer_peer_id(&to);
+                            })
+                            .detach();
+                        } else {
+                            smol::spawn(async move {
+                                let _ = relay_stable(
+                                    tid,
+                                    to,
+                                    data,
+                                    s_clone,
+                                    pid,
+                                    global,
+                                    plist.clone(),
+                                    !only_stable_data,
+                                    !permission,
+                                    delivery_length,
+                                )
+                                .await;
+                                plist.write().await.remove_buffer_peer_id(&to);
+                            })
+                            .detach();
+                        }
+                    }
                 }
                 Ok(SendMessage::StableResult(tid, to, is_ok, is_force, data)) => {
                     debug!("Send stable result {} to: {:?}", is_ok, to);
                     if to == peer_id {
-                        info!("Nerver here, stable result to self.");
+                        debug!("Nerver here, stable result to self.");
                         if tid != 0 {
                             let _ = global
                                 .out_send(ReceiveMessage::Delivery(
@@ -406,9 +432,10 @@ pub async fn start(
                     }
                 }
                 Ok(SendMessage::StableDisconnect(peer_id)) => {
-                    debug!("Send stable disconnect to: {:?}", peer_id);
-                    if let Some(session) = peer_list.write().await.stable_remove(&peer_id) {
-                        let _ = session.send(SessionMessage::Close).await;
+                    if let Some((sender, _, is_it)) = peer_list.read().await.get(&peer_id) {
+                        if is_it {
+                            let _ = sender.send(SessionMessage::Close).await;
+                        }
                     }
                 }
                 Ok(SendMessage::Connect(addr)) => {
