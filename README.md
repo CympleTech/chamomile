@@ -11,17 +11,17 @@
 - Diff transports: UDP/TCP/UDP-Based Special Protocol.
 
 ## Simple test.
-- `cargo run --example permissionless 0.0.0.0:8000`
-- `cargo run --example permissionless 0.0.0.0:8001 0.0.0.0:8000`
-- `cargo run --example permissionless 0.0.0.0:8002 0.0.0.0:8000`
+- A: `cargo run --example permissionless 0.0.0.0:8000`
+- B: `cargo run --example permissionless 0.0.0.0:8001 0.0.0.0:8000`
+- C: `cargo run --example permissionless 0.0.0.0:8002 0.0.0.0:8000`
 
 ## Relay test.
-- `cargo run --example relay 192.168.xx.xx:8000`
+- A: `cargo run --example relay 192.168.xx.xx:8000`
   - this ip is your LAN address, it will do relay work.
-- `cargo run --example relay 127.0.0.1:8001 192.168.xx.xx:8000`
+- B: `cargo run --example relay 127.0.0.1:8001 192.168.xx.xx:8000`
   - start waiting stable connected by relay.
-- `cargo run --example relay 127.0.0.1:8002 192.168.xx.xx:8000 XX..`
-  - XX.. is above's network peer id will connected it.
+- C: `cargo run --example relay 127.0.0.1:8002 192.168.xx.xx:8000 XX..`
+  - XX.. is above's B network `peer id` will connected it.
 
 ## Design point
 - Mobile phones, IoT devices, PC and servers are first-class citizens

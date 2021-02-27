@@ -121,7 +121,7 @@ fn main() {
                         .send(SendMessage::Data(4, peer_id, vec![1, 2, 3, 4, 5]))
                         .await;
                 }
-                ReceiveMessage::Delivery(t, tid, had) => {
+                ReceiveMessage::Delivery(t, tid, had, _data) => {
                     println!("======== ===== Recv {:?} Delivery: {} {}", t, tid, had);
                 }
             }

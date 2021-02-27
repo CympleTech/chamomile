@@ -99,7 +99,7 @@ fn main() {
                         remark
                     );
                 }
-                ReceiveMessage::Delivery(t, tid, had) => {
+                ReceiveMessage::Delivery(t, tid, had, _data) => {
                     println!("Recv {:?} Delivery: {} {}", t, tid, had);
                 }
             }
