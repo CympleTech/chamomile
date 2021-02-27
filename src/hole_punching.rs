@@ -1,7 +1,7 @@
-use smol::io::Result;
+use std::io::Result;
 use std::net::SocketAddr;
 
-use chamomile_types::types::{PeerId, TransportType};
+use chamomile_types::types::{new_io_error, PeerId, TransportType};
 
 use super::peer::{Peer, PEER_LENGTH};
 use super::peer_list::PeerList;
@@ -15,12 +15,12 @@ pub enum Hole {
 pub struct DHT(pub Vec<Peer>);
 
 impl Hole {
-    pub fn from_byte(byte: u8) -> std::result::Result<Self, ()> {
+    pub fn from_byte(byte: u8) -> Result<Self> {
         match byte {
             0u8 => Ok(Hole::Help),
             1u8 => Ok(Hole::StunOne),
             2u8 => Ok(Hole::StunTwo),
-            _ => Err(()),
+            _ => Err(new_io_error("Hole bytes failure.")),
         }
     }
 
@@ -34,16 +34,16 @@ impl Hole {
 }
 
 impl DHT {
-    pub fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, ()> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < 4 {
-            return Err(());
+            return Err(new_io_error("DHT bytes failure."));
         }
         let mut len_bytes = [0u8; 4];
         len_bytes.copy_from_slice(&bytes[0..4]);
         let len = u32::from_le_bytes(len_bytes) as usize;
         let raw_bytes = &bytes[4..];
         if raw_bytes.len() < len * PEER_LENGTH {
-            return Err(());
+            return Err(new_io_error("DHT bytes failure."));
         }
         let mut peers = vec![];
         for i in 0..len {

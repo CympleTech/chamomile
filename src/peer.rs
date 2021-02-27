@@ -1,7 +1,8 @@
 use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::io::Result;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
-use chamomile_types::types::{PeerId, TransportType};
+use chamomile_types::types::{new_io_error, PeerId, TransportType};
 
 // [u8; 18]
 fn socket_addr_to_bytes(socket: &SocketAddr) -> Vec<u8> {
@@ -17,9 +18,9 @@ fn socket_addr_to_bytes(socket: &SocketAddr) -> Vec<u8> {
     bytes
 }
 
-fn socket_addr_from_bytes(bytes: &[u8]) -> Result<SocketAddr, ()> {
+fn socket_addr_from_bytes(bytes: &[u8]) -> Result<SocketAddr> {
     if bytes.len() != 18 {
-        return Err(());
+        return Err(new_io_error("peer bytes failure."));
     }
     let mut port_bytes = [0u8; 2];
     port_bytes.copy_from_slice(&bytes[16..18]);
@@ -83,9 +84,9 @@ impl Peer {
         self.is_pub = is_pub
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ()> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != PEER_LENGTH {
-            return Err(());
+            return Err(new_io_error("peer bytes failure."));
         }
 
         let id = PeerId::from_bytes(&bytes[0..32])?;

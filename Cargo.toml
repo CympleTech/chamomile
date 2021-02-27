@@ -25,8 +25,8 @@ bit-vec = "0.6"
 blake3 = "0.3"
 ed25519-dalek = "1.0"
 x25519-dalek = "1.1"
-aes-soft = "0.6"
-block-modes = "0.7"
+aes-gcm = "0.8"
+zeroize = { version = "1", features = ["zeroize_derive"] }
 
 # async runtime and channel
 smol = "1.2"

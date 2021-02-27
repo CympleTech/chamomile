@@ -10,12 +10,14 @@ use std::sync::Arc;
 use chamomile_types::{
     delivery_split,
     message::{DeliveryType, ReceiveMessage, SendMessage, StateRequest, StateResponse},
-    types::{new_io_error, Broadcast, PeerId, TransportType},
+    types::{Broadcast, PeerId, TransportType},
 };
 
+use crate::buffer::Buffer;
 use crate::config::Config;
+use crate::global::Global;
 use crate::hole_punching::{nat, DHT};
-use crate::keys::{KeyType, Keypair, SessionKey};
+use crate::keys::{KeyType, Keypair};
 use crate::peer::Peer;
 use crate::peer_list::PeerList;
 use crate::primitives::{STORAGE_KEY_KEY, STORAGE_NAME, STORAGE_PEER_LIST_KEY};
@@ -27,65 +29,6 @@ use crate::transports::{
     start as transport_start, EndpointMessage, RemotePublic, TransportRecvMessage,
     TransportSendMessage,
 };
-
-pub(crate) struct Global {
-    pub peer_id: PeerId,
-    pub peer: Peer,
-    pub key: Keypair,
-    pub transport_sender: Sender<TransportSendMessage>,
-    pub out_sender: Sender<ReceiveMessage>,
-}
-
-impl Global {
-    #[inline]
-    pub fn generate_remote(&self) -> (SessionKey, RemotePublic) {
-        // random gennerate, so must return. no keep-loop.
-        loop {
-            if let Ok(session_key) = self.key.generate_session_key() {
-                let remote_pk = RemotePublic(
-                    self.key.public(),
-                    self.peer.clone(),
-                    session_key.out_bytes(),
-                );
-                return (session_key, remote_pk);
-            }
-        }
-    }
-
-    #[inline]
-    pub fn complete_remote(
-        &self,
-        remote_key: &Keypair,
-        dh_bytes: Vec<u8>,
-    ) -> Option<(SessionKey, RemotePublic)> {
-        if let Some(session_key) = self.key.complete_session_key(remote_key, dh_bytes) {
-            let remote_pk = RemotePublic(
-                self.key.public(),
-                self.peer.clone(),
-                session_key.out_bytes(),
-            );
-            Some((session_key, remote_pk))
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    pub async fn trans_send(&self, msg: TransportSendMessage) -> Result<()> {
-        self.transport_sender
-            .send(msg)
-            .await
-            .map_err(|_e| new_io_error("Transport missing"))
-    }
-
-    #[inline]
-    pub async fn out_send(&self, msg: ReceiveMessage) -> Result<()> {
-        self.out_sender
-            .send(msg)
-            .await
-            .map_err(|_e| new_io_error("Outside missing"))
-    }
-}
 
 /// start server
 pub async fn start(
@@ -133,6 +76,7 @@ pub async fn start(
         (allow_peer_list, allowlist),
         (block_peer_list, blocklist),
     )));
+    let buffer = Arc::new(RwLock::new(Buffer::init()));
 
     let default_transport = TransportType::from_str(&transport);
 
@@ -148,11 +92,14 @@ pub async fn start(
     let _transports = Arc::new(RwLock::new(transports)); // TODO more about multiple transports.
 
     let global = Arc::new(Global {
-        peer_id,
         peer,
         key,
         transport_sender,
         out_sender,
+        buffer,
+        delivery_length,
+        peer_list: peer_list.clone(),
+        is_relay_data: !only_stable_data,
     });
 
     // bootstrap allow list.
@@ -165,8 +112,9 @@ pub async fn start(
             .expect("Server to Endpoint (Connect)");
     }
 
-    let peer_list_1 = peer_list.clone();
-    let global_1 = global.clone();
+    drop(peer_list);
+
+    let inner_global = global.clone();
 
     // Timer: every 10s to check tmp_stable is ok, if not ok, close it.
 
@@ -183,7 +131,7 @@ pub async fn start(
                 )) => {
                     debug!("receiver incoming connect: {:?}", addr);
                     // check and start session
-                    if peer_list_1.read().await.is_block_addr(&addr) {
+                    if inner_global.peer_list.read().await.is_block_addr(&addr) {
                         debug!("receiver incoming connect is blocked");
                         let _ = endpoint_sender.send(EndpointMessage::Close).await;
                         continue;
@@ -198,7 +146,11 @@ pub async fn start(
 
                     // check and save tmp and save outside
                     if remote_peer_id == peer_id
-                        || peer_list_1.read().await.is_block_peer(&remote_peer_id)
+                        || inner_global
+                            .peer_list
+                            .read()
+                            .await
+                            .is_block_peer(&remote_peer_id)
                     {
                         debug!("session remote peer is blocked, close it.");
                         let _ = endpoint_sender.send(EndpointMessage::Close).await;
@@ -216,7 +168,7 @@ pub async fn start(
                         }
                     } else {
                         if let Some((session_key, remote_pk)) =
-                            global_1.complete_remote(&remote_key, dh_key)
+                            inner_global.complete_remote(&remote_key, dh_key)
                         {
                             let _ = endpoint_sender
                                 .send(EndpointMessage::Handshake(remote_pk))
@@ -230,8 +182,11 @@ pub async fn start(
                     };
 
                     // check is stable relay connections.
-                    if let Some(sender) =
-                        peer_list_1.read().await.stable_check_relay(&remote_peer_id)
+                    if let Some(sender) = inner_global
+                        .peer_list
+                        .read()
+                        .await
+                        .stable_check_relay(&remote_peer_id)
                     {
                         let _ = sender
                             .send(SessionMessage::DirectIncoming(
@@ -246,7 +201,7 @@ pub async fn start(
 
                     // save to peer_list.
                     let (session_sender, session_receiver) = new_session_channel();
-                    let mut peer_list_lock = peer_list_1.write().await;
+                    let mut peer_list_lock = inner_global.peer_list.write().await;
                     let is_new = peer_list_lock
                         .peer_add(session_sender.clone(), stream_sender.clone(), remote_peer)
                         .await;
@@ -260,14 +215,17 @@ pub async fn start(
                     }
 
                     // DHT help.
-                    let peers = peer_list_1.read().await.get_dht_help(&remote_peer_id);
+                    let peers = inner_global
+                        .peer_list
+                        .read()
+                        .await
+                        .get_dht_help(&remote_peer_id);
                     endpoint_sender
                         .send(EndpointMessage::DHT(DHT(peers)))
                         .await
                         .expect("Sesssion to Endpoint (Data)");
 
                     session_spawn(Session::new(
-                        peer_id.clone(),
                         remote_peer,
                         session_sender,
                         session_receiver,
@@ -275,11 +233,8 @@ pub async fn start(
                         stream_receiver,
                         ConnectType::Direct(endpoint_sender),
                         session_key,
-                        global_1.clone(),
-                        peer_list_1.clone(),
-                        !only_stable_data,
+                        inner_global.clone(),
                         !permission,
-                        delivery_length,
                         false,
                     ));
                 }
@@ -309,7 +264,7 @@ pub async fn start(
                         continue;
                     }
 
-                    let peer_read_lock = peer_list.read().await;
+                    let peer_read_lock = global.peer_list.read().await;
                     let results = peer_read_lock.get(&to);
                     if results.is_none() {
                         drop(peer_read_lock);
@@ -334,53 +289,28 @@ pub async fn start(
                         let s_clone = s.clone();
                         drop(peer_read_lock);
 
-                        let mut peer_lock = peer_list.write().await;
-                        if peer_lock.contains_buffer_peer_id(&to) {
+                        let mut buffer_lock = global.buffer.write().await;
+                        if buffer_lock.contains_stable(&to) {
                             debug!("Got stable connect again, save to buffer");
-                            peer_lock.add_buffer_peer_id(&to, tid, data);
-                            drop(peer_lock);
+                            buffer_lock.add_stable(&to, tid, data);
+                            drop(buffer_lock);
                             continue;
                         }
-                        drop(peer_lock);
+                        drop(buffer_lock);
 
-                        let pid = peer_id.clone();
-                        let global = global.clone();
-                        let plist = peer_list.clone();
+                        let g = global.clone();
+                        let buffer = global.buffer.clone();
 
                         if let Some(addr) = socket {
                             smol::spawn(async move {
-                                let _ = direct_stable(
-                                    tid,
-                                    to,
-                                    data,
-                                    addr,
-                                    pid,
-                                    global,
-                                    plist.clone(),
-                                    !only_stable_data,
-                                    !permission,
-                                    delivery_length,
-                                )
-                                .await;
-                                plist.write().await.remove_buffer_peer_id(&to);
+                                let _ = direct_stable(tid, to, data, addr, g, !permission).await;
+                                buffer.write().await.remove_stable(&to);
                             })
                             .detach();
                         } else {
                             smol::spawn(async move {
-                                let _ = relay_stable(
-                                    tid,
-                                    to,
-                                    data,
-                                    s_clone,
-                                    pid,
-                                    global,
-                                    plist.clone(),
-                                    !only_stable_data,
-                                    !permission,
-                                    delivery_length,
-                                )
-                                .await;
-                                plist.write().await.remove_buffer_peer_id(&to);
+                                let _ = relay_stable(tid, to, data, s_clone, g, !permission).await;
+                                buffer.write().await.remove_stable(&to);
                             })
                             .detach();
                         }
@@ -403,7 +333,7 @@ pub async fn start(
                         continue;
                     }
 
-                    if let Some(sender) = peer_list.read().await.get_tmp_stable(&to) {
+                    if let Some(sender) = global.peer_list.read().await.get_tmp_stable(&to) {
                         debug!("Got peer to send stable result.");
                         let _ = sender
                             .send(SessionMessage::StableResult(tid, is_ok, is_force, data))
@@ -412,7 +342,7 @@ pub async fn start(
                     }
 
                     // multiple times stable connection.
-                    if let Some((s, _, is_it)) = peer_list.read().await.get(&to) {
+                    if let Some((s, _, is_it)) = global.peer_list.read().await.get(&to) {
                         if is_it {
                             let _ = s
                                 .send(SessionMessage::StableResult(tid, is_ok, is_force, data))
@@ -432,7 +362,7 @@ pub async fn start(
                     }
                 }
                 Ok(SendMessage::StableDisconnect(peer_id)) => {
-                    if let Some((sender, _, is_it)) = peer_list.read().await.get(&peer_id) {
+                    if let Some((sender, _, is_it)) = global.peer_list.read().await.get(&peer_id) {
                         if is_it {
                             let _ = sender.send(SessionMessage::Close).await;
                         }
@@ -447,7 +377,7 @@ pub async fn start(
                 }
                 Ok(SendMessage::DisConnect(addr)) => {
                     debug!("Send disconnect to: {:?}", addr);
-                    peer_list.write().await.peer_disconnect(&addr).await;
+                    global.peer_list.write().await.peer_disconnect(&addr).await;
                 }
                 Ok(SendMessage::Data(tid, to, data)) => {
                     debug!(
@@ -455,8 +385,9 @@ pub async fn start(
                         to.short_show(),
                         data.len()
                     );
-                    let peer_list_lock = peer_list.read().await;
-                    if let Some((sender, stream_sender, is_it)) = peer_list_lock.get(&to) {
+                    if let Some((sender, stream_sender, is_it)) =
+                        global.peer_list.read().await.get(&to)
+                    {
                         if is_it {
                             let _ = sender.send(SessionMessage::Data(tid, data)).await;
                         } else {
@@ -480,19 +411,15 @@ pub async fn start(
                 }
                 Ok(SendMessage::Broadcast(broadcast, data)) => match broadcast {
                     Broadcast::StableAll => {
-                        let peer_list_lock = peer_list.read().await;
-                        for (_to, (sender, _)) in peer_list_lock.stable_all() {
+                        for (_to, (sender, _)) in global.peer_list.read().await.stable_all() {
                             let _ = sender.send(SessionMessage::Data(0, data.clone())).await;
                         }
-                        drop(peer_list_lock);
                     }
                     Broadcast::Gossip => {
                         // TODO more Gossip base on Kad.
-                        let peer_list_lock = peer_list.read().await;
-                        for (_to, sender) in peer_list_lock.all() {
+                        for (_to, sender) in global.peer_list.read().await.all() {
                             let _ = sender.send(SessionMessage::Data(0, data.clone())).await;
                         }
-                        drop(peer_list_lock);
                     }
                 },
                 Ok(SendMessage::Stream(_symbol, _stream_type, _data)) => {
@@ -500,7 +427,8 @@ pub async fn start(
                 }
                 Ok(SendMessage::NetworkState(req, res_sender)) => match req {
                     StateRequest::Stable => {
-                        let peers = peer_list
+                        let peers = global
+                            .peer_list
                             .read()
                             .await
                             .stable_all()
@@ -510,11 +438,11 @@ pub async fn start(
                         let _ = res_sender.send(StateResponse::Stable(peers)).await;
                     }
                     StateRequest::DHT => {
-                        let peers = peer_list.read().await.dht_keys();
+                        let peers = global.peer_list.read().await.dht_keys();
                         let _ = res_sender.send(StateResponse::DHT(peers)).await;
                     }
                     StateRequest::Seed => {
-                        let seeds = peer_list.read().await.bootstrap().clone();
+                        let seeds = global.peer_list.read().await.bootstrap().clone();
                         let _ = res_sender.send(StateResponse::Seed(seeds)).await;
                     }
                 },

@@ -1,11 +1,11 @@
-use smol::{channel::Sender, fs};
+use smol::{channel::Sender, fs, io::Result};
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::iter::Iterator;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
-use chamomile_types::types::PeerId;
+use chamomile_types::types::{new_io_error, PeerId};
 
 use crate::kad::{DoubleKadTree, KadValue};
 use crate::peer::Peer;
@@ -24,13 +24,8 @@ pub(crate) struct PeerList {
     dhts: DoubleKadTree,
     /// PeerId => KadValue(Sender<SessionMessage>, Sender<EndpointMessage>, Peer)
     stables: HashMap<PeerId, (KadValue, bool)>,
-
-    /// queue for connect to ip addr. if has one, not send aggin.
-    _buffer_queue_ip: Vec<SocketAddr>,
-    /// queue for stable connect to peer id. if has one, add to queue buffer.
-    buffer_queue_peer_id: HashMap<PeerId, Vec<(u64, Vec<u8>)>>,
-    /// tmp stable waiting outside to stable result.
-    buffer_tmp_stable: HashMap<PeerId, (Sender<SessionMessage>, Sender<EndpointMessage>)>,
+    /// tmp stable waiting outside to stable result. 60s if no-ok, close it.
+    tmps: HashMap<PeerId, (Sender<SessionMessage>, Sender<EndpointMessage>)>,
 }
 
 impl PeerList {
@@ -69,9 +64,7 @@ impl PeerList {
                     blocks: blocks,
                     dhts: DoubleKadTree::new(peer_id, default_socket),
                     stables: HashMap::new(),
-                    _buffer_queue_ip: vec![],
-                    buffer_queue_peer_id: HashMap::new(),
-                    buffer_tmp_stable: HashMap::new(),
+                    tmps: HashMap::new(),
                 }
             }
             Err(_) => PeerList {
@@ -81,9 +74,7 @@ impl PeerList {
                 blocks: blocks,
                 dhts: DoubleKadTree::new(peer_id, default_socket),
                 stables: HashMap::new(),
-                _buffer_queue_ip: vec![],
-                buffer_queue_peer_id: HashMap::new(),
-                buffer_tmp_stable: HashMap::new(),
+                tmps: HashMap::new(),
             },
         }
     }
@@ -302,60 +293,82 @@ impl PeerList {
         }
     }
 
-    pub fn _add_buffer_ip(&mut self, ip: &SocketAddr) -> bool {
-        if self._buffer_queue_ip.contains(ip) {
-            false
-        } else {
-            self._buffer_queue_ip.push(*ip);
-            true
+    /// Step:
+    /// 1. add to boostraps;
+    /// 2. add to kad.
+    pub async fn add_dht(&mut self, v: KadValue) -> bool {
+        // 1. add to boostraps.
+        if !self.bootstraps.contains(v.2.addr()) {
+            self.add_bootstrap(v.2.addr().clone());
+            self.save().await;
         }
-    }
 
-    pub fn _remove_buffer_ip(&mut self, ip: &SocketAddr) {
-        if let Some(pos) = self._buffer_queue_ip.iter().position(|x| x == ip) {
-            self._buffer_queue_ip.remove(pos);
-        }
-    }
-
-    pub fn contains_buffer_peer_id(&mut self, peer_id: &PeerId) -> bool {
-        debug!(
-            "DEBUG: ======= BUFFER PEER: {:?}",
-            self.buffer_queue_peer_id.keys()
-        );
-        if self.buffer_queue_peer_id.contains_key(peer_id) {
+        // 2. add to kad.
+        if self.dhts.add(v) {
             true
         } else {
-            self.buffer_queue_peer_id.insert(*peer_id, vec![]);
             false
         }
     }
 
-    pub fn add_buffer_peer_id(&mut self, peer_id: &PeerId, tid: u64, data: Vec<u8>) {
-        if let Some(v) = self.buffer_queue_peer_id.get_mut(peer_id) {
-            v.push((tid, data));
+    /// Peer stable connect ok Step:
+    /// 1. add to bootstrap;
+    /// 2. add to stables;
+    pub fn add_stable(&mut self, peer_id: PeerId, v: KadValue, is_direct: bool) {
+        match self.stables.get_mut(&peer_id) {
+            Some((KadValue(s, ss, p), direct)) => {
+                let _ = s.try_send(SessionMessage::Close);
+                let KadValue(sender, stream, peer) = v;
+                *s = sender;
+                *ss = stream;
+                *p = peer;
+                *direct = is_direct;
+            }
+            None => {
+                self.add_allow_peer(peer_id);
+                self.stables.insert(peer_id, (v, is_direct));
+            }
         }
     }
 
-    pub fn remove_buffer_peer_id(&mut self, peer_id: &PeerId) -> Option<Vec<(u64, Vec<u8>)>> {
-        self.buffer_queue_peer_id.remove(peer_id)
+    pub fn stable_to_dht(&mut self, peer_id: &PeerId) -> Result<()> {
+        self.remove_allow_peer(peer_id);
+        if let Some((v, is_direct)) = self.stables.remove(peer_id) {
+            if is_direct {
+                if self.dhts.add(v) {
+                    return Ok(());
+                }
+            }
+        }
+        Err(new_io_error("stable is closed"))
+    }
+
+    pub fn dht_to_stable(&mut self, peer_id: &PeerId) -> Result<()> {
+        if let Some(v) = self.dhts.remove(peer_id) {
+            self.add_allow_peer(*peer_id);
+            self.stables.insert(*peer_id, (v, true));
+            Ok(())
+        } else {
+            Err(new_io_error("DHT is closed"))
+        }
     }
 
     pub fn get_tmp_stable(&self, peer_id: &PeerId) -> Option<&Sender<SessionMessage>> {
-        self.buffer_tmp_stable.get(peer_id).map(|v| &v.0).or(self
+        self.tmps.get(peer_id).map(|v| &v.0).or(self
             .dht_get(peer_id)
             .map(|v| if v.2 { Some(v.0) } else { None })
             .flatten())
     }
 
     pub fn get_endpoint_with_tmp(&self, peer_id: &PeerId) -> Option<&Sender<EndpointMessage>> {
-        self.buffer_tmp_stable.get(peer_id).map(|v| &v.1).or(self
+        self.tmps.get(peer_id).map(|v| &v.1).or(self
             .get(peer_id)
             .map(|v| if v.2 { Some(v.1) } else { None })
             .flatten())
     }
 
     pub fn remove_tmp_stable(&mut self, peer_id: &PeerId) {
-        let _ = self.buffer_tmp_stable.remove(peer_id);
+        let _ = self.tmps.remove(peer_id);
     }
 
     pub fn add_tmp_stable(
@@ -364,8 +377,7 @@ impl PeerList {
         sender: Sender<SessionMessage>,
         stream_sender: Sender<EndpointMessage>,
     ) {
-        self.buffer_tmp_stable
-            .insert(peer_id, (sender, stream_sender));
+        self.tmps.insert(peer_id, (sender, stream_sender));
     }
 }
 
@@ -381,11 +393,11 @@ impl PeerList {
         }
     }
 
-    pub fn is_allow_peer(&self, peer: &PeerId) -> bool {
+    pub fn _is_allow_peer(&self, peer: &PeerId) -> bool {
         self.allows.0.contains(peer)
     }
 
-    pub fn is_allow_addr(&self, addr: &SocketAddr) -> bool {
+    pub fn _is_allow_addr(&self, addr: &SocketAddr) -> bool {
         self.allows.1.contains(addr)
     }
 
@@ -395,7 +407,7 @@ impl PeerList {
         }
     }
 
-    pub fn add_allow_addr(&mut self, addr: SocketAddr) {
+    pub fn _add_allow_addr(&mut self, addr: SocketAddr) {
         if !self.allows.1.contains(&addr) {
             self.allows.1.push(addr)
         }
@@ -409,7 +421,7 @@ impl PeerList {
         Some(self.allows.0.remove(pos))
     }
 
-    pub fn remove_allow_addr(&mut self, addr: &SocketAddr) -> Option<SocketAddr> {
+    pub fn _remove_allow_addr(&mut self, addr: &SocketAddr) -> Option<SocketAddr> {
         let pos = match self.allows.1.iter().position(|x| *x == *addr) {
             Some(x) => x,
             None => return None,
@@ -425,19 +437,19 @@ impl PeerList {
         self.blocks.1.contains(&addr.ip())
     }
 
-    pub fn add_block_peer(&mut self, peer: PeerId) {
+    pub fn _add_block_peer(&mut self, peer: PeerId) {
         if !self.blocks.0.contains(&peer) {
             self.blocks.0.push(peer)
         }
     }
 
-    pub fn add_block_addr(&mut self, addr: SocketAddr) {
+    pub fn _add_block_addr(&mut self, addr: SocketAddr) {
         if !self.blocks.1.contains(&addr.ip()) {
             self.blocks.1.push(addr.ip())
         }
     }
 
-    pub fn remove_block_peer(&mut self, peer: &PeerId) -> Option<PeerId> {
+    pub fn _remove_block_peer(&mut self, peer: &PeerId) -> Option<PeerId> {
         let pos = match self.blocks.0.iter().position(|x| *x == *peer) {
             Some(x) => x,
             None => return None,
@@ -445,7 +457,7 @@ impl PeerList {
         Some(self.blocks.0.remove(pos))
     }
 
-    pub fn remove_block_addr(&mut self, addr: &SocketAddr) -> Option<IpAddr> {
+    pub fn _remove_block_addr(&mut self, addr: &SocketAddr) -> Option<IpAddr> {
         let pos = match self.blocks.1.iter().position(|x| *x == addr.ip()) {
             Some(x) => x,
             None => return None,

@@ -1,6 +1,4 @@
 #![recursion_limit = "1024"]
-// TODO WIP
-#![allow(dead_code)]
 
 //! `chamomile` is a crate for building a solid and efficient p2p network.
 //!
@@ -64,7 +62,9 @@
 #[macro_use]
 extern crate log;
 
+mod buffer;
 mod config;
+mod global;
 mod hole_punching;
 mod kad;
 mod keys;

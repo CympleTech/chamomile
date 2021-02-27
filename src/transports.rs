@@ -1,8 +1,6 @@
-use chamomile_types::types::{PeerId, TransportType, PEER_ID_LENGTH};
-use smol::{
-    channel::{self, Receiver, Sender},
-    io::Result,
-};
+use chamomile_types::types::{new_io_error, PeerId, TransportType, PEER_ID_LENGTH};
+use smol::channel::{self, Receiver, Sender};
+use std::io::Result;
 use std::net::SocketAddr;
 
 mod rtp;
@@ -96,7 +94,6 @@ pub async fn start(
 }
 
 /// Rtemote Public Info, include local transport and public key bytes, session_key out_bytes.
-#[derive(Clone)]
 pub struct RemotePublic(pub Keypair, pub Peer, pub Vec<u8>);
 
 impl RemotePublic {
@@ -104,16 +101,16 @@ impl RemotePublic {
         self.1.id()
     }
 
-    pub fn from_bytes(mut bytes: Vec<u8>) -> std::result::Result<Self, ()> {
+    pub fn from_bytes(mut bytes: Vec<u8>) -> Result<Self> {
         if bytes.len() < PEER_LENGTH + 2 {
-            return Err(());
+            return Err(new_io_error("Remote bytes failure."));
         }
         let peer = Peer::from_bytes(bytes.drain(0..PEER_LENGTH).as_slice())?;
         let mut keypair_len_bytes = [0u8; 2];
         keypair_len_bytes.copy_from_slice(bytes.drain(0..2).as_slice());
         let keypair_len = u16::from_be_bytes(keypair_len_bytes) as usize;
         if bytes.len() < keypair_len {
-            return Err(());
+            return Err(new_io_error("Remote bytes failure."));
         }
         let keypair = Keypair::from_bytes(bytes.drain(0..keypair_len).as_slice())?;
         Ok(Self(keypair, peer, bytes))
@@ -176,9 +173,9 @@ impl EndpointMessage {
         bytes
     }
 
-    fn from_bytes(mut bytes: Vec<u8>) -> std::result::Result<Self, ()> {
+    fn from_bytes(mut bytes: Vec<u8>) -> Result<Self> {
         if bytes.len() < 1 {
-            return Err(());
+            return Err(new_io_error("EndpointMessage bytes failure."));
         }
 
         let t: Vec<u8> = bytes.drain(0..1).collect();
@@ -186,16 +183,16 @@ impl EndpointMessage {
             0u8 => Ok(EndpointMessage::Close),
             1u8 => {
                 if bytes.len() < 4 {
-                    return Err(());
+                    return Err(new_io_error("EndpointMessage bytes failure."));
                 }
                 let mut peer_len_bytes = [0u8; 4];
                 peer_len_bytes.copy_from_slice(bytes.drain(0..4).as_slice());
                 let peer_len = u32::from_be_bytes(peer_len_bytes) as usize;
                 if bytes.len() < peer_len {
-                    return Err(());
+                    return Err(new_io_error("EndpointMessage bytes failure."));
                 }
-                let peer =
-                    RemotePublic::from_bytes(bytes.drain(0..peer_len).collect()).map_err(|_| ())?;
+                let peer = RemotePublic::from_bytes(bytes.drain(0..peer_len).collect())
+                    .map_err(|_| new_io_error("EndpointMessage bytes failure."))?;
                 Ok(EndpointMessage::Handshake(peer))
             }
             2u8 => {
@@ -204,7 +201,7 @@ impl EndpointMessage {
             }
             3u8 => {
                 if bytes.len() != 1 {
-                    return Err(());
+                    return Err(new_io_error("EndpointMessage bytes failure."));
                 }
                 let hole = Hole::from_byte(bytes[0])?;
                 Ok(EndpointMessage::Hole(hole))
@@ -213,7 +210,7 @@ impl EndpointMessage {
             5u8 => Ok(EndpointMessage::Data(bytes)),
             6u8 => {
                 if bytes.len() < PEER_ID_LENGTH * 2 {
-                    return Err(());
+                    return Err(new_io_error("EndpointMessage bytes failure."));
                 }
                 let p1 = PeerId::from_bytes(&bytes.drain(0..PEER_ID_LENGTH).as_slice())?;
                 let p2 = PeerId::from_bytes(&bytes.drain(0..PEER_ID_LENGTH).as_slice())?;
@@ -221,20 +218,20 @@ impl EndpointMessage {
             }
             7u8 => {
                 if bytes.len() < 4 {
-                    return Err(());
+                    return Err(new_io_error("EndpointMessage bytes failure."));
                 }
                 let mut peer_len_bytes = [0u8; 4];
                 peer_len_bytes.copy_from_slice(bytes.drain(0..4).as_slice());
                 let peer_len = u32::from_be_bytes(peer_len_bytes) as usize;
                 if bytes.len() < peer_len + PEER_ID_LENGTH {
-                    return Err(());
+                    return Err(new_io_error("EndpointMessage bytes failure."));
                 }
-                let peer =
-                    RemotePublic::from_bytes(bytes.drain(0..peer_len).collect()).map_err(|_| ())?;
+                let peer = RemotePublic::from_bytes(bytes.drain(0..peer_len).collect())
+                    .map_err(|_| new_io_error("EndpointMessage bytes failure."))?;
                 let p2 = PeerId::from_bytes(&bytes.drain(0..PEER_ID_LENGTH).as_slice())?;
                 Ok(EndpointMessage::RelayConnect(peer, p2))
             }
-            _ => Err(()),
+            _ => Err(new_io_error("EndpointMessage bytes failure.")),
         }
     }
 }

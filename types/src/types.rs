@@ -1,6 +1,7 @@
 use async_channel::{Receiver, Sender};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::io::Result;
 
 #[inline]
 pub fn new_io_error(s: &str) -> std::io::Error {
@@ -25,9 +26,9 @@ impl PeerId {
         new_hex
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ()> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != 32 {
-            return Err(());
+            return Err(new_io_error("peer id bytes failure."));
         }
         let mut raw = [0u8; 32];
         raw.copy_from_slice(bytes);
@@ -42,16 +43,17 @@ impl PeerId {
         self.0.to_vec()
     }
 
-    pub fn from_hex(s: impl ToString) -> Result<PeerId, ()> {
+    pub fn from_hex(s: impl ToString) -> Result<PeerId> {
         let s = s.to_string();
         if s.len() != 64 {
-            return Err(());
+            return Err(new_io_error("peer bytes failure."));
         }
 
         let mut value = [0u8; 32];
 
         for i in 0..(s.len() / 2) {
-            let res = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).map_err(|_e| ())?;
+            let res = u8::from_str_radix(&s[2 * i..2 * i + 2], 16)
+                .map_err(|_e| new_io_error("peer hex failure."))?;
             value[i] = res;
         }
 
@@ -101,13 +103,13 @@ impl TransportType {
         }
     }
 
-    pub fn from_byte(b: u8) -> Result<Self, ()> {
+    pub fn from_byte(b: u8) -> Result<Self> {
         match b {
             0u8 => Ok(TransportType::UDP),
             1u8 => Ok(TransportType::TCP),
             2u8 => Ok(TransportType::RTP),
             3u8 => Ok(TransportType::UDT),
-            _ => Err(()),
+            _ => Err(new_io_error("transport bytes failure.")),
         }
     }
 

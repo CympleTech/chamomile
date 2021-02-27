@@ -1,20 +1,21 @@
-use aes_soft::Aes256;
-use block_modes::block_padding::Pkcs7;
-use block_modes::{BlockMode, Cbc};
+use aes_gcm::aead::{
+    generic_array::{typenum::U12, GenericArray},
+    Aead, NewAead,
+};
+use aes_gcm::Aes256Gcm;
 use ed25519_dalek::{
     Keypair as Ed25519_Keypair, PublicKey as Ed25519_PublicKey, Signature as Ed25519_Signature,
     Signer, Verifier, KEYPAIR_LENGTH, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH,
 };
+use rand::Rng;
 use std::convert::TryFrom;
-use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::io::Result;
 use x25519_dalek::{PublicKey as Ed25519_DH_Public, StaticSecret as Ed25519_DH_Secret};
+use zeroize::Zeroize;
 
-use chamomile_types::types::PeerId;
+use chamomile_types::types::{new_io_error, PeerId};
 
-// create an alias for convenience
-type Aes256Cbc = Cbc<Aes256, Pkcs7>;
-
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Zeroize)]
 pub enum KeyType {
     Ed25519, // Ed25519 = 0
     Lattice, // Lattice-based = 1
@@ -36,12 +37,12 @@ impl KeyType {
         }
     }
 
-    pub fn from_byte(i: u8) -> Result<Self, ()> {
+    pub fn from_byte(i: u8) -> Result<Self> {
         match i {
             0u8 => Ok(Self::None),
             1u8 => Ok(KeyType::Ed25519),
             2u8 => Ok(KeyType::Lattice),
-            _ => Err(()),
+            _ => Err(new_io_error("key type failure.")),
         }
     }
 
@@ -94,27 +95,30 @@ impl KeyType {
         }
     }
 
-    fn sign(&self, keypair: &Keypair, msg: &[u8]) -> Result<Vec<u8>, ()> {
+    fn sign(&self, keypair: &Keypair, msg: &[u8]) -> Result<Vec<u8>> {
         match self {
             KeyType::Ed25519 => {
                 let mut keypair_bytes: [u8; KEYPAIR_LENGTH] = [0u8; KEYPAIR_LENGTH];
                 keypair_bytes[..SECRET_KEY_LENGTH].copy_from_slice(&keypair.sk);
                 keypair_bytes[SECRET_KEY_LENGTH..].copy_from_slice(&keypair.pk);
-                let keypair = Ed25519_Keypair::from_bytes(&keypair_bytes).map_err(|_e| ())?;
+                let keypair = Ed25519_Keypair::from_bytes(&keypair_bytes)
+                    .map_err(|_e| new_io_error("ed25519 sign failure."))?;
                 Ok(keypair.sign(msg).to_bytes().to_vec())
             }
             _ => Ok(Default::default()),
         }
     }
 
-    fn verify(&self, pk: &[u8], msg: &[u8], sign: &[u8]) -> Result<bool, ()> {
+    fn verify(&self, pk: &[u8], msg: &[u8], sign: &[u8]) -> Result<bool> {
         match self {
             KeyType::Ed25519 => {
-                let ed_pk = Ed25519_PublicKey::from_bytes(&pk[..]).map_err(|_e| ())?;
+                let ed_pk = Ed25519_PublicKey::from_bytes(&pk[..])
+                    .map_err(|_e| new_io_error("ed25519 public from bytes failure."))?;
                 Ok(ed_pk
                     .verify(
                         msg,
-                        &Ed25519_Signature::try_from(&sign[..]).map_err(|_e| ())?,
+                        &Ed25519_Signature::try_from(&sign[..])
+                            .map_err(|_e| new_io_error("ed25519 signaure from bytes failure."))?,
                     )
                     .is_ok())
             }
@@ -122,28 +126,29 @@ impl KeyType {
         }
     }
 
-    pub fn session_key(&self, self_keypair: &Keypair) -> Result<SessionKey, ()> {
+    pub fn session_key(&self, self_keypair: &Keypair) -> Result<SessionKey> {
         match self {
             KeyType::Ed25519 => {
                 let alice_secret = Ed25519_DH_Secret::new(&mut rand::thread_rng());
                 let alice_public = Ed25519_DH_Public::from(&alice_secret).as_bytes().to_vec();
 
                 let sign = self_keypair.sign(&alice_public[..])?;
+                let random_nonce = rand::thread_rng().gen::<[u8; 12]>();
                 Ok(SessionKey {
                     key: *self,
                     sk: alice_secret.to_bytes().to_vec(),
                     pk: alice_public,
                     sign: sign,
                     is_ok: false,
-                    ss: [0u8; 32],
-                    iv: [0u8; 16],
+                    cipher: Aes256Gcm::new(GenericArray::from_slice(&[0u8; 32])),
+                    nonce: random_nonce.into(),
                 })
             }
-            _ => Err(()),
+            _ => Err(new_io_error("session key failure.")),
         }
     }
 
-    fn dh(&self, sk: &[u8], pk: &[u8]) -> Result<Vec<u8>, ()> {
+    fn dh(&self, sk: &[u8], pk: &[u8]) -> Result<Vec<u8>> {
         match self {
             KeyType::Ed25519 => {
                 let mut sk_bytes = [0u8; 32];
@@ -159,7 +164,7 @@ impl KeyType {
     }
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Debug, Zeroize)]
 pub struct Keypair {
     pub key: KeyType, // [u8, 1]
     pub sk: Vec<u8>,  // [u8; key.psk_len]
@@ -168,17 +173,18 @@ pub struct Keypair {
 
 impl Keypair {
     /// only key_type and public_key.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ()> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < 1 {
-            return Err(());
+            return Err(new_io_error("keypair length failure."));
         }
         let key = KeyType::from_byte(bytes[0])?;
         let pk_len = key.pk_len();
 
         if bytes.len() != 1 + pk_len {
-            return Err(());
+            return Err(new_io_error("keypair from bytes failure."));
         }
         let pk = bytes[1..].to_vec();
+
         return Ok(Keypair {
             key,
             pk,
@@ -204,16 +210,16 @@ impl Keypair {
     }
 
     // TODO add keystore
-    pub fn from_db_bytes(bytes: &[u8]) -> Result<Self, ()> {
+    pub fn from_db_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < 1 {
-            return Err(());
+            return Err(new_io_error("keypair from db bytes failure."));
         }
         let key = KeyType::from_byte(bytes[0])?;
         let pk_len = key.pk_len();
         let psk_len = key.psk_len();
 
         if bytes.len() != 1 + pk_len + psk_len {
-            return Err(());
+            return Err(new_io_error("keypair from db bytes failure."));
         }
         let sk = bytes[1..(1 + psk_len)].to_vec();
         let pk = bytes[(1 + psk_len)..].to_vec();
@@ -234,7 +240,7 @@ impl Keypair {
         }
     }
 
-    pub fn generate_session_key(&self) -> Result<SessionKey, ()> {
+    pub fn generate_session_key(&self) -> Result<SessionKey> {
         self.key.session_key(self)
     }
 
@@ -247,15 +253,17 @@ impl Keypair {
         None
     }
 
-    pub fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, ()> {
-        self.key.sign(&self, msg).map_err(|_e| ())
+    pub fn sign(&self, msg: &[u8]) -> Result<Vec<u8>> {
+        self.key
+            .sign(&self, msg)
+            .map_err(|_e| new_io_error("keypair sign failure."))
     }
 
     pub fn verify(&self, msg: &[u8], sign: &[u8]) -> bool {
         self.key.verify(&self.pk, msg, sign).unwrap_or(false)
     }
 
-    pub fn from_pk(key: KeyType, bytes: Vec<u8>) -> Result<Self, ()> {
+    pub fn from_pk(key: KeyType, bytes: Vec<u8>) -> Result<Self> {
         if bytes.len() == key.pk_len() {
             Ok(Keypair {
                 key,
@@ -263,20 +271,22 @@ impl Keypair {
                 pk: bytes,
             })
         } else {
-            Err(())
+            Err(new_io_error("keypair from pk failure."))
         }
     }
 }
 
-#[derive(Clone)]
+//#[derive(Zeroize)]
 pub struct SessionKey {
     key: KeyType,
     sk: Vec<u8>,
     pk: Vec<u8>,
     sign: Vec<u8>,
     is_ok: bool,
-    ss: [u8; 32],
-    iv: [u8; 16],
+    /// 256-bit key (random key from DH key)
+    cipher: Aes256Gcm,
+    /// 96-bit nonce (random key, when first handshake. only use this session.)
+    nonce: GenericArray<u8, U12>,
 }
 
 /// Simple DH on 25519 to get AES-256 session key.
@@ -290,26 +300,26 @@ impl SessionKey {
         self.is_ok
     }
 
-    fn cipher(&self) -> Result<Aes256Cbc, ()> {
-        Aes256Cbc::new_var(&self.ss, &self.iv).map_err(|_e| ())
-    }
-
     pub fn complete(&mut self, remote_pk: &[u8], remote_dh: Vec<u8>) -> bool {
         if self.key.pk_len() != remote_pk.len()
-            || (self.key.dh_pk_len() + self.key.sign_len()) != remote_dh.len()
+            || (self.key.dh_pk_len() + self.key.sign_len()) + 12 != remote_dh.len()
         {
             return false;
         }
 
-        let (tmp_pk, tmp_sign) = remote_dh.split_at(self.key.dh_pk_len());
+        let (tmp_pk, tmp_sign_nonce) = remote_dh.split_at(self.key.dh_pk_len());
+        let (tmp_sign, tmp_nonce) = tmp_sign_nonce.split_at(self.key.sign_len());
 
         if let Ok(true) = self.key.verify(&remote_pk, tmp_pk, tmp_sign) {
             self.key
                 .dh(&self.sk, tmp_pk)
                 .map(|session_key| {
-                    self.ss
-                        .copy_from_slice(blake3::hash(&session_key).as_bytes());
-                    self.iv.copy_from_slice(&session_key[..16]);
+                    self.cipher = Aes256Gcm::new(GenericArray::from_slice(
+                        blake3::hash(&session_key).as_bytes(), // [u8; 32]
+                    ));
+                    let mut nonce_bytes = [0u8; 12];
+                    nonce_bytes.copy_from_slice(tmp_nonce);
+                    self.nonce = nonce_bytes.into();
                     self.is_ok = true;
                 })
                 .is_ok()
@@ -320,27 +330,20 @@ impl SessionKey {
 
     pub fn out_bytes(&self) -> Vec<u8> {
         let mut vec = self.pk.clone();
-        vec.append(&mut self.sign.clone());
+        vec.extend(&self.sign);
+        vec.extend(self.nonce.as_slice());
         vec
     }
 
     pub fn encrypt(&self, msg: Vec<u8>) -> Vec<u8> {
-        if let Ok(cbc) = self.cipher() {
-            cbc.encrypt_vec(&msg)
-        } else {
-            vec![]
-        }
+        self.cipher
+            .encrypt(&self.nonce, msg.as_ref())
+            .unwrap_or(vec![])
     }
 
-    pub fn decrypt(&self, msg: Vec<u8>) -> Result<Vec<u8>, ()> {
-        self.cipher()?.decrypt_vec(&msg).map_err(|_e| ())
-    }
-}
-
-impl Debug for SessionKey {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        let mut hex = String::new();
-        hex.extend(self.ss.iter().map(|byte| format!("{:02x?}", byte)));
-        write!(f, "Shared Secret: 0x{}", hex)
+    pub fn decrypt(&self, msg: Vec<u8>) -> Result<Vec<u8>> {
+        self.cipher
+            .decrypt(&self.nonce, msg.as_ref())
+            .map_err(|_e| new_io_error("decrypt failure."))
     }
 }
