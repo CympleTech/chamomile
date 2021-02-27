@@ -99,7 +99,7 @@ pub async fn start(
         buffer,
         delivery_length,
         peer_list: peer_list.clone(),
-        is_relay_data: !only_stable_data,
+        is_relay_data: !permission,
     });
 
     // bootstrap allow list.
@@ -234,7 +234,7 @@ pub async fn start(
                         ConnectType::Direct(endpoint_sender),
                         session_key,
                         inner_global.clone(),
-                        !permission,
+                        !only_stable_data,
                         false,
                     ));
                 }
@@ -303,13 +303,15 @@ pub async fn start(
 
                         if let Some(addr) = socket {
                             smol::spawn(async move {
-                                let _ = direct_stable(tid, to, data, addr, g, !permission).await;
+                                let _ =
+                                    direct_stable(tid, to, data, addr, g, !only_stable_data).await;
                                 buffer.write().await.remove_stable(&to);
                             })
                             .detach();
                         } else {
                             smol::spawn(async move {
-                                let _ = relay_stable(tid, to, data, s_clone, g, !permission).await;
+                                let _ = relay_stable(tid, to, data, s_clone, g, !only_stable_data)
+                                    .await;
                                 buffer.write().await.remove_stable(&to);
                             })
                             .detach();

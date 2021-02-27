@@ -115,18 +115,15 @@ impl PeerList {
         self.stable_get(peer_id).or(self.dht_get(peer_id))
     }
 
-    pub fn peer_next_closest(
-        &self,
-        peer_id: &PeerId,
-        prev: &PeerId,
-    ) -> Option<&Sender<SessionMessage>> {
+    pub fn next_closest(&self, target: &PeerId, prev: &PeerId) -> Option<&Sender<SessionMessage>> {
+        println!("GOT CLOSEDST===========");
         self.stables
-            .get(peer_id)
+            .get(target)
             .map(|v| &(v.0).0)
-            .or(self.dhts.peer_next_closest(peer_id, prev).map(|v| &v.0))
+            .or(self.dhts.id_next_closest(target, prev).map(|v| &v.0))
     }
 
-    pub fn ip_next_closest(
+    pub fn _ip_next_closest(
         &self,
         ip: &SocketAddr,
         prev: &SocketAddr,

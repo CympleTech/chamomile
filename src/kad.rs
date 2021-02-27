@@ -98,7 +98,7 @@ impl DoubleKadTree {
         }
     }
 
-    pub fn peer_next_closest(&self, key: &PeerId, prev: &PeerId) -> Option<&KadValue> {
+    pub fn id_next_closest(&self, key: &PeerId, prev: &PeerId) -> Option<&KadValue> {
         self.peers
             .next_closest(key, prev)
             .map(|k| self.values.get(k))

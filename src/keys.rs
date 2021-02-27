@@ -67,7 +67,7 @@ impl KeyType {
         }
     }
 
-    fn dh_sk_len(&self) -> usize {
+    fn _dh_sk_len(&self) -> usize {
         match self {
             KeyType::Ed25519 => 32,
             _ => 0,

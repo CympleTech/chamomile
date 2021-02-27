@@ -22,7 +22,7 @@ pub struct Config {
     pub block_peer_list: Vec<PeerId>,
     /// If set permission is true, that server is permissioned,
     /// not receive DHT's peer message, only stable connect.
-    /// if set permissionless is false, that server is permissionless,
+    /// if set permission is false, that server is permissionless,
     /// receive DHT's peer message and stable's peer message.
     /// if you use a permissionless server, but only receive stable's message,
     /// you can set `only_stable_data` is true.

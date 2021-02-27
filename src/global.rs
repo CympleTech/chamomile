@@ -78,7 +78,7 @@ impl Global {
             .map_err(|_e| new_io_error("Outside missing"))
     }
 
-    pub async fn tmp_to_stable(&self, peer_id: &PeerId, is_d: bool) -> Result<()> {
+    pub async fn tmp_to_stable(&self, peer_id: &PeerId) -> Result<()> {
         let v_some = self.buffer.write().await.remove_tmp(peer_id);
         if let Some((v, is_d)) = v_some {
             if is_d {

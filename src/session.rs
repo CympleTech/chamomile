@@ -681,6 +681,7 @@ impl Session {
                 }
             }
             SessionMessage::RelayData(from, to, data) => {
+                println!("Relay session need send data!");
                 if &to == self.remote_id() && &from == self.my_id() {
                     // cannot send it.
                     self.failure_send(data).await?;
@@ -688,9 +689,11 @@ impl Session {
                 }
 
                 if self.is_direct() {
+                    println!("Relay session is_here!");
                     self.direct_send(EndpointMessage::RelayData(from, to, data))
                         .await?;
                 } else {
+                    println!("Relay session need a new!");
                     if let Some((_, stream_sender, _)) =
                         self.global.peer_list.read().await.dht_get(&to)
                     {
@@ -818,7 +821,7 @@ impl Session {
                             .peer_list
                             .read()
                             .await
-                            .peer_next_closest(&to, self.remote_id())
+                            .next_closest(&to, self.remote_id())
                         {
                             let _ = sender.send(SessionMessage::RelayData(from, to, data)).await;
                         }
@@ -893,7 +896,7 @@ impl Session {
                             .peer_list
                             .read()
                             .await
-                            .peer_next_closest(&to, self.remote_id())
+                            .next_closest(&to, self.remote_id())
                         {
                             let _ = sender
                                 .send(SessionMessage::RelayConnect(from_peer, to))
