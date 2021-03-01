@@ -1,6 +1,6 @@
 use smol::{
     channel::{Receiver, Sender},
-    fs,
+    fs, future,
     io::Result,
     lock::RwLock,
 };
@@ -17,6 +17,7 @@ use crate::buffer::Buffer;
 use crate::config::Config;
 use crate::global::Global;
 use crate::hole_punching::{nat, DHT};
+use crate::kad::KadValue;
 use crate::keys::{KeyType, Keypair};
 use crate::peer::Peer;
 use crate::peer_list::PeerList;
@@ -76,28 +77,24 @@ pub async fn start(
         (allow_peer_list, allowlist),
         (block_peer_list, blocklist),
     )));
-    let buffer = Arc::new(RwLock::new(Buffer::init()));
 
     let default_transport = TransportType::from_str(&transport);
-
     let peer = Peer::new(key.peer_id(), addr, default_transport, true);
 
     let mut transports: HashMap<TransportType, Sender<TransportSendMessage>> = HashMap::new();
-
-    let (transport_sender, transport_receiver) = transport_start(peer.transport(), *peer.addr())
+    let (trans_send, trans_recv) = transport_start(peer.transport(), *peer.addr())
         .await
         .expect("Transport binding failure!");
-
-    transports.insert(default_transport, transport_sender.clone());
+    transports.insert(default_transport, trans_send.clone());
     let _transports = Arc::new(RwLock::new(transports)); // TODO more about multiple transports.
 
     let global = Arc::new(Global {
         peer,
         key,
-        transport_sender,
         out_sender,
-        buffer,
         delivery_length,
+        transport_sender: trans_send,
+        buffer: Arc::new(RwLock::new(Buffer::init())),
         peer_list: peer_list.clone(),
         is_relay_data: !permission,
     });
@@ -114,55 +111,63 @@ pub async fn start(
 
     drop(peer_list);
 
+    let recv_data = !only_stable_data;
     let inner_global = global.clone();
-
-    // Timer: every 10s to check tmp_stable is ok, if not ok, close it.
-
     smol::spawn(async move {
+        enum FutureResult {
+            Trans(TransportRecvMessage),
+            Timer,
+        }
         loop {
-            match transport_receiver.recv().await {
-                Ok(TransportRecvMessage(
+            match future::race(
+                async { trans_recv.recv().await.map(|msg| FutureResult::Trans(msg)) },
+                async {
+                    // Timer: every 60s to check buffer.
+                    smol::Timer::after(std::time::Duration::from_secs(60)).await;
+                    Ok(FutureResult::Timer)
+                },
+            )
+            .await
+            {
+                Ok(FutureResult::Trans(TransportRecvMessage(
                     addr,
-                    remote_pk,
+                    RemotePublic(remote_key, remote_peer, dh_key),
                     is_self,
                     stream_sender,
                     stream_receiver,
                     endpoint_sender,
-                )) => {
-                    debug!("receiver incoming connect: {:?}", addr);
-                    // check and start session
+                ))) => {
+                    debug!("Incoming remote peer...");
+                    // 1. check is block ip.
                     if inner_global.peer_list.read().await.is_block_addr(&addr) {
-                        debug!("receiver incoming connect is blocked");
+                        debug!("Incoming remote ip is blocked, close it.");
                         let _ = endpoint_sender.send(EndpointMessage::Close).await;
                         continue;
                     }
-                    let RemotePublic(remote_key, remote_peer, dh_key) = remote_pk;
 
-                    let remote_peer_id = remote_key.peer_id();
-                    debug!("Debug: Session connected: {}", remote_peer_id.short_show());
-
+                    let remote_id = remote_key.peer_id();
                     let remote_peer = nat(addr, remote_peer);
-                    debug!("Debug: NAT addr: {}", remote_peer.addr());
+                    debug!("Incoming remote NAT addr: {}", remote_peer.addr());
 
-                    // check and save tmp and save outside
-                    if remote_peer_id == peer_id
+                    // 2. check is self or is block peer.
+                    if &remote_id == inner_global.peer_id()
                         || inner_global
                             .peer_list
                             .read()
                             .await
-                            .is_block_peer(&remote_peer_id)
+                            .is_block_peer(&remote_id)
                     {
-                        debug!("session remote peer is blocked, close it.");
+                        debug!("Incoming remote peer is blocked, close it.");
                         let _ = endpoint_sender.send(EndpointMessage::Close).await;
                         continue;
                     }
 
-                    // if not self, send self publics info.
+                    // 3. check session key and send self info to remote.
                     let session_key = if let Some(mut session_key) = is_self {
                         if session_key.complete(&remote_key.pk, dh_key) {
                             session_key
                         } else {
-                            debug!("Session key is error!");
+                            debug!("Incoming remote session key is invalid, close it.");
                             let _ = endpoint_sender.send(EndpointMessage::Close).await;
                             continue;
                         }
@@ -175,20 +180,16 @@ pub async fn start(
                                 .await;
                             session_key
                         } else {
-                            debug!("Session key is error!");
+                            debug!("Incoming remote session key is invalid, close it.");
                             let _ = endpoint_sender.send(EndpointMessage::Close).await;
                             continue;
                         }
                     };
 
-                    // check is stable relay connections.
-                    if let Some(sender) = inner_global
-                        .peer_list
-                        .read()
-                        .await
-                        .stable_check_relay(&remote_peer_id)
-                    {
-                        let _ = sender
+                    // 4. check is stable relay connections.
+                    if let Some(ss) = inner_global.peer_list.read().await.is_relay(&remote_id) {
+                        debug!("Incoming remote upgrade to direct.");
+                        let _ = ss
                             .send(SessionMessage::DirectIncoming(
                                 remote_peer,
                                 stream_sender,
@@ -199,31 +200,21 @@ pub async fn start(
                         continue;
                     }
 
-                    // save to peer_list.
+                    // 5. save to DHTs.
                     let (session_sender, session_receiver) = new_session_channel();
-                    let mut peer_list_lock = inner_global.peer_list.write().await;
-                    let is_new = peer_list_lock
-                        .peer_add(session_sender.clone(), stream_sender.clone(), remote_peer)
-                        .await;
-                    drop(peer_list_lock);
+                    let kv = KadValue(session_sender.clone(), stream_sender.clone(), remote_peer);
+                    let is_new = inner_global.peer_list.write().await.add_dht(kv).await;
 
-                    // check if connection had.
+                    // 6. check if had connected.
                     if !is_new {
-                        debug!("Session is had connected, close it.");
+                        debug!("Incoming remote add dht failure, close it.");
                         let _ = endpoint_sender.send(EndpointMessage::Close).await;
                         continue;
                     }
 
-                    // DHT help.
-                    let peers = inner_global
-                        .peer_list
-                        .read()
-                        .await
-                        .get_dht_help(&remote_peer_id);
-                    endpoint_sender
-                        .send(EndpointMessage::DHT(DHT(peers)))
-                        .await
-                        .expect("Sesssion to Endpoint (Data)");
+                    // 7. DHT help.
+                    let peers = inner_global.peer_list.read().await.help_dht(&remote_id);
+                    let _ = endpoint_sender.send(EndpointMessage::DHT(DHT(peers))).await;
 
                     session_spawn(Session::new(
                         remote_peer,
@@ -234,9 +225,12 @@ pub async fn start(
                         ConnectType::Direct(endpoint_sender),
                         session_key,
                         inner_global.clone(),
-                        !only_stable_data,
-                        false,
+                        recv_data,
                     ));
+                    debug!("Incoming remote sessioned: {}.", remote_id.short_show());
+                }
+                Ok(FutureResult::Timer) => {
+                    inner_global.buffer.write().await.timer_clear();
                 }
                 Err(_) => break,
             }
@@ -248,9 +242,9 @@ pub async fn start(
         loop {
             match self_receiver.recv().await {
                 Ok(SendMessage::StableConnect(tid, to, socket, data)) => {
-                    debug!("Send stable connect to: {:?}", to);
-                    if to == peer_id {
-                        debug!("Nerver here, stable connect to self.");
+                    debug!("Outside: StableConnect to {}.", to.short_show());
+                    if &to == global.peer_id() {
+                        warn!("CHAMOMILE: STABLE CONNECT NERVER TO SELF.");
                         if tid != 0 {
                             let _ = global
                                 .out_send(ReceiveMessage::Delivery(
@@ -264,10 +258,12 @@ pub async fn start(
                         continue;
                     }
 
-                    let peer_read_lock = global.peer_list.read().await;
-                    let results = peer_read_lock.get(&to);
+                    // 1. get it or closest peer.
+                    let peer_list_lock = global.peer_list.read().await;
+                    let results = peer_list_lock.get(&to);
                     if results.is_none() {
-                        drop(peer_read_lock);
+                        drop(peer_list_lock);
+                        warn!("CHAMOMILE: CANNOT REACH NETWORK.");
                         if tid != 0 {
                             let _ = global
                                 .out_send(ReceiveMessage::Delivery(
@@ -281,47 +277,52 @@ pub async fn start(
                         continue;
                     }
 
+                    // 2. if connected, send to remote.
                     let (s, _, is_it) = results.unwrap(); // safe checked.
                     if is_it {
+                        debug!("Outside: StableConnect multiple stable connected.");
                         let _ = s.send(SessionMessage::StableConnect(tid, data)).await;
-                        drop(peer_read_lock);
+                        drop(peer_list_lock);
                     } else {
-                        let s_clone = s.clone();
-                        drop(peer_read_lock);
+                        let ss = s.clone();
+                        drop(peer_list_lock);
 
+                        // 3. check if had in buffer tmp.
+                        if let Some(sender) = global.buffer.read().await.get_tmp_session(&to) {
+                            let _ = sender.send(SessionMessage::StableConnect(tid, data)).await;
+                            continue;
+                        }
+
+                        // 4. add to stable buffer.
                         let mut buffer_lock = global.buffer.write().await;
-                        if buffer_lock.contains_stable(&to) {
-                            debug!("Got stable connect again, save to buffer");
-                            buffer_lock.add_stable(&to, tid, data);
+                        let delivery = delivery_split!(data, global.delivery_length);
+                        if buffer_lock.add_connect(to, tid, data) {
+                            debug!("Outside: StableConnect is processing, save to buffer.");
                             drop(buffer_lock);
                             continue;
                         }
                         drop(buffer_lock);
 
                         let g = global.clone();
-                        let buffer = global.buffer.clone();
-
                         if let Some(addr) = socket {
+                            debug!("Outside: StableConnect start new connection with IP.");
                             smol::spawn(async move {
-                                let _ =
-                                    direct_stable(tid, to, data, addr, g, !only_stable_data).await;
-                                buffer.write().await.remove_stable(&to);
+                                let _ = direct_stable(tid, delivery, to, addr, g, recv_data).await;
                             })
                             .detach();
                         } else {
+                            debug!("Outside: StableConnect start new connection with ID.");
                             smol::spawn(async move {
-                                let _ = relay_stable(tid, to, data, s_clone, g, !only_stable_data)
-                                    .await;
-                                buffer.write().await.remove_stable(&to);
+                                let _ = relay_stable(tid, delivery, to, ss, g, recv_data).await;
                             })
                             .detach();
                         }
                     }
                 }
                 Ok(SendMessage::StableResult(tid, to, is_ok, is_force, data)) => {
-                    debug!("Send stable result {} to: {:?}", is_ok, to);
-                    if to == peer_id {
-                        debug!("Nerver here, stable result to self.");
+                    debug!("Outside: StableResult to {}.", to.short_show());
+                    if &to == global.peer_id() {
+                        warn!("CHAMOMILE: STABLE CONNECT NERVER TO SELF.");
                         if tid != 0 {
                             let _ = global
                                 .out_send(ReceiveMessage::Delivery(
@@ -335,70 +336,111 @@ pub async fn start(
                         continue;
                     }
 
-                    if let Some(sender) = global.peer_list.read().await.get_tmp_stable(&to) {
-                        debug!("Got peer to send stable result.");
+                    // 1. check if in tmp.
+                    if let Some(sender) = global.buffer.read().await.get_tmp_session(&to) {
+                        debug!("Outside: StableResult get the tmp session.");
                         let _ = sender
                             .send(SessionMessage::StableResult(tid, is_ok, is_force, data))
                             .await;
                         continue;
                     }
 
-                    // multiple times stable connection.
-                    if let Some((s, _, is_it)) = global.peer_list.read().await.get(&to) {
-                        if is_it {
-                            let _ = s
+                    // 2. check if in DHT or stable.
+                    let peer_list_lock = global.peer_list.read().await;
+                    let results = peer_list_lock.get(&to);
+                    if results.is_none() {
+                        drop(peer_list_lock);
+                        warn!("CHAMOMILE: CANNOT REACH NETWORK.");
+                        if tid != 0 {
+                            let _ = global
+                                .out_send(ReceiveMessage::Delivery(
+                                    DeliveryType::StableResult,
+                                    tid,
+                                    false,
+                                    delivery_split!(data, delivery_length),
+                                ))
+                                .await;
+                        }
+                        continue;
+                    }
+
+                    let (s, _, is_it) = results.unwrap(); // safe checked.
+                    if is_it {
+                        debug!("Outside: StableResult get the is_it session.");
+                        let _ = s
+                            .send(SessionMessage::StableResult(tid, is_ok, is_force, data))
+                            .await;
+                        drop(peer_list_lock);
+                    } else {
+                        // 3. check if is_ok, if ok, start stable connected.
+                        if !is_ok {
+                            drop(peer_list_lock);
+                            continue;
+                        }
+
+                        let ss = s.clone();
+                        drop(peer_list_lock);
+
+                        // 4. check if had in buffer tmp.
+                        if let Some(sender) = global.buffer.read().await.get_tmp_session(&to) {
+                            debug!("Outside: StableResult had tmp session.");
+                            let _ = sender
                                 .send(SessionMessage::StableResult(tid, is_ok, is_force, data))
                                 .await;
-                        } else {
-                            if tid != 0 {
-                                let _ = global
-                                    .out_send(ReceiveMessage::Delivery(
-                                        DeliveryType::StableResult,
-                                        tid,
-                                        false,
-                                        delivery_split!(data, delivery_length),
-                                    ))
-                                    .await;
-                            }
+                            continue;
                         }
+
+                        // 5. add to stable buffer.
+                        let mut buffer_lock = global.buffer.write().await;
+                        let delivery = delivery_split!(data, global.delivery_length);
+                        if buffer_lock.add_result(to, tid, data) {
+                            debug!("Outside: StableResult is processing, save to buffer.");
+                            drop(buffer_lock);
+                            continue;
+                        }
+                        drop(buffer_lock);
+
+                        let g = global.clone();
+                        debug!("Outside: StableResult start new connection with ID.");
+                        smol::spawn(async move {
+                            let _ = relay_stable(tid, delivery, to, ss, g, recv_data).await;
+                        })
+                        .detach();
                     }
                 }
-                Ok(SendMessage::StableDisconnect(peer_id)) => {
-                    if let Some((sender, _, is_it)) = global.peer_list.read().await.get(&peer_id) {
+                Ok(SendMessage::StableDisconnect(pid)) => {
+                    debug!("Outside: StableDisconnect to {}.", pid.short_show());
+                    if let Some((sender, _, is_it)) = global.peer_list.read().await.get(&pid) {
                         if is_it {
                             let _ = sender.send(SessionMessage::Close).await;
                         }
                     }
                 }
                 Ok(SendMessage::Connect(addr)) => {
-                    debug!("Send connect to: {:?}", addr);
+                    debug!("Outside: DHT Connect to {}.", addr);
                     let (session_key, remote_pk) = global.generate_remote();
                     let _ = global
                         .trans_send(TransportSendMessage::Connect(addr, remote_pk, session_key))
                         .await;
                 }
                 Ok(SendMessage::DisConnect(addr)) => {
-                    debug!("Send disconnect to: {:?}", addr);
+                    debug!("Outside: DHT Disconnect to {}.", addr);
                     global.peer_list.write().await.peer_disconnect(&addr).await;
                 }
                 Ok(SendMessage::Data(tid, to, data)) => {
-                    debug!(
-                        "DEBUG: data is send to: {}, {}",
-                        to.short_show(),
-                        data.len()
-                    );
                     if let Some((sender, stream_sender, is_it)) =
                         global.peer_list.read().await.get(&to)
                     {
                         if is_it {
                             let _ = sender.send(SessionMessage::Data(tid, data)).await;
                         } else {
-                            // only happen on permissionless. link to session's Line439
+                            // only happen on permissionless.
                             let _ = stream_sender
-                                .send(EndpointMessage::RelayData(peer_id, to, data))
+                                .send(EndpointMessage::RelayData(*global.peer_id(), to, data))
                                 .await;
                         }
                     } else {
+                        warn!("CHAMOMILE: CANNOT REACH NETWORK.");
                         if tid != 0 {
                             let _ = global
                                 .out_send(ReceiveMessage::Delivery(
@@ -425,7 +467,7 @@ pub async fn start(
                     }
                 },
                 Ok(SendMessage::Stream(_symbol, _stream_type, _data)) => {
-                    todo!();
+                    // TODO WIP
                 }
                 Ok(SendMessage::NetworkState(req, res_sender)) => match req {
                     StateRequest::Stable => {

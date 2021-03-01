@@ -105,7 +105,7 @@ impl DoubleKadTree {
             .flatten()
     }
 
-    pub fn ip_next_closest(&self, key: &SocketAddr, prev: &SocketAddr) -> Option<&KadValue> {
+    pub fn _ip_next_closest(&self, key: &SocketAddr, prev: &SocketAddr) -> Option<&KadValue> {
         self.ips
             .next_closest(key, prev)
             .map(|k| self.values.get(k))

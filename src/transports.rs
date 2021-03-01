@@ -70,10 +70,10 @@ pub enum EndpointMessage {
     HoleConnect,
     /// type is 5u8. encrypted's CoreData.
     Data(Vec<u8>),
-    /// type is 6u8. encrypted's CoreData.
+    /// type is 6u8. Relay Handshake.
+    RelayHandshake(RemotePublic, PeerId),
+    /// type is 7u8. encrypted's CoreData.
     RelayData(PeerId, PeerId, Vec<u8>),
-    /// type is 7u8. encrypted's ConnectData.
-    RelayConnect(RemotePublic, PeerId),
 }
 
 /// main function. start the endpoint listening.
@@ -155,18 +155,18 @@ impl EndpointMessage {
                 bytes[0] = 5u8;
                 bytes.append(&mut data);
             }
-            EndpointMessage::RelayData(p1_id, p2_id, mut data) => {
+            EndpointMessage::RelayHandshake(p1_peer, p2_id) => {
                 bytes[0] = 6u8;
-                bytes.append(&mut p1_id.to_bytes());
-                bytes.append(&mut p2_id.to_bytes());
-                bytes.append(&mut data);
-            }
-            EndpointMessage::RelayConnect(p1_peer, p2_id) => {
-                bytes[0] = 7u8;
                 let mut peer_bytes = p1_peer.to_bytes();
                 bytes.extend(&(peer_bytes.len() as u32).to_be_bytes()[..]);
                 bytes.append(&mut peer_bytes);
                 bytes.append(&mut p2_id.to_bytes());
+            }
+            EndpointMessage::RelayData(p1_id, p2_id, mut data) => {
+                bytes[0] = 7u8;
+                bytes.append(&mut p1_id.to_bytes());
+                bytes.append(&mut p2_id.to_bytes());
+                bytes.append(&mut data);
             }
         }
 
@@ -209,14 +209,6 @@ impl EndpointMessage {
             4u8 => Ok(EndpointMessage::HoleConnect),
             5u8 => Ok(EndpointMessage::Data(bytes)),
             6u8 => {
-                if bytes.len() < PEER_ID_LENGTH * 2 {
-                    return Err(new_io_error("EndpointMessage bytes failure."));
-                }
-                let p1 = PeerId::from_bytes(&bytes.drain(0..PEER_ID_LENGTH).as_slice())?;
-                let p2 = PeerId::from_bytes(&bytes.drain(0..PEER_ID_LENGTH).as_slice())?;
-                Ok(EndpointMessage::RelayData(p1, p2, bytes))
-            }
-            7u8 => {
                 if bytes.len() < 4 {
                     return Err(new_io_error("EndpointMessage bytes failure."));
                 }
@@ -229,7 +221,15 @@ impl EndpointMessage {
                 let peer = RemotePublic::from_bytes(bytes.drain(0..peer_len).collect())
                     .map_err(|_| new_io_error("EndpointMessage bytes failure."))?;
                 let p2 = PeerId::from_bytes(&bytes.drain(0..PEER_ID_LENGTH).as_slice())?;
-                Ok(EndpointMessage::RelayConnect(peer, p2))
+                Ok(EndpointMessage::RelayHandshake(peer, p2))
+            }
+            7u8 => {
+                if bytes.len() < PEER_ID_LENGTH * 2 {
+                    return Err(new_io_error("EndpointMessage bytes failure."));
+                }
+                let p1 = PeerId::from_bytes(&bytes.drain(0..PEER_ID_LENGTH).as_slice())?;
+                let p2 = PeerId::from_bytes(&bytes.drain(0..PEER_ID_LENGTH).as_slice())?;
+                Ok(EndpointMessage::RelayData(p1, p2, bytes))
             }
             _ => Err(new_io_error("EndpointMessage bytes failure.")),
         }

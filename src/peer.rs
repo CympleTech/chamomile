@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::io::Result;
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use chamomile_types::types::{new_io_error, PeerId, TransportType};
 
@@ -107,6 +107,17 @@ impl Peer {
         bytes.push(self.transport.to_byte()); // 1-bytes
         bytes.push(if self.is_pub { 1u8 } else { 0u8 }); // 1-bytes
         bytes
+    }
+}
+
+impl Default for Peer {
+    fn default() -> Self {
+        Self {
+            id: PeerId::default(),
+            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0),
+            transport: TransportType::TCP,
+            is_pub: true,
+        }
     }
 }
 

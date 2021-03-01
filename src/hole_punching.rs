@@ -77,7 +77,7 @@ pub fn nat(mut remote_addr: SocketAddr, mut local: Peer) -> Peer {
     local
 }
 
-pub(crate) async fn handle(_remote_peer: &PeerId, hole: Hole, _peers: &PeerList) -> Result<()> {
+pub(crate) async fn _handle(_remote_peer: &PeerId, hole: Hole, _peers: &PeerList) -> Result<()> {
     match hole {
         Hole::StunOne => {
             // first test

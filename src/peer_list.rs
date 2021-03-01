@@ -12,8 +12,8 @@ use crate::peer::Peer;
 use crate::session::SessionMessage;
 use crate::transports::EndpointMessage;
 
-/// PeerList
-/// contains: dhts(DHT) & tmp_dhts(HashMap)
+/// PeerList.
+/// contains: dhts(KadTree) & stables(HashMap)
 pub(crate) struct PeerList {
     save_path: PathBuf,
     bootstraps: Vec<SocketAddr>,
@@ -24,8 +24,6 @@ pub(crate) struct PeerList {
     dhts: DoubleKadTree,
     /// PeerId => KadValue(Sender<SessionMessage>, Sender<EndpointMessage>, Peer)
     stables: HashMap<PeerId, (KadValue, bool)>,
-    /// tmp stable waiting outside to stable result. 60s if no-ok, close it.
-    tmps: HashMap<PeerId, (Sender<SessionMessage>, Sender<EndpointMessage>)>,
 }
 
 impl PeerList {
@@ -64,7 +62,6 @@ impl PeerList {
                     blocks: blocks,
                     dhts: DoubleKadTree::new(peer_id, default_socket),
                     stables: HashMap::new(),
-                    tmps: HashMap::new(),
                 }
             }
             Err(_) => PeerList {
@@ -74,7 +71,6 @@ impl PeerList {
                 blocks: blocks,
                 dhts: DoubleKadTree::new(peer_id, default_socket),
                 stables: HashMap::new(),
-                tmps: HashMap::new(),
             },
         }
     }
@@ -115,8 +111,14 @@ impl PeerList {
         self.stable_get(peer_id).or(self.dht_get(peer_id))
     }
 
+    /// search in stable list. result is stream channel sender.
+    pub fn get_stable_stream(&self, peer_id: &PeerId) -> Option<&Sender<EndpointMessage>> {
+        self.stable_get(peer_id)
+            .map(|(_ss, stream, is_it)| if is_it { Some(stream) } else { None })
+            .flatten()
+    }
+
     pub fn next_closest(&self, target: &PeerId, prev: &PeerId) -> Option<&Sender<SessionMessage>> {
-        println!("GOT CLOSEDST===========");
         self.stables
             .get(target)
             .map(|v| &(v.0).0)
@@ -128,7 +130,7 @@ impl PeerList {
         ip: &SocketAddr,
         prev: &SocketAddr,
     ) -> Option<&Sender<SessionMessage>> {
-        self.dhts.ip_next_closest(ip, prev).map(|v| &v.0)
+        self.dhts._ip_next_closest(ip, prev).map(|v| &v.0)
     }
 
     /// search in dht table.
@@ -156,12 +158,8 @@ impl PeerList {
         self.stables.contains_key(peer_id) || self.dhts.contains(peer_id)
     }
 
-    /// if peer has stable connected in peer list.
-    pub fn stable_contains(&self, peer_id: &PeerId) -> bool {
-        self.stables.contains_key(peer_id)
-    }
-
-    pub fn stable_check_relay(&self, peer_id: &PeerId) -> Option<&Sender<SessionMessage>> {
+    /// check stable is relay.
+    pub fn is_relay(&self, peer_id: &PeerId) -> Option<&Sender<SessionMessage>> {
         self.stables
             .get(peer_id)
             .map(|v| if !v.1 { Some(&(v.0).0) } else { None })
@@ -169,7 +167,7 @@ impl PeerList {
     }
 
     /// get in DHT help
-    pub fn get_dht_help(&self, peer_id: &PeerId) -> Vec<Peer> {
+    pub fn help_dht(&self, peer_id: &PeerId) -> Vec<Peer> {
         // TODO better closest peers
 
         let mut peers: HashMap<&PeerId, &Peer> = HashMap::new();
@@ -194,35 +192,11 @@ impl PeerList {
     }
 
     /// Step:
-    /// 1. add to boostraps;
-    /// 2. add to kad.
-    pub async fn peer_add(
-        &mut self,
-        sender: Sender<SessionMessage>,
-        stream_sender: Sender<EndpointMessage>,
-        peer: Peer,
-    ) -> bool {
-        // 1. add to boostraps.
-        if !self.bootstraps.contains(peer.addr()) {
-            self.add_bootstrap(peer.addr().clone());
-            self.save().await;
-        }
-
-        // 2. add to kad.
-        if self.dhts.add(KadValue(sender, stream_sender, peer)) {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Step:
     /// 1. remove from kad;
-    pub fn peer_remove(
+    pub fn remove_peer(
         &mut self,
         peer_id: &PeerId,
     ) -> Option<(Sender<SessionMessage>, Sender<EndpointMessage>, Peer)> {
-        self.remove_tmp_stable(peer_id);
         self.dhts.remove(peer_id).map(|v| (v.0, v.1, v.2))
     }
 
@@ -242,52 +216,10 @@ impl PeerList {
         }
     }
 
-    /// PeerDisconnect Step:
-    /// 1. remove from allowlist;
-    /// 2. remove from stables.
-    pub fn stable_remove(&mut self, peer_id: &PeerId) -> bool {
-        self.remove_allow_peer(peer_id);
-        // check save to DHT.
-        if let Some((v, is_direct)) = self.stables.remove(peer_id) {
-            if is_direct {
-                if self.dhts.add(v) {
-                    return false;
-                }
-            }
-        }
-        true
-    }
-
     /// Peer leave Step:
     /// 1. remove from stables.
     pub fn stable_leave(&mut self, peer_id: &PeerId) {
         self.stables.remove(peer_id);
-    }
-
-    /// Peer stable connect ok Step:
-    /// 1. add to bootstrap;
-    /// 2. add to stables;
-    pub fn stable_add(
-        &mut self,
-        peer_id: PeerId,
-        sender: Sender<SessionMessage>,
-        stream_sender: Sender<EndpointMessage>,
-        peer: Peer,
-        is_direct: bool,
-    ) {
-        match self.stables.get_mut(&peer_id) {
-            Some((KadValue(s, ss, p), direct)) => {
-                let _ = s.try_send(SessionMessage::Close);
-                *s = sender;
-                *ss = stream_sender;
-                *p = peer;
-                *direct = is_direct;
-            }
-            None => {
-                self.stables
-                    .insert(peer_id, (KadValue(sender, stream_sender, peer), is_direct));
-            }
-        }
     }
 
     /// Step:
@@ -348,33 +280,6 @@ impl PeerList {
         } else {
             Err(new_io_error("DHT is closed"))
         }
-    }
-
-    pub fn get_tmp_stable(&self, peer_id: &PeerId) -> Option<&Sender<SessionMessage>> {
-        self.tmps.get(peer_id).map(|v| &v.0).or(self
-            .dht_get(peer_id)
-            .map(|v| if v.2 { Some(v.0) } else { None })
-            .flatten())
-    }
-
-    pub fn get_endpoint_with_tmp(&self, peer_id: &PeerId) -> Option<&Sender<EndpointMessage>> {
-        self.tmps.get(peer_id).map(|v| &v.1).or(self
-            .get(peer_id)
-            .map(|v| if v.2 { Some(v.1) } else { None })
-            .flatten())
-    }
-
-    pub fn remove_tmp_stable(&mut self, peer_id: &PeerId) {
-        let _ = self.tmps.remove(peer_id);
-    }
-
-    pub fn add_tmp_stable(
-        &mut self,
-        peer_id: PeerId,
-        sender: Sender<SessionMessage>,
-        stream_sender: Sender<EndpointMessage>,
-    ) {
-        self.tmps.insert(peer_id, (sender, stream_sender));
     }
 }
 

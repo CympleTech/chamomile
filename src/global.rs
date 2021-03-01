@@ -7,6 +7,7 @@ use chamomile_types::{
 };
 
 use crate::buffer::Buffer;
+use crate::kad::KadValue;
 use crate::keys::{Keypair, SessionKey};
 use crate::peer::Peer;
 use crate::peer_list::PeerList;
@@ -78,15 +79,37 @@ impl Global {
             .map_err(|_e| new_io_error("Outside missing"))
     }
 
-    pub async fn tmp_to_stable(&self, peer_id: &PeerId) -> Result<()> {
+    pub async fn add_tmp(&self, p: PeerId, k: KadValue, d: bool) -> Vec<(u64, Vec<u8>)> {
+        let mut buffer_lock = self.buffer.write().await;
+        let stables = buffer_lock.remove_connect(&p);
+        buffer_lock.add_tmp(p, k, d);
+        drop(buffer_lock);
+        stables
+    }
+
+    pub async fn add_all_tmp(
+        &self,
+        peer_id: PeerId,
+        kv: KadValue,
+        is_direct: bool,
+    ) -> (Vec<(u64, Vec<u8>)>, Vec<(u64, Vec<u8>)>) {
+        let mut buffer_lock = self.buffer.write().await;
+        let connects = buffer_lock.remove_connect(&peer_id);
+        let results = buffer_lock.remove_result(&peer_id);
+        buffer_lock.add_tmp(peer_id, kv, is_direct);
+        drop(buffer_lock);
+
+        (connects, results)
+    }
+
+    pub async fn upgrade(&self, peer_id: &PeerId) -> Result<()> {
         let v_some = self.buffer.write().await.remove_tmp(peer_id);
         if let Some((v, is_d)) = v_some {
-            if is_d {
-                self.peer_list.write().await.add_stable(*peer_id, v, true);
-                return Ok(());
-            }
+            self.peer_list.write().await.add_stable(*peer_id, v, is_d);
+            Ok(())
+        } else {
+            self.peer_list.write().await.dht_to_stable(peer_id)
         }
-        Err(new_io_error("missing buffer"))
     }
 
     pub async fn tmp_to_dht(&self, peer_id: &PeerId) -> Result<()> {
@@ -109,9 +132,5 @@ impl Global {
         drop(buffer_lock);
 
         self.peer_list.write().await.stable_to_dht(peer_id)
-    }
-
-    pub async fn dht_to_stable(&self, peer_id: &PeerId) -> Result<()> {
-        self.peer_list.write().await.dht_to_stable(peer_id)
     }
 }

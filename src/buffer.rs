@@ -1,79 +1,148 @@
 use smol::channel::Sender;
 use std::collections::HashMap;
-use std::iter::Iterator;
 use std::net::SocketAddr;
 
 use chamomile_types::types::PeerId;
 
 use crate::kad::KadValue;
+use crate::peer::Peer;
 use crate::session::SessionMessage;
 use crate::transports::EndpointMessage;
 
 pub(crate) struct Buffer {
     /// queue for connect to ip addr. if has one, not send aggin.
-    dhts: Vec<SocketAddr>,
+    dhts: HashMap<SocketAddr, bool>,
     /// queue for stable connect to peer id. if has one, add to queue buffer.
-    stables: HashMap<PeerId, Vec<(u64, Vec<u8>)>>,
+    connects: HashMap<PeerId, (bool, Vec<(u64, Vec<u8>)>)>,
+    /// queue for stable result to peer id. if has one, add to queue buffer.
+    results: HashMap<PeerId, (bool, Vec<(u64, Vec<u8>)>)>,
     /// tmp stable waiting outside to stable result. 60s if no-ok, close it.
-    tmps: HashMap<PeerId, (KadValue, bool)>,
+    tmps: HashMap<PeerId, (bool, KadValue, bool)>,
 }
 
 impl Buffer {
     pub fn init() -> Self {
         Buffer {
-            dhts: vec![],
-            stables: HashMap::new(),
+            dhts: HashMap::new(),
+            connects: HashMap::new(),
+            results: HashMap::new(),
             tmps: HashMap::new(),
         }
     }
 
     pub fn _add_dht(&mut self, ip: &SocketAddr) -> bool {
-        if self.dhts.contains(ip) {
+        if self.dhts.contains_key(ip) {
             false
         } else {
-            self.dhts.push(*ip);
+            self.dhts.insert(*ip, false);
             true
         }
     }
 
     pub fn _remove_dht(&mut self, ip: &SocketAddr) {
-        if let Some(pos) = self.dhts.iter().position(|x| x == ip) {
-            self.dhts.remove(pos);
-        }
+        self.dhts.remove(ip);
     }
 
-    pub fn contains_stable(&mut self, peer_id: &PeerId) -> bool {
-        if self.stables.contains_key(peer_id) {
+    pub fn add_connect(&mut self, peer_id: PeerId, tid: u64, data: Vec<u8>) -> bool {
+        if let Some(v) = self.connects.get_mut(&peer_id) {
+            v.1.push((tid, data));
             true
         } else {
-            self.stables.insert(*peer_id, vec![]);
+            self.connects.insert(peer_id, (false, vec![(tid, data)]));
             false
         }
     }
 
-    pub fn add_stable(&mut self, peer_id: &PeerId, tid: u64, data: Vec<u8>) {
-        if let Some(v) = self.stables.get_mut(peer_id) {
-            v.push((tid, data));
+    pub fn remove_connect(&mut self, peer_id: &PeerId) -> Vec<(u64, Vec<u8>)> {
+        self.connects.remove(peer_id).map(|v| v.1).unwrap_or(vec![])
+    }
+
+    pub fn add_result(&mut self, peer_id: PeerId, tid: u64, data: Vec<u8>) -> bool {
+        if let Some(v) = self.results.get_mut(&peer_id) {
+            v.1.push((tid, data));
+            true
+        } else {
+            self.results.insert(peer_id, (false, vec![(tid, data)]));
+            false
         }
     }
 
-    pub fn remove_stable(&mut self, peer_id: &PeerId) -> Option<Vec<(u64, Vec<u8>)>> {
-        self.stables.remove(peer_id)
+    pub fn remove_result(&mut self, peer_id: &PeerId) -> Vec<(u64, Vec<u8>)> {
+        self.results.remove(peer_id).map(|v| v.1).unwrap_or(vec![])
+    }
+
+    pub fn remove_stable(&mut self, peer_id: &PeerId) {
+        self.connects.remove(peer_id);
+        self.results.remove(peer_id);
     }
 
     pub fn get_tmp_session(&self, peer_id: &PeerId) -> Option<&Sender<SessionMessage>> {
-        self.tmps.get(peer_id).map(|(v, _)| &v.0)
+        self.tmps.get(peer_id).map(|(_, v, _)| &v.0)
     }
 
-    pub fn get_tmp_endpoint(&self, peer_id: &PeerId) -> Option<&Sender<EndpointMessage>> {
-        self.tmps.get(peer_id).map(|(v, _)| &v.1)
+    pub fn get_tmp_stream(&self, peer_id: &PeerId) -> Option<&Sender<EndpointMessage>> {
+        self.tmps.get(peer_id).map(|(_, v, _)| &v.1)
     }
 
-    pub fn add_tmp_stable(&mut self, peer_id: PeerId, value: KadValue, is_d: bool) {
-        self.tmps.insert(peer_id, (value, is_d));
+    pub fn add_tmp(&mut self, peer_id: PeerId, value: KadValue, is_d: bool) {
+        self.tmps.insert(peer_id, (false, value, is_d));
+    }
+
+    pub fn update_peer(&mut self, peer_id: &PeerId, peer: Peer) {
+        self.tmps.get_mut(peer_id).map(|(_, v, _)| v.2 = peer);
     }
 
     pub fn remove_tmp(&mut self, peer_id: &PeerId) -> Option<(KadValue, bool)> {
-        self.tmps.remove(peer_id)
+        self.tmps.remove(peer_id).map(|(_, v, is_d)| (v, is_d))
+    }
+
+    pub fn timer_clear(&mut self) {
+        let mut dht_deletes = vec![];
+        for (ip, t) in self.dhts.iter_mut() {
+            if *t {
+                dht_deletes.push(*ip);
+            } else {
+                *t = true; // checked.
+            }
+        }
+        for ip in dht_deletes {
+            self.dhts.remove(&ip);
+        }
+
+        let mut connect_deletes = vec![];
+        for (id, (t, _)) in self.connects.iter_mut() {
+            if *t {
+                connect_deletes.push(*id);
+            } else {
+                *t = true; // checked.
+            }
+        }
+        for id in connect_deletes {
+            self.connects.remove(&id);
+        }
+
+        let mut result_deletes = vec![];
+        for (id, (t, _)) in self.results.iter_mut() {
+            if *t {
+                result_deletes.push(*id);
+            } else {
+                *t = true; // checked.
+            }
+        }
+        for id in result_deletes {
+            self.results.remove(&id);
+        }
+
+        let mut tmp_deletes = vec![];
+        for (id, (t, _, _)) in self.tmps.iter_mut() {
+            if *t {
+                tmp_deletes.push(*id);
+            } else {
+                *t = true; // checked.
+            }
+        }
+        for id in tmp_deletes {
+            self.tmps.remove(&id);
+        }
     }
 }
