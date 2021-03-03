@@ -265,7 +265,8 @@ pub(crate) async fn relay_stable(
                 ))
                 .await?;
         }
-        global.buffer.write().await.remove_stable(&to);
+        global.buffer.write().await.remove_tmp(&to);
+        debug!("Session clear stable buffer.");
         Err(new_io_error("session relay reach faiure."))
     }
 }
@@ -361,6 +362,8 @@ impl Session {
             } else {
                 self.global.tmp_to_dht(peer_id).await?;
             }
+        } else {
+            self.global.buffer.write().await.remove_tmp(peer_id);
         }
 
         Err(new_io_error("close session"))
@@ -799,6 +802,7 @@ impl Session {
                 if &to == self.my_id() {
                     let remote_peer_id = from_peer.id().clone();
                     if &remote_peer_id == self.my_id() {
+                        warn!("CHAMOMILE: RELAY NERVER TO SELF.");
                         return Ok(());
                     }
 
@@ -809,6 +813,7 @@ impl Session {
                         .await
                         .get_tmp_session(&remote_peer_id)
                     {
+                        debug!("Relay Resutl have got. send to session.");
                         // this is relay connect sender.
                         let _ = sender
                             .send(SessionMessage::RelayResult(

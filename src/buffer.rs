@@ -96,7 +96,7 @@ impl Buffer {
         self.tmps.remove(peer_id).map(|(_, v, is_d)| (v, is_d))
     }
 
-    pub fn timer_clear(&mut self) {
+    pub async fn timer_clear(&mut self) {
         let mut dht_deletes = vec![];
         for (ip, t) in self.dhts.iter_mut() {
             if *t {
@@ -134,8 +134,9 @@ impl Buffer {
         }
 
         let mut tmp_deletes = vec![];
-        for (id, (t, _, _)) in self.tmps.iter_mut() {
+        for (id, (t, KadValue(ss, _, _), _)) in self.tmps.iter_mut() {
             if *t {
+                let _ = ss.send(SessionMessage::Close).await;
                 tmp_deletes.push(*id);
             } else {
                 *t = true; // checked.

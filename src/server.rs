@@ -230,7 +230,7 @@ pub async fn start(
                     debug!("Incoming remote sessioned: {}.", remote_id.short_show());
                 }
                 Ok(FutureResult::Timer) => {
-                    inner_global.buffer.write().await.timer_clear();
+                    inner_global.buffer.write().await.timer_clear().await;
                 }
                 Err(_) => break,
             }
@@ -289,6 +289,7 @@ pub async fn start(
 
                         // 3. check if had in buffer tmp.
                         if let Some(sender) = global.buffer.read().await.get_tmp_session(&to) {
+                            debug!("Outside: StableConnect is in tmp, send to it.");
                             let _ = sender.send(SessionMessage::StableConnect(tid, data)).await;
                             continue;
                         }
