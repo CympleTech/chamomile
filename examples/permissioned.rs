@@ -50,6 +50,9 @@ fn main() {
                         peer_id, is_ok, data
                     );
                 }
+                ReceiveMessage::ResultConnect(from, _data) => {
+                    println!("Recv Result Connect {}", from.to_hex());
+                }
                 ReceiveMessage::StableLeave(peer_id) => {
                     println!("Peer_leave: {:?}", peer_id);
                 }

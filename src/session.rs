@@ -244,7 +244,7 @@ pub(crate) async fn relay_stable(
 
         for buffer in results {
             session
-                .send_core_data(CoreData::StableResult(buffer.0, true, buffer.1))
+                .send_core_data(CoreData::ResultConnect(buffer.0, buffer.1))
                 .await?;
         }
 
@@ -417,6 +417,17 @@ impl Session {
                             .await?;
                         }
                     }
+                    CoreData::ResultConnect(tid, data) => {
+                        if tid != 0 {
+                            self.out_send(ReceiveMessage::Delivery(
+                                DeliveryType::StableResult,
+                                tid,
+                                false,
+                                delivery_split!(data, self.global.delivery_length),
+                            ))
+                            .await?;
+                        }
+                    }
                 }
             }
         }
@@ -519,6 +530,19 @@ impl Session {
                     CoreData::StableResult(tid, is_ok, data) => {
                         let delivery_data = delivery_split!(data, self.global.delivery_length);
                         self.out_send(ReceiveMessage::StableResult(*self.remote_id(), is_ok, data))
+                            .await?;
+                        if tid != 0 {
+                            self.send_core_data(CoreData::Delivery(
+                                DeliveryType::StableResult,
+                                tid,
+                                delivery_data,
+                            ))
+                            .await?;
+                        }
+                    }
+                    CoreData::ResultConnect(tid, data) => {
+                        let delivery_data = delivery_split!(data, self.global.delivery_length);
+                        self.out_send(ReceiveMessage::ResultConnect(*self.remote_id(), data))
                             .await?;
                         if tid != 0 {
                             self.send_core_data(CoreData::Delivery(
@@ -686,9 +710,8 @@ impl Session {
                     }
                 }
             }
-            SessionMessage::RelayResult(remote, recv_ss) => {
-                let RemotePublic(remote_key, remote_peer, dh_key) = remote;
-                debug!("NEED TODO. RELAY RESULT.");
+            SessionMessage::RelayResult(..) => {
+                warn!("CHAMOMILE SESSION DONOT HANDSHAKE TWICE.");
             }
             SessionMessage::RelayClose(peer_id) => {
                 self.relay_sessions.remove(&peer_id);
@@ -944,6 +967,7 @@ pub(crate) enum CoreData {
     Delivery(DeliveryType, u64, Vec<u8>),
     StableConnect(u64, Vec<u8>),
     StableResult(u64, bool, Vec<u8>),
+    ResultConnect(u64, Vec<u8>),
     Unstable,
 }
 
@@ -984,8 +1008,13 @@ impl CoreData {
                 bytes.push(if is_ok { 1u8 } else { 0u8 });
                 bytes.append(&mut data);
             }
-            CoreData::Unstable => {
+            CoreData::ResultConnect(tid, mut data) => {
                 bytes[0] = 7u8;
+                bytes.extend(&tid.to_le_bytes()[..]);
+                bytes.append(&mut data);
+            }
+            CoreData::Unstable => {
+                bytes[0] = 8u8;
             }
         }
 
@@ -1044,7 +1073,16 @@ impl CoreData {
                 let is_ok = bytes.drain(0..1).as_slice()[0] == 1u8;
                 Ok(CoreData::StableResult(tid, is_ok, bytes))
             }
-            7u8 => Ok(CoreData::Unstable),
+            7u8 => {
+                if bytes.len() < 8 {
+                    return Err(());
+                }
+                let mut tid_bytes = [0u8; 8];
+                tid_bytes.copy_from_slice(bytes.drain(0..8).as_slice());
+                let tid = u64::from_le_bytes(tid_bytes);
+                Ok(CoreData::ResultConnect(tid, bytes))
+            }
+            8u8 => Ok(CoreData::Unstable),
             _ => Err(()),
         }
     }

@@ -39,6 +39,11 @@ fn main() {
                         .send(SendMessage::StableResult(0, from, false, false, vec![]))
                         .await;
                 }
+                ReceiveMessage::ResultConnect(from, ..) => {
+                    let _ = send
+                        .send(SendMessage::StableResult(0, from, false, false, vec![]))
+                        .await;
+                }
                 ReceiveMessage::StableLeave(..) => {
                     panic!("none");
                 }

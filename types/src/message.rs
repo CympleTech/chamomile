@@ -31,6 +31,10 @@ pub enum ReceiveMessage {
     /// when peer get stable connect result.
     /// params is `peer_id`, `is_ok` and `result_data`.
     StableResult(PeerId, bool, Vec<u8>),
+    /// when peer want to response a stable result, but the session is closed,
+    /// if stable result is ok, then need create a result connect to sender.
+    /// the data type is stable result data type.
+    ResultConnect(PeerId, Vec<u8>),
     /// when a stable connection's peer leave,
     /// send from chamomile to outside.
     /// params is `peer_id`.

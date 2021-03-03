@@ -99,6 +99,9 @@ fn main() {
                         remark
                     );
                 }
+                ReceiveMessage::ResultConnect(from, _data) => {
+                    println!("Recv Result Connect {}", from.to_hex());
+                }
                 ReceiveMessage::Delivery(t, tid, had, _data) => {
                     println!("Recv {:?} Delivery: {} {}", t, tid, had);
                 }
