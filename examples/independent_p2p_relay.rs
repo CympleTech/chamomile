@@ -29,7 +29,7 @@ fn main() {
         while let Ok(message) = recv.recv().await {
             match message {
                 ReceiveMessage::Data(..) => {
-                    println!("none");
+                    panic!("none");
                 }
                 ReceiveMessage::Stream(..) => {
                     panic!("none");
@@ -53,6 +53,7 @@ fn main() {
                 ReceiveMessage::Delivery(..) => {
                     panic!("none");
                 }
+                ReceiveMessage::NetworkLost => {}
             }
         }
     });

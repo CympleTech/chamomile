@@ -60,6 +60,9 @@ fn main() {
                     panic!("Not stream");
                 }
                 ReceiveMessage::Delivery(..) => {}
+                ReceiveMessage::NetworkLost => {
+                    println!("No peers conneced.")
+                }
             }
         }
     });

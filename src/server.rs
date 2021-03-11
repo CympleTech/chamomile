@@ -116,16 +116,24 @@ pub async fn start(
     smol::spawn(async move {
         enum FutureResult {
             Trans(TransportRecvMessage),
-            Timer,
+            Clear,
+            Check,
         }
         loop {
             match future::race(
                 async { trans_recv.recv().await.map(|msg| FutureResult::Trans(msg)) },
-                async {
-                    // Timer: every 60s to check buffer.
-                    smol::Timer::after(std::time::Duration::from_secs(60)).await;
-                    Ok(FutureResult::Timer)
-                },
+                future::race(
+                    async {
+                        // Check Timer: every 10s to check network. (read only).
+                        smol::Timer::after(std::time::Duration::from_secs(10)).await;
+                        Ok(FutureResult::Check)
+                    },
+                    async {
+                        // Clear Timer: every 60s to check buffer.
+                        smol::Timer::after(std::time::Duration::from_secs(60)).await;
+                        Ok(FutureResult::Clear)
+                    },
+                ),
             )
             .await
             {
@@ -229,7 +237,12 @@ pub async fn start(
                     ));
                     debug!("Incoming remote sessioned: {}.", remote_id.short_show());
                 }
-                Ok(FutureResult::Timer) => {
+                Ok(FutureResult::Check) => {
+                    if inner_global.peer_list.read().await.is_empty() {
+                        let _ = inner_global.out_send(ReceiveMessage::NetworkLost).await;
+                    }
+                }
+                Ok(FutureResult::Clear) => {
                     inner_global.buffer.write().await.timer_clear().await;
                 }
                 Err(_) => break,
@@ -491,6 +504,17 @@ pub async fn start(
                         let _ = res_sender.send(StateResponse::Seed(seeds)).await;
                     }
                 },
+                Ok(SendMessage::NetworkReboot) => {
+                    // rebootstrap allow list.
+                    for a in global.peer_list.read().await.bootstrap() {
+                        let (session_key, remote_pk) = global.generate_remote();
+                        global
+                            .transport_sender
+                            .send(TransportSendMessage::Connect(*a, remote_pk, session_key))
+                            .await
+                            .expect("Server to Endpoint (Connect)");
+                    }
+                }
                 Err(_) => break,
             }
         }

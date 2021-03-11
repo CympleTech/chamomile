@@ -105,6 +105,9 @@ fn main() {
                 ReceiveMessage::Delivery(t, tid, had, _data) => {
                     println!("Recv {:?} Delivery: {} {}", t, tid, had);
                 }
+                ReceiveMessage::NetworkLost => {
+                    println!("No peers conneced.")
+                }
             }
         }
     });

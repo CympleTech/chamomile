@@ -48,6 +48,8 @@ pub enum ReceiveMessage {
     Stream(u32, StreamType, Vec<u8>),
     /// (Only stable connected) Delivery feedback. include StableConnect, StableResult, Data. `id(u32) != 0`.
     Delivery(DeliveryType, u64, bool, Vec<u8>),
+    /// when network lost all DHT network and direct stables. will tell outside.
+    NetworkLost,
 }
 
 /// main send message for outside channel, send from outside to chamomile.
@@ -94,6 +96,8 @@ pub enum SendMessage {
     /// Request for return the network current state info.
     /// params is request type, and return channel's sender (async).
     NetworkState(StateRequest, Sender<StateResponse>),
+    /// When receive `ReceiveMessage::NetworkLost`, want to reboot network, it can use.
+    NetworkReboot,
 }
 
 /// Network state info response.

@@ -75,6 +75,10 @@ impl PeerList {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.stables.is_empty() && self.dhts.is_empty()
+    }
+
     /// get all peers in the peer list.
     pub fn all(&self) -> HashMap<PeerId, &Sender<SessionMessage>> {
         let mut peers: HashMap<PeerId, &Sender<SessionMessage>> = HashMap::new();

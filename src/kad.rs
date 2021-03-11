@@ -136,6 +136,10 @@ impl DoubleKadTree {
     pub fn keys(&self) -> Vec<PeerId> {
         self.peers.keys()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.peers.is_empty()
+    }
 }
 
 impl<K: Key> KadTree<K> {
@@ -241,6 +245,21 @@ impl<K: Key> KadTree<K> {
             self.right.as_ref().unwrap().keys(&mut vec); // safe checked.
         }
         vec
+    }
+
+    fn is_empty(&self) -> bool {
+        if self.left.is_some() {
+            if !self.left.as_ref().unwrap().is_empty() {
+                return false;
+            }
+        }
+        if self.right.is_some() {
+            if !self.right.as_ref().unwrap().is_empty() {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
@@ -385,6 +404,26 @@ impl<K: Key> Node<K> {
         if let Some(ref right) = self.right {
             right.keys(vec);
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        if !self.list.is_empty() {
+            return false;
+        }
+
+        if let Some(ref left) = self.left {
+            if !left.is_empty() {
+                return false;
+            }
+        }
+
+        if let Some(ref right) = self.right {
+            if !right.is_empty() {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
