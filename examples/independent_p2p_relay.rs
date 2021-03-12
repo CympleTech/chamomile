@@ -28,12 +28,8 @@ fn main() {
 
         while let Ok(message) = recv.recv().await {
             match message {
-                ReceiveMessage::Data(..) => {
-                    panic!("none");
-                }
-                ReceiveMessage::Stream(..) => {
-                    panic!("none");
-                }
+                ReceiveMessage::Data(..) => {}
+                ReceiveMessage::Stream(..) => {}
                 ReceiveMessage::StableConnect(from, ..) => {
                     let _ = send
                         .send(SendMessage::StableResult(0, from, false, false, vec![]))
@@ -44,15 +40,9 @@ fn main() {
                         .send(SendMessage::StableResult(0, from, false, false, vec![]))
                         .await;
                 }
-                ReceiveMessage::StableLeave(..) => {
-                    panic!("none");
-                }
-                ReceiveMessage::StableResult(..) => {
-                    panic!("none");
-                }
-                ReceiveMessage::Delivery(..) => {
-                    panic!("none");
-                }
+                ReceiveMessage::StableLeave(..) => {}
+                ReceiveMessage::StableResult(..) => {}
+                ReceiveMessage::Delivery(..) => {}
                 ReceiveMessage::NetworkLost => {}
             }
         }
