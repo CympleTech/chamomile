@@ -589,7 +589,7 @@ impl Session {
                 ),
                 future::race(
                     async {
-                        smol::Timer::after(std::time::Duration::from_secs(5)).await;
+                        smol::Timer::after(std::time::Duration::from_secs(3)).await;
                         Ok(FutureResult::HeartBeat)
                     },
                     async {
@@ -911,7 +911,7 @@ impl Session {
     }
 
     async fn handle_heartbeat(&mut self) -> Result<()> {
-        if self.heartbeat > 5 {
+        if self.heartbeat > 3 {
             return Err(new_io_error("timeout"));
         }
 
@@ -921,7 +921,7 @@ impl Session {
 
     async fn handle_robust(&mut self) -> Result<()> {
         // 60s timer out when lost connection, and cannot build a new one.
-        debug!("10s timer to do robust check, check all connections is connected.");
+        debug!("60s timer to do robust check, check all connections is connected.");
 
         Ok(())
     }
