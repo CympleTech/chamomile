@@ -65,6 +65,7 @@ impl DHT {
 }
 
 pub fn nat(mut remote_addr: SocketAddr, mut local: Peer) -> Peer {
+    local.set_is_pub(remote_addr.port() == local.addr().port());
     match local.transport() {
         TransportType::TCP => {
             remote_addr.set_port(local.addr().port()); // TODO TCP hole punching
@@ -73,7 +74,6 @@ pub fn nat(mut remote_addr: SocketAddr, mut local: Peer) -> Peer {
     }
 
     local.set_addr(remote_addr);
-    local.set_is_pub(remote_addr.port() == local.addr().port());
     local
 }
 

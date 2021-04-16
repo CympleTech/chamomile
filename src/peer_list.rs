@@ -231,7 +231,7 @@ impl PeerList {
     /// 2. add to kad.
     pub async fn add_dht(&mut self, v: KadValue) -> bool {
         // 1. add to boostraps.
-        if !self.bootstraps.contains(v.2.addr()) {
+        if v.2.is_pub() && !self.bootstraps.contains(v.2.addr()) {
             self.add_bootstrap(v.2.addr().clone());
             self.save().await;
         }

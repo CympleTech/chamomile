@@ -26,6 +26,14 @@ fn main() {
         let (peer_id, send, recv) = start(config).await.unwrap();
         println!("peer id: {}", peer_id.to_hex());
 
+        if args().nth(2).is_some() {
+            let remote_addr: SocketAddr = args().nth(2).unwrap().parse().expect("invalid addr");
+            println!("start DHT connect to remote: {}", remote_addr);
+            send.send(SendMessage::Connect(remote_addr))
+                .await
+                .expect("channel failure");
+        }
+
         while let Ok(message) = recv.recv().await {
             match message {
                 ReceiveMessage::Data(..) => {}
