@@ -670,7 +670,6 @@ impl Session {
                 }
 
                 if self.is_direct() {
-                    debug!("SessionMessage RelayData directly send.");
                     self.direct_send(EndpointMessage::RelayData(from, to, data))
                         .await?;
                 } else {
@@ -694,7 +693,6 @@ impl Session {
                 }
 
                 if self.is_direct() {
-                    debug!("SessionMessage RelayConnect directly send.");
                     self.direct_send(EndpointMessage::RelayHandshake(from_peer, to))
                         .await?;
                 } else {
@@ -812,6 +810,8 @@ impl Session {
                             .next_closest(&to, self.remote_id())
                         {
                             let _ = sender.send(SessionMessage::RelayData(from, to, data)).await;
+                        } else {
+                            debug!("RelayData not found next closest!");
                         }
                     }
                 }
@@ -836,7 +836,7 @@ impl Session {
                         .await
                         .get_tmp_session(&remote_peer_id)
                     {
-                        debug!("Relay Resutl have got. send to session.");
+                        debug!("Relay Result have got. send to session.");
                         // this is relay connect sender.
                         let _ = sender
                             .send(SessionMessage::RelayResult(
@@ -901,6 +901,8 @@ impl Session {
                             let _ = sender
                                 .send(SessionMessage::RelayConnect(from_peer, to))
                                 .await;
+                        } else {
+                            debug!("RelayHandshake not found next closest!");
                         }
                     }
                 }

@@ -1,6 +1,7 @@
 use bit_vec::BitVec;
 use chamomile_types::types::PeerId;
 use core::cmp::Ordering;
+use rand::Rng;
 use smol::channel::Sender;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -46,7 +47,7 @@ const MAX_LEVEL: usize = 8;
 
 // max peer-id is 4 * 256 = 1024
 // max ip-address is 4 * 128 = 512
-const K_BUCKET: usize = 4;
+const K_BUCKET: usize = 1024;
 
 pub(crate) struct KadValue(
     pub Sender<SessionMessage>,
@@ -86,10 +87,15 @@ impl DoubleKadTree {
     }
 
     pub fn add(&mut self, value: KadValue) -> bool {
-        let value_key = self.values.len() as u32;
+        let mut rng = rand::thread_rng();
+        let value_key = rng.gen::<u32>();
         let peer_id = value.2.id().clone();
         let ip_addr = value.2.addr().clone();
-        if self.peers.add(peer_id, value_key) {
+        let (is_ok, removed) = self.peers.add(peer_id, value_key);
+        for i in removed {
+            self.values.remove(&i);
+        }
+        if is_ok {
             self.ips.add(ip_addr, value_key);
             self.values.insert(value_key, value);
             true
@@ -151,7 +157,7 @@ impl<K: Key> KadTree<K> {
         }
     }
 
-    fn add(&mut self, key: K, value: u32) -> bool {
+    fn add(&mut self, key: K, value: u32) -> (bool, Vec<u32>) {
         let distance = K::calc_distance(&self.root_key, &key);
 
         if distance.get(0) {
@@ -272,7 +278,7 @@ impl<K: Key> Node<K> {
         }
     }
 
-    fn insert(&mut self, mut cell: Cell<K>, index: usize, k_bucket: usize) -> bool {
+    fn insert(&mut self, mut cell: Cell<K>, index: usize, k_bucket: usize) -> (bool, Vec<u32>) {
         if self.right.is_some() || self.left.is_some() {
             if cell.2.get(index) {
                 if self.right.is_none() {
@@ -293,9 +299,11 @@ impl<K: Key> Node<K> {
             }
         } else {
             let mut need_deleted = usize::MAX;
+            let mut removed = vec![];
             for (i, c) in self.list.iter().enumerate() {
                 if c == &cell {
                     need_deleted = i;
+                    removed.push(c.1);
                 }
             }
             if need_deleted != usize::MAX {
@@ -304,16 +312,17 @@ impl<K: Key> Node<K> {
 
             if self.list.len() < k_bucket {
                 self.list.push(cell);
-                true
+                (true, removed)
             } else {
                 if index >= MAX_LEVEL {
                     for v in self.list.iter_mut() {
                         if v > &mut cell {
+                            removed.push(v.1);
                             *v = cell;
-                            return true;
+                            return (true, removed);
                         }
                     }
-                    return false;
+                    return (false, removed);
                 } else {
                     self.right = Some(Box::new(Node::default()));
                     self.left = Some(Box::new(Node::default()));
@@ -453,7 +462,7 @@ impl<K: Key> Cell<K> {
     }
 }
 
-#[derive(Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Debug)]
 pub struct Distance(BitVec);
 
 impl Distance {
