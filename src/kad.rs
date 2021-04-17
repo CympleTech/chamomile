@@ -47,7 +47,7 @@ const MAX_LEVEL: usize = 8;
 
 // max peer-id is 4 * 256 = 1024
 // max ip-address is 4 * 128 = 512
-const K_BUCKET: usize = 1024;
+const K_BUCKET: usize = 4;
 
 pub(crate) struct KadValue(
     pub Sender<SessionMessage>,
