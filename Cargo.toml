@@ -1,6 +1,6 @@
 [package]
 name = "chamomile"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Contact <contact@cypherlink.io>"]
 readme = "README.md"
 description = "Another P2P Library. Support IoT devices."
@@ -15,9 +15,9 @@ members = [
 ]
 
 [dependencies]
-chamomile-types = { version = "0.3", path = "./types" }
+chamomile-types = { version = "0.4", path = "./types" }
 toml = "0.5"
-rand = "0.7"
+rand = "0.8"
 log = "0.4"
 bit-vec = "0.6"
 

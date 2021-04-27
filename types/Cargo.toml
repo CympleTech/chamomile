@@ -1,6 +1,6 @@
 [package]
 name = "chamomile-types"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Contact <contact@cypherlink.io>"]
 readme = "README.md"
 description = "Another P2P Library. Support IoT devices."
