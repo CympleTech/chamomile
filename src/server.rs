@@ -442,15 +442,13 @@ pub async fn start(
                     global.peer_list.write().await.peer_disconnect(&addr).await;
                 }
                 Ok(SendMessage::Data(tid, to, data)) => {
-                    if let Some((sender, stream_sender, is_it)) =
-                        global.peer_list.read().await.get(&to)
-                    {
+                    if let Some((sender, _, is_it)) = global.peer_list.read().await.get(&to) {
                         if is_it {
                             let _ = sender.send(SessionMessage::Data(tid, data)).await;
                         } else {
                             // only happen on permissionless.
-                            let _ = stream_sender
-                                .send(EndpointMessage::RelayData(*global.peer_id(), to, data))
+                            let _ = sender
+                                .send(SessionMessage::RelayData(*global.peer_id(), to, data))
                                 .await;
                         }
                     } else {
