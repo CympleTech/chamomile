@@ -657,6 +657,10 @@ impl Session {
                     self.upgrade().await?;
                 }
 
+                if !self.is_stable && !is_ok {
+                    self.close(false).await?;
+                }
+
                 if is_force {
                     return Err(new_io_error("force close"));
                 }
