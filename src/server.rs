@@ -210,7 +210,7 @@ pub async fn start(
 
                     // 5. save to DHTs.
                     let (session_sender, session_receiver) = new_session_channel();
-                    let kv = KadValue(session_sender.clone(), stream_sender.clone(), remote_peer);
+                    let kv = KadValue(session_sender.clone(), stream_sender, remote_peer);
                     let is_new = inner_global.peer_list.write().await.add_dht(kv).await;
 
                     // 6. check if had connected.
@@ -228,7 +228,6 @@ pub async fn start(
                         remote_peer,
                         session_sender,
                         session_receiver,
-                        stream_sender,
                         stream_receiver,
                         ConnectType::Direct(endpoint_sender),
                         session_key,

@@ -86,7 +86,7 @@ pub(crate) async fn direct_stable(
         let buffers = global
             .add_tmp(
                 remote_id,
-                KadValue(session_sender.clone(), stream_sender.clone(), remote_peer),
+                KadValue(session_sender.clone(), stream_sender, remote_peer),
                 true,
             )
             .await;
@@ -95,7 +95,6 @@ pub(crate) async fn direct_stable(
             remote_peer,
             session_sender,
             session_receiver,
-            stream_sender,
             stream_receiver,
             ConnectType::Direct(endpoint_sender),
             session_key,
@@ -169,11 +168,7 @@ pub(crate) async fn relay_stable(
     let (connects, results) = global
         .add_all_tmp(
             to,
-            KadValue(
-                session_sender.clone(),
-                stream_sender.clone(),
-                Peer::default(),
-            ),
+            KadValue(session_sender.clone(), stream_sender, Peer::default()),
             false,
         )
         .await;
@@ -228,7 +223,6 @@ pub(crate) async fn relay_stable(
             remote_peer,
             session_sender,
             session_receiver,
-            stream_sender,
             stream_receiver,
             ConnectType::Relay(recv_ss),
             session_key,
@@ -284,7 +278,6 @@ pub(crate) struct Session {
     pub remote_peer: Peer,
     pub session_sender: Sender<SessionMessage>,
     pub session_receiver: Receiver<SessionMessage>,
-    pub stream_sender: Sender<EndpointMessage>,
     pub stream_receiver: Receiver<EndpointMessage>,
     pub endpoint: ConnectType,
     pub session_key: SessionKey,
@@ -307,7 +300,6 @@ impl Session {
         remote_peer: Peer,
         session_sender: Sender<SessionMessage>,
         session_receiver: Receiver<SessionMessage>,
-        stream_sender: Sender<EndpointMessage>,
         stream_receiver: Receiver<EndpointMessage>,
         endpoint: ConnectType,
         session_key: SessionKey,
@@ -318,7 +310,6 @@ impl Session {
             remote_peer,
             session_sender,
             session_receiver,
-            stream_sender,
             stream_receiver,
             endpoint,
             session_key,
@@ -678,12 +669,8 @@ impl Session {
                         .await?;
                 } else {
                     debug!("SessionMessage RelayData need relay again");
-                    if let Some((_, stream_sender, _)) =
-                        self.global.peer_list.read().await.dht_get(&to)
-                    {
-                        let _ = stream_sender
-                            .send(EndpointMessage::RelayData(from, to, data))
-                            .await;
+                    if let Some((ss, _, _)) = self.global.peer_list.read().await.dht_get(&to) {
+                        let _ = ss.send(SessionMessage::RelayData(from, to, data)).await;
                     } else {
                         warn!("CHAMOMILE: CANNOT REACH NETWORK.");
                     }
@@ -701,12 +688,8 @@ impl Session {
                         .await?;
                 } else {
                     debug!("SessionMessage RelayData need relay again");
-                    if let Some((_, stream_sender, _)) =
-                        self.global.peer_list.read().await.dht_get(&to)
-                    {
-                        let _ = stream_sender
-                            .send(EndpointMessage::RelayHandshake(from_peer, to))
-                            .await;
+                    if let Some((ss, _, _)) = self.global.peer_list.read().await.dht_get(&to) {
+                        let _ = ss.send(SessionMessage::RelayConnect(from_peer, to)).await;
                     } else {
                         warn!("CHAMOMILE: CANNOT REACH NETWORK.");
                     }
@@ -723,7 +706,7 @@ impl Session {
             }
             SessionMessage::DirectIncoming(
                 remote_peer,
-                stream_sender,
+                _stream_sender,
                 stream_receiver,
                 endpoint_sender,
             ) => {
@@ -732,7 +715,6 @@ impl Session {
                     .relay_send(SessionMessage::RelayClose(*self.my_id()))
                     .await;
                 // 2. update stream and info.
-                self.stream_sender = stream_sender;
                 self.stream_receiver = stream_receiver;
                 self.endpoint = ConnectType::Direct(endpoint_sender);
                 self.remote_peer = remote_peer;
@@ -865,11 +847,7 @@ impl Session {
 
                     self.global.buffer.write().await.add_tmp(
                         remote_peer_id,
-                        KadValue(
-                            new_session_sender.clone(),
-                            new_stream_sender.clone(),
-                            remote_peer,
-                        ),
+                        KadValue(new_session_sender.clone(), new_stream_sender, remote_peer),
                         false,
                     );
 
@@ -877,7 +855,6 @@ impl Session {
                         remote_peer,
                         new_session_sender,
                         new_session_receiver,
-                        new_stream_sender,
                         new_stream_receiver,
                         ConnectType::Relay(self.session_sender.clone()),
                         new_session_key,
