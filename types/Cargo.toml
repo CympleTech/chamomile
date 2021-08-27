@@ -1,5 +1,5 @@
 [package]
-name = "chamomile-types"
+name = "chamomile_types"
 version = "0.4.0"
 authors = ["Contact <contact@cypherlink.io>"]
 readme = "README.md"
@@ -10,5 +10,5 @@ license = "MIT/Apache-2.0"
 edition = "2018"
 
 [dependencies]
-async-channel = "1.5"
+async-channel = "1.6"
 serde = { version = "1.0", default-features = false, features = ["alloc", "derive"]}
