@@ -1,7 +1,7 @@
 use chamomile_types::types::{new_io_error, PeerId, TransportType, PEER_ID_LENGTH};
-use smol::channel::{self, Receiver, Sender};
 use std::io::Result;
 use std::net::SocketAddr;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 
 mod rtp;
 mod tcp;
@@ -15,18 +15,18 @@ use crate::peer::{Peer, PEER_LENGTH};
 /// new a channel for send TransportSendMessage.
 pub fn new_transport_send_channel() -> (Sender<TransportSendMessage>, Receiver<TransportSendMessage>)
 {
-    channel::unbounded()
+    mpsc::channel(128)
 }
 
 /// new a channel for receive EndpointIncomingMessage.
 pub fn new_transport_recv_channel() -> (Sender<TransportRecvMessage>, Receiver<TransportRecvMessage>)
 {
-    channel::unbounded()
+    mpsc::channel(128)
 }
 
 /// new a channel for EndpointSendMessage between in session's and transport stream.
 pub fn new_endpoint_channel() -> (Sender<EndpointMessage>, Receiver<EndpointMessage>) {
-    channel::unbounded()
+    mpsc::channel(128)
 }
 
 /// Endpoint can receied this message channel.

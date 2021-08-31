@@ -2,9 +2,9 @@ use bit_vec::BitVec;
 use chamomile_types::types::PeerId;
 use core::cmp::Ordering;
 use rand::Rng;
-use smol::channel::Sender;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use tokio::sync::mpsc::Sender;
 
 use crate::peer::Peer;
 use crate::session::SessionMessage;

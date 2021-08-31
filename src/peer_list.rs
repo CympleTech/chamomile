@@ -1,9 +1,9 @@
-use smol::{channel::Sender, fs, io::Result};
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::iter::Iterator;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+use tokio::{fs, io::Result, sync::mpsc::Sender};
 
 use chamomile_types::types::{new_io_error, PeerId};
 

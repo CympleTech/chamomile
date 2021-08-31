@@ -1,5 +1,8 @@
-use smol::{channel::Sender, io::Result, lock::RwLock};
 use std::sync::Arc;
+use tokio::{
+    io::Result,
+    sync::{mpsc::Sender, RwLock},
+};
 
 use chamomile_types::{
     message::ReceiveMessage,

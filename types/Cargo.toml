@@ -1,6 +1,6 @@
 [package]
 name = "chamomile_types"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["Contact <contact@cypherlink.io>"]
 readme = "README.md"
 description = "Another P2P Library. Support IoT devices."
@@ -10,5 +10,5 @@ license = "MIT/Apache-2.0"
 edition = "2018"
 
 [dependencies]
-async-channel = "1.6"
+tokio = { version = "1", features = ["sync"] }
 serde = { version = "1.0", default-features = false, features = ["alloc", "derive"]}

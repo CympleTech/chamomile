@@ -1,10 +1,10 @@
-use async_channel::Sender;
 use std::net::SocketAddr;
+use tokio::sync::mpsc::Sender;
 
 use crate::types::{Broadcast, PeerId, TransportStream, TransportType};
 
 /// Custom apply for build a stream between nodes.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum StreamType {
     /// request for build a stream, params is peer id, transport type and request custom info.
     Req(PeerId, TransportType),
@@ -23,7 +23,7 @@ pub enum DeliveryType {
 }
 
 /// main received message for outside channel, send from chamomile to outside.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum ReceiveMessage {
     /// when peer what to stable connect, send from chamomile to outside.
     /// params is `peer_id`, `socket_addr` and peer `connect_info`.
@@ -53,7 +53,7 @@ pub enum ReceiveMessage {
 }
 
 /// main send message for outside channel, send from outside to chamomile.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum SendMessage {
     /// when peer request for join, outside decide connect or not.
     /// params is `delivery_feedback_id`, `peer_id`, `is_connect`, `is_force_close`, `result info`.
@@ -109,7 +109,7 @@ pub enum StateRequest {
 }
 
 /// Network state info response.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum StateResponse {
     /// response is peer list and peer is relay or directly.
     Stable(Vec<(PeerId, bool)>),

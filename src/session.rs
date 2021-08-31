@@ -3,15 +3,14 @@ use chamomile_types::{
     message::{DeliveryType, ReceiveMessage},
     types::{new_io_error, PeerId},
 };
-use smol::{
-    channel::{self, Receiver, Sender},
-    future,
-    io::Result,
-    prelude::*,
-};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::{
+    io::Result,
+    select,
+    sync::mpsc::{self, Receiver, Sender},
+};
 
 use crate::global::Global;
 use crate::hole_punching::{nat, DHT};
@@ -33,7 +32,7 @@ pub(crate) async fn direct_stable(
 ) -> Result<()> {
     debug!("Session want to connect directly.");
     let (endpoint_sender, endpoint_receiver) = new_endpoint_channel(); // transpot's use.
-    let (stream_sender, stream_receiver) = new_endpoint_channel(); // session's use.
+    let (stream_sender, mut stream_receiver) = new_endpoint_channel(); // session's use.
     let (mut session_key, remote_pk) = global.generate_remote();
 
     // 1. send stable connect.
@@ -47,7 +46,7 @@ pub(crate) async fn direct_stable(
         .await?;
 
     // 2. waiting remote send remote info.
-    if let Ok(EndpointMessage::Handshake(RemotePublic(remote_key, remote_peer, dh_key))) =
+    if let Some(EndpointMessage::Handshake(RemotePublic(remote_key, remote_peer, dh_key))) =
         stream_receiver.recv().await
     {
         // 3.1.1 if ok connected. keep it and update to stable.
@@ -94,7 +93,6 @@ pub(crate) async fn direct_stable(
         let mut session = Session::new(
             remote_peer,
             session_sender,
-            session_receiver,
             stream_receiver,
             ConnectType::Direct(endpoint_sender),
             session_key,
@@ -115,7 +113,7 @@ pub(crate) async fn direct_stable(
         }
 
         // 3.1.6 session listen.
-        session.listen().await
+        session.listen(session_receiver).await
     } else {
         drop(stream_sender);
         drop(stream_receiver);
@@ -162,7 +160,7 @@ pub(crate) async fn relay_stable(
     // 3. if stable connected, keep it.
 
     let (stream_sender, stream_receiver) = new_endpoint_channel(); // session's use.
-    let (session_sender, session_receiver) = new_session_channel(); // server's use.
+    let (session_sender, mut session_receiver) = new_session_channel(); // server's use.
     let (mut session_key, remote_pk) = global.generate_remote();
 
     let (connects, results) = global
@@ -179,15 +177,16 @@ pub(crate) async fn relay_stable(
         .map_err(|_e| new_io_error("Session missing"))?;
     drop(relay_sender);
 
-    let msg = session_receiver
-        .recv()
-        .or(async {
-            smol::Timer::after(std::time::Duration::from_secs(10)).await;
-            Err(smol::channel::RecvError)
-        })
-        .await;
+    let msg = select! {
+        v = session_receiver
+            .recv() => v,
+        v = async {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            None
+        } => v
+    };
 
-    if let Ok(SessionMessage::RelayResult(remote, recv_ss)) = msg {
+    if let Some(SessionMessage::RelayResult(remote, recv_ss)) = msg {
         let RemotePublic(remote_key, remote_peer, dh_key) = remote;
 
         let remote_id = remote_key.peer_id();
@@ -222,7 +221,6 @@ pub(crate) async fn relay_stable(
         let mut session = Session::new(
             remote_peer,
             session_sender,
-            session_receiver,
             stream_receiver,
             ConnectType::Relay(recv_ss),
             session_key,
@@ -246,7 +244,7 @@ pub(crate) async fn relay_stable(
             session.upgrade().await?;
         }
 
-        session.listen().await
+        session.listen(session_receiver).await
     } else {
         debug!("Session cannot connect relay.");
         if tid != 0 {
@@ -265,8 +263,8 @@ pub(crate) async fn relay_stable(
     }
 }
 
-pub(crate) fn session_spawn(mut session: Session) {
-    smol::spawn(async move { session.listen().await }).detach();
+pub(crate) fn session_spawn(mut session: Session, session_receiver: Receiver<SessionMessage>) {
+    tokio::spawn(async move { session.listen(session_receiver).await });
 }
 
 pub(crate) enum ConnectType {
@@ -277,7 +275,6 @@ pub(crate) enum ConnectType {
 pub(crate) struct Session {
     pub remote_peer: Peer,
     pub session_sender: Sender<SessionMessage>,
-    pub session_receiver: Receiver<SessionMessage>,
     pub stream_receiver: Receiver<EndpointMessage>,
     pub endpoint: ConnectType,
     pub session_key: SessionKey,
@@ -299,7 +296,6 @@ impl Session {
     pub fn new(
         remote_peer: Peer,
         session_sender: Sender<SessionMessage>,
-        session_receiver: Receiver<SessionMessage>,
         stream_receiver: Receiver<EndpointMessage>,
         endpoint: ConnectType,
         session_key: SessionKey,
@@ -309,7 +305,6 @@ impl Session {
         Session {
             remote_peer,
             session_sender,
-            session_receiver,
             stream_receiver,
             endpoint,
             session_key,
@@ -561,58 +556,54 @@ impl Session {
         self.global.upgrade(self.remote_id()).await
     }
 
-    async fn forever(&mut self) -> Result<()> {
+    async fn forever(&mut self, mut session_receiver: Receiver<SessionMessage>) -> Result<()> {
         loop {
-            match future::race(
-                future::race(
-                    async {
-                        self.session_receiver
-                            .recv()
-                            .await
-                            .map(|msg| FutureResult::Out(msg))
-                    },
-                    async {
-                        self.stream_receiver
-                            .recv()
-                            .await
-                            .map(|msg| FutureResult::Endpoint(msg))
-                    },
-                ),
-                future::race(
-                    async {
-                        smol::Timer::after(std::time::Duration::from_secs(3)).await;
-                        Ok(FutureResult::HeartBeat)
-                    },
-                    async {
-                        // 60s to check all connection channels is ok.
-                        smol::Timer::after(std::time::Duration::from_secs(60)).await;
-                        Ok(FutureResult::Robust)
-                    },
-                ),
-            )
-            .await
-            {
-                Ok(FutureResult::Out(msg)) => {
+            let res = select! {
+                v = async {
+                    session_receiver
+                        .recv()
+                        .await
+                        .map(|msg| FutureResult::Out(msg))
+                } => v,
+                v = async {
+                    self.stream_receiver
+                        .recv()
+                        .await
+                        .map(|msg| FutureResult::Endpoint(msg))
+                } => v,
+
+                v = async {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    Some(FutureResult::HeartBeat)
+                } => v,
+                v = async {
+                    // 60s to check all connection channels is ok.
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    Some(FutureResult::Robust)
+                } => v,
+            };
+            match res {
+                Some(FutureResult::Out(msg)) => {
                     self.handle_outside(msg).await?;
                 }
-                Ok(FutureResult::Endpoint(msg)) => {
+                Some(FutureResult::Endpoint(msg)) => {
                     self.handle_endpoint(msg).await?;
                 }
-                Ok(FutureResult::HeartBeat) => {
+                Some(FutureResult::HeartBeat) => {
                     self.handle_heartbeat().await?;
                 }
-                Ok(FutureResult::Robust) => {
+                Some(FutureResult::Robust) => {
                     self.handle_robust().await?;
                 }
-                Err(_) => break,
+                None => break,
             }
         }
         Ok(())
     }
 
-    pub async fn listen(&mut self) -> Result<()> {
+    pub async fn listen(&mut self, session_receiver: Receiver<SessionMessage>) -> Result<()> {
         debug!("Session running: {}.", self.remote_id().short_show());
-        let _ = self.forever().await;
+        let _ = self.forever(session_receiver).await;
         debug!("Session broke: {}.", self.remote_id().short_show());
         self.close(true).await
     }
@@ -854,7 +845,6 @@ impl Session {
                     let new_session = Session::new(
                         remote_peer,
                         new_session_sender,
-                        new_session_receiver,
                         new_stream_receiver,
                         ConnectType::Relay(self.session_sender.clone()),
                         new_session_key,
@@ -863,7 +853,7 @@ impl Session {
                     );
 
                     // if use session_run directly, it will cycle error in rust check.
-                    session_spawn(new_session);
+                    session_spawn(new_session, new_session_receiver);
 
                     self.direct_send(EndpointMessage::RelayHandshake(
                         new_remote_pk,
@@ -939,7 +929,7 @@ pub(crate) enum SessionMessage {
 
 /// new a channel for send message to session.
 pub(crate) fn new_session_channel() -> (Sender<SessionMessage>, Receiver<SessionMessage>) {
-    channel::unbounded()
+    mpsc::channel(128)
 }
 
 /// core data transfer and encrypted.

@@ -7,48 +7,55 @@
 //! We running a p2p peer, and if others add, we will get the info.
 //!
 //! ```ignore
-//! use async_std::task;
 //! use std::env::args;
 //! use std::net::SocketAddr;
+//! use std::path::PathBuf;
 //!
 //! use chamomile::prelude::{start, Config, ReceiveMessage, SendMessage};
 //!
-//! fn main() {
-//!     task::block_on(async {
-//!         let self_addr: SocketAddr = args()
-//!             .nth(1)
-//!             .expect("missing path")
-//!             .parse()
-//!             .expect("invalid addr");
+//! #[tokio::main]
+//! async fn main() {
+//!    let addr_str = args().nth(1).expect("missing path");
+//!    let self_addr: SocketAddr = addr_str.parse().expect("invalid addr");
 //!
-//!         let (peer_id, send, recv) = start(Config::default(self_addr)).await.unwrap();
-//!         println!("peer id: {}", peer_id.short_show());
+//!    println!("START A INDEPENDENT P2P RELAY SERVER. : {}", self_addr);
 //!
-//!         if args().nth(2).is_some() {
-//!             let remote_addr: SocketAddr = args().nth(2).unwrap().parse().expect("invalid addr");
-//!             println!("start connect to remote: {}", remote_addr);
-//!             send.send(SendMessage::Connect(remote_addr, None))
-//!                 .await;
-//!         }
+//!    let mut config = Config::default(self_addr);
+//!    config.permission = false;
+//!    config.only_stable_data = true;
+//!    config.db_dir = std::path::PathBuf::from("./");
 //!
-//!         while let Some(message) = recv.recv().await {
-//!             match message {
-//!                 ReceiveMessage::Data(peer_id, bytes) => {
-//!                     println!("recv data from: {}, {:?}", peer_id.short_show(), bytes);
-//!                 }
-//!                 ReceiveMessage::PeerJoin(peer_id, _addr, join_data) => {
-//!                     println!("peer join: {:?}, join data: {:?}", peer_id, join_data);
-//!                     send.send(SendMessage::PeerJoinResult(peer_id, true, false, vec![1]))
-//!                         .await;
-//!                     println!("Debug: when join send message test: {:?}", vec![1, 2, 3, 4]);
-//!                     send.send(SendMessage::Data(peer_id, vec![1, 2, 3, 4])).await;
-//!                 }
-//!                 ReceiveMessage::PeerLeave(peer_id) => {
-//!                     println!("peer_leave: {:?}", peer_id);
-//!                 }
-//!             }
-//!         }
-//!     });
+//!    let (peer_id, send, mut recv) = start(config).await.unwrap();
+//!    println!("peer id: {}", peer_id.to_hex());
+//!
+//!    if args().nth(2).is_some() {
+//!        let remote_addr: SocketAddr = args().nth(2).unwrap().parse().expect("invalid addr");
+//!        println!("start DHT connect to remote: {}", remote_addr);
+//!        send.send(SendMessage::Connect(remote_addr))
+//!            .await
+//!            .expect("channel failure");
+//!    }
+//!
+//!    while let Some(message) = recv.recv().await {
+//!        match message {
+//!            ReceiveMessage::Data(..) => {}
+//!            ReceiveMessage::Stream(..) => {}
+//!            ReceiveMessage::StableConnect(from, ..) => {
+//!                let _ = send
+//!                    .send(SendMessage::StableResult(0, from, false, false, vec![]))
+//!                    .await;
+//!            }
+//!            ReceiveMessage::ResultConnect(from, ..) => {
+//!                let _ = send
+//!                    .send(SendMessage::StableResult(0, from, false, false, vec![]))
+//!                    .await;
+//!            }
+//!            ReceiveMessage::StableLeave(..) => {}
+//!            ReceiveMessage::StableResult(..) => {}
+//!            ReceiveMessage::Delivery(..) => {}
+//!            ReceiveMessage::NetworkLost => {}
+//!        }
+//!    }
 //! }
 //! ```
 //!
@@ -78,26 +85,25 @@ pub mod primitives;
 pub mod transports;
 
 pub mod prelude {
-    use smol::{
-        channel::{self, Receiver, Sender},
-        io::Result,
-    };
-
     pub use chamomile_types::message::{
         DeliveryType, ReceiveMessage, SendMessage, StateRequest, StateResponse, StreamType,
     };
     pub use chamomile_types::types::{Broadcast, PeerId};
+    use tokio::{
+        io::Result,
+        sync::mpsc::{self, Receiver, Sender},
+    };
 
     pub use super::config::Config;
 
     /// new a channel for send message to the chamomile.
     pub fn new_send_channel() -> (Sender<SendMessage>, Receiver<SendMessage>) {
-        channel::unbounded()
+        mpsc::channel(128)
     }
 
     /// new a channel for receive the chamomile message.
     pub fn new_receive_channel() -> (Sender<ReceiveMessage>, Receiver<ReceiveMessage>) {
-        channel::unbounded()
+        mpsc::channel(128)
     }
 
     /// main function. start a p2p service.

@@ -1,11 +1,12 @@
-use smol::{
-    channel::{Receiver, Sender},
-    fs, future,
-    io::Result,
-    lock::RwLock,
-};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::{
+    fs,
+    io::Result,
+    select,
+    sync::mpsc::{Receiver, Sender},
+    sync::RwLock,
+};
 
 use chamomile_types::{
     delivery_split,
@@ -35,7 +36,7 @@ use crate::transports::{
 pub async fn start(
     config: Config,
     out_sender: Sender<ReceiveMessage>,
-    self_receiver: Receiver<SendMessage>,
+    mut self_receiver: Receiver<SendMessage>,
 ) -> Result<PeerId> {
     let Config {
         mut db_dir,
@@ -82,7 +83,7 @@ pub async fn start(
     let peer = Peer::new(key.peer_id(), addr, default_transport, true);
 
     let mut transports: HashMap<TransportType, Sender<TransportSendMessage>> = HashMap::new();
-    let (trans_send, trans_recv) = transport_start(peer.transport(), *peer.addr())
+    let (trans_send, mut trans_recv) = transport_start(peer.transport(), *peer.addr())
         .await
         .expect("Transport binding failure!");
     transports.insert(default_transport, trans_send.clone());
@@ -102,42 +103,41 @@ pub async fn start(
     // bootstrap allow list.
     for a in peer_list.read().await.bootstrap() {
         let (session_key, remote_pk) = global.generate_remote();
-        global
+        let _ = global
             .transport_sender
             .send(TransportSendMessage::Connect(*a, remote_pk, session_key))
-            .await
-            .expect("Server to Endpoint (Connect)");
+            .await;
     }
 
     drop(peer_list);
 
     let recv_data = !only_stable_data;
     let inner_global = global.clone();
-    smol::spawn(async move {
+    tokio::spawn(async move {
         enum FutureResult {
             Trans(TransportRecvMessage),
             Clear,
             Check,
         }
         loop {
-            match future::race(
-                async { trans_recv.recv().await.map(|msg| FutureResult::Trans(msg)) },
-                future::race(
-                    async {
-                        // Check Timer: every 10s to check network. (read only).
-                        smol::Timer::after(std::time::Duration::from_secs(10)).await;
-                        Ok(FutureResult::Check)
-                    },
-                    async {
-                        // Clear Timer: every 60s to check buffer.
-                        smol::Timer::after(std::time::Duration::from_secs(60)).await;
-                        Ok(FutureResult::Clear)
-                    },
-                ),
-            )
-            .await
-            {
-                Ok(FutureResult::Trans(TransportRecvMessage(
+            let futres = select! {
+                v = async {
+                    trans_recv.recv().await.map(|msg| FutureResult::Trans(msg))
+                } => v,
+                v = async {
+                    // Check Timer: every 10s to check network. (read only).
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    Some(FutureResult::Check)
+                } => v,
+                v = async {
+                    // Clear Timer: every 60s to check buffer.
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    Some(FutureResult::Clear)
+                } => v,
+            };
+
+            match futres {
+                Some(FutureResult::Trans(TransportRecvMessage(
                     addr,
                     RemotePublic(remote_key, remote_peer, dh_key),
                     is_self,
@@ -224,36 +224,37 @@ pub async fn start(
                     let peers = inner_global.peer_list.read().await.help_dht(&remote_id);
                     let _ = endpoint_sender.send(EndpointMessage::DHT(DHT(peers))).await;
 
-                    session_spawn(Session::new(
-                        remote_peer,
-                        session_sender,
+                    session_spawn(
+                        Session::new(
+                            remote_peer,
+                            session_sender,
+                            stream_receiver,
+                            ConnectType::Direct(endpoint_sender),
+                            session_key,
+                            inner_global.clone(),
+                            recv_data,
+                        ),
                         session_receiver,
-                        stream_receiver,
-                        ConnectType::Direct(endpoint_sender),
-                        session_key,
-                        inner_global.clone(),
-                        recv_data,
-                    ));
+                    );
                     debug!("Incoming remote sessioned: {}.", remote_id.short_show());
                 }
-                Ok(FutureResult::Check) => {
+                Some(FutureResult::Check) => {
                     if inner_global.peer_list.read().await.is_empty() {
                         let _ = inner_global.out_send(ReceiveMessage::NetworkLost).await;
                     }
                 }
-                Ok(FutureResult::Clear) => {
+                Some(FutureResult::Clear) => {
                     inner_global.buffer.write().await.timer_clear().await;
                 }
-                Err(_) => break,
+                None => break,
             }
         }
-    })
-    .detach();
+    });
 
-    smol::spawn(async move {
+    tokio::spawn(async move {
         loop {
             match self_receiver.recv().await {
-                Ok(SendMessage::StableConnect(tid, to, socket, data)) => {
+                Some(SendMessage::StableConnect(tid, to, socket, data)) => {
                     debug!("Outside: StableConnect to {}.", to.short_show());
                     if &to == global.peer_id() {
                         warn!("CHAMOMILE: STABLE CONNECT NERVER TO SELF.");
@@ -319,20 +320,18 @@ pub async fn start(
                         let g = global.clone();
                         if let Some(addr) = socket {
                             debug!("Outside: StableConnect start new connection with IP.");
-                            smol::spawn(async move {
+                            tokio::spawn(async move {
                                 let _ = direct_stable(tid, delivery, to, addr, g, recv_data).await;
-                            })
-                            .detach();
+                            });
                         } else {
                             debug!("Outside: StableConnect start new connection with ID.");
-                            smol::spawn(async move {
+                            tokio::spawn(async move {
                                 let _ = relay_stable(tid, delivery, to, ss, g, recv_data).await;
-                            })
-                            .detach();
+                            });
                         }
                     }
                 }
-                Ok(SendMessage::StableResult(tid, to, is_ok, is_force, data)) => {
+                Some(SendMessage::StableResult(tid, to, is_ok, is_force, data)) => {
                     debug!("Outside: StableResult to {}.", to.short_show());
                     if &to == global.peer_id() {
                         warn!("CHAMOMILE: STABLE CONNECT NERVER TO SELF.");
@@ -415,13 +414,12 @@ pub async fn start(
 
                         let g = global.clone();
                         debug!("Outside: StableResult start new connection with ID.");
-                        smol::spawn(async move {
+                        tokio::spawn(async move {
                             let _ = relay_stable(tid, delivery, to, ss, g, recv_data).await;
-                        })
-                        .detach();
+                        });
                     }
                 }
-                Ok(SendMessage::StableDisconnect(pid)) => {
+                Some(SendMessage::StableDisconnect(pid)) => {
                     debug!("Outside: StableDisconnect to {}.", pid.short_show());
                     if let Some((sender, _, is_it)) = global.peer_list.read().await.get(&pid) {
                         if is_it {
@@ -429,18 +427,18 @@ pub async fn start(
                         }
                     }
                 }
-                Ok(SendMessage::Connect(addr)) => {
+                Some(SendMessage::Connect(addr)) => {
                     debug!("Outside: DHT Connect to {}.", addr);
                     let (session_key, remote_pk) = global.generate_remote();
                     let _ = global
                         .trans_send(TransportSendMessage::Connect(addr, remote_pk, session_key))
                         .await;
                 }
-                Ok(SendMessage::DisConnect(addr)) => {
+                Some(SendMessage::DisConnect(addr)) => {
                     debug!("Outside: DHT Disconnect to {}.", addr);
                     global.peer_list.write().await.peer_disconnect(&addr).await;
                 }
-                Ok(SendMessage::Data(tid, to, data)) => {
+                Some(SendMessage::Data(tid, to, data)) => {
                     if let Some((sender, _, is_it)) = global.peer_list.read().await.get(&to) {
                         if is_it {
                             let _ = sender.send(SessionMessage::Data(tid, data)).await;
@@ -464,7 +462,7 @@ pub async fn start(
                         }
                     }
                 }
-                Ok(SendMessage::Broadcast(broadcast, data)) => match broadcast {
+                Some(SendMessage::Broadcast(broadcast, data)) => match broadcast {
                     Broadcast::StableAll => {
                         for (_to, (sender, _)) in global.peer_list.read().await.stable_all() {
                             let _ = sender.send(SessionMessage::Data(0, data.clone())).await;
@@ -477,10 +475,10 @@ pub async fn start(
                         }
                     }
                 },
-                Ok(SendMessage::Stream(_symbol, _stream_type, _data)) => {
+                Some(SendMessage::Stream(_symbol, _stream_type, _data)) => {
                     // TODO WIP
                 }
-                Ok(SendMessage::NetworkState(req, res_sender)) => match req {
+                Some(SendMessage::NetworkState(req, res_sender)) => match req {
                     StateRequest::Stable => {
                         let peers = global
                             .peer_list
@@ -501,22 +499,20 @@ pub async fn start(
                         let _ = res_sender.send(StateResponse::Seed(seeds)).await;
                     }
                 },
-                Ok(SendMessage::NetworkReboot) => {
+                Some(SendMessage::NetworkReboot) => {
                     // rebootstrap allow list.
                     for a in global.peer_list.read().await.bootstrap() {
                         let (session_key, remote_pk) = global.generate_remote();
-                        global
+                        let _ = global
                             .transport_sender
                             .send(TransportSendMessage::Connect(*a, remote_pk, session_key))
-                            .await
-                            .expect("Server to Endpoint (Connect)");
+                            .await;
                     }
                 }
-                Err(_) => break,
+                None => break,
             }
         }
-    })
-    .detach();
+    });
 
     Ok(peer_id)
 }

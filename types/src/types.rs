@@ -1,7 +1,7 @@
-use async_channel::{Receiver, Sender};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::io::Result;
+use tokio::sync::mpsc::{Receiver, Sender};
 
 #[inline]
 pub fn new_io_error(s: &str) -> std::io::Error {
@@ -123,7 +123,7 @@ impl TransportType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TransportStream {
     transport: TransportType,
     sender: Sender<Vec<u8>>,

@@ -1,6 +1,6 @@
-use smol::channel::Sender;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use tokio::sync::mpsc::Sender;
 
 use chamomile_types::types::PeerId;
 
