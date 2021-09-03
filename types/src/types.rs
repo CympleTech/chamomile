@@ -85,27 +85,27 @@ pub enum Broadcast {
 /// Transports types support by Endpoint.
 #[derive(Debug, Copy, Clone, Hash, Deserialize, Serialize, Eq, PartialEq)]
 pub enum TransportType {
-    UDP, // 0u8
-    TCP, // 1u8
-    RTP, // 2u8
-    UDT, // 3u8
+    QUIC, // 0u8
+    TCP,  // 1u8
+    RTP,  // 2u8
+    UDT,  // 3u8
 }
 
 impl TransportType {
     /// transports from parse from str.
     pub fn from_str(s: &str) -> Self {
         match s {
-            "udp" => TransportType::UDP,
+            "quic" => TransportType::QUIC,
             "tcp" => TransportType::TCP,
             "rtp" => TransportType::RTP,
             "udt" => TransportType::UDT,
-            _ => TransportType::UDP,
+            _ => TransportType::QUIC,
         }
     }
 
     pub fn from_byte(b: u8) -> Result<Self> {
         match b {
-            0u8 => Ok(TransportType::UDP),
+            0u8 => Ok(TransportType::QUIC),
             1u8 => Ok(TransportType::TCP),
             2u8 => Ok(TransportType::RTP),
             3u8 => Ok(TransportType::UDT),
@@ -115,7 +115,7 @@ impl TransportType {
 
     pub fn to_byte(&self) -> u8 {
         match self {
-            TransportType::UDP => 0u8,
+            TransportType::QUIC => 0u8,
             TransportType::TCP => 1u8,
             TransportType::RTP => 2u8,
             TransportType::UDT => 3u8,

@@ -23,7 +23,17 @@ blake3 = "1.0"
 ed25519-dalek = "1.0"
 x25519-dalek = "1.1"
 aes-gcm = "0.9"
+rcgen = "~0.8.4"
+structopt = "~0.3.15"
+thiserror = "1.0.23"
+webpki = "~0.21.3"
+quinn-proto = "0.7.3"
+futures-util = { version = "0.3.11", default-features = false }
 tokio = { version = "1", features = ["full"] }
+bytes = {version = "1.0.1", features = ["serde"] }
+serde = { version = "1.0.117", features = ["derive"] }
+rustls = { version = "~0.19.0", features = ["dangerous_configuration"] }
+quinn = { version = "~0.7.0", features = ["tls-rustls"], default-features = false }
 zeroize = { version = "1", features = ["zeroize_derive"] }
 chamomile_types = { version = "0.5", path = "./types" }
 

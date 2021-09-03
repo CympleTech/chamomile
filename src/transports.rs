@@ -6,6 +6,7 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 mod rtp;
 mod tcp;
 //mod udp;
+mod quic;
 mod udt;
 
 use crate::hole_punching::{Hole, DHT};
@@ -87,6 +88,7 @@ pub async fn start(
     match transport {
         //&TransportType::UDP => udp::UdpEndpoint::start(addr, recv_send, send_recv).await?,
         &TransportType::TCP => tcp::start(addr, recv_send, send_recv).await?,
+        &TransportType::QUIC => quic::start(addr, recv_send, send_recv).await?,
         _ => panic!("Not suppert, waiting"),
     }
 
