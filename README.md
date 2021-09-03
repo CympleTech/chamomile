@@ -8,7 +8,7 @@
 - Support permissionless network.
 - Support permissioned network (distributed network).
 - DHT-based & Relay connection.
-- Diff transports: UDP/TCP/UDP-Based Special Protocol.
+- Diff transports: QUIC(*Default*)/TCP/UDP-Based Special Protocol.
 
 ## Simple test.
 - A: `cargo run --example permissionless 0.0.0.0:8000`
