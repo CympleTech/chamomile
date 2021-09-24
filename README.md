@@ -14,6 +14,7 @@
 - A: `cargo run --example permissionless 0.0.0.0:8000`
 - B: `cargo run --example permissionless 0.0.0.0:8001 0.0.0.0:8000`
 - C: `cargo run --example permissionless 0.0.0.0:8002 0.0.0.0:8000`
+
 If not support `0.0.0.0` binding, you can change to `127.0.0.1`.
 
 ## Relay test.
