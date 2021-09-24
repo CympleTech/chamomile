@@ -451,8 +451,8 @@ pub async fn start(
                                     delivery_split!(data, delivery_length),
                                 ))
                                 .await;
-                            let _ = global.out_send(ReceiveMessage::Data(to, data)).await;
                         }
+                        let _ = global.out_send(ReceiveMessage::Data(to, data)).await;
                         continue;
                     }
 
