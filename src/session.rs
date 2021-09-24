@@ -573,7 +573,7 @@ impl Session {
                 } => v,
 
                 v = async {
-                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     Some(FutureResult::HeartBeat)
                 } => v,
                 v = async {

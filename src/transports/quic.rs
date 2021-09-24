@@ -318,20 +318,11 @@ async fn process_stream(
     Ok(())
 }
 
-/// Default for [`Config::idle_timeout`] (1 minute).
+/// Default for [`Config::idle_timeout`] (5s).
 ///
 /// This is based on average time in which routers would close the UDP mapping to the peer if they
 /// see no conversation between them.
-pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Default for [`Config::keep_alive_interval`] (20 seconds).
-pub const DEFAULT_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(20);
-
-/// Default for [`Config::upnp_lease_duration`] (2 minutes).
-pub const DEFAULT_UPNP_LEASE_DURATION: Duration = Duration::from_secs(120);
-
-/// Default for [`Config::min_retry_duration`] (30 seconds).
-pub const DEFAULT_MIN_RETRY_DURATION: Duration = Duration::from_secs(30);
+pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Configuration errors.
 #[derive(Debug, thiserror::Error)]
@@ -370,7 +361,7 @@ pub struct CertificateGenerationError(
     Box<dyn std::error::Error + Send + Sync>,
 );
 
-/// QuicP2p configurations
+/// Quic configurations
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq, StructOpt)]
 pub struct Config {
     /// Specify if port forwarding via UPnP should be done or not. This can be set to false if the network
@@ -399,35 +390,6 @@ pub struct Config {
     #[serde(default)]
     #[structopt(long, parse(try_from_str = parse_millis), value_name = "MILLIS")]
     pub idle_timeout: Option<Duration>,
-
-    /// Interval at which to send keep-alives to maintain otherwise idle connections.
-    ///
-    /// Keep-alives prevent otherwise idle connections from timing out.
-    ///
-    /// If unspecified, this will default to [`DEFAULT_KEEP_ALIVE_INTERVAL`].
-    #[serde(default)]
-    #[structopt(long, parse(try_from_str = parse_millis), value_name = "MILLIS")]
-    pub keep_alive_interval: Option<Duration>,
-
-    /// How long UPnP port mappings will last.
-    ///
-    /// Note that UPnP port mappings will be automatically renewed on this interval.
-    ///
-    /// If unspecified, this will default to [`DEFAULT_UPNP_LEASE_DURATION`], which should be
-    /// suitable in most cases but some routers may clear UPnP port mapping more frequently.
-    #[serde(default)]
-    #[structopt(long, parse(try_from_str = parse_millis), value_name = "MILLIS")]
-    pub upnp_lease_duration: Option<Duration>,
-
-    /// How long to retry establishing connections and sending messages.
-    ///
-    /// Retrying will continue for *at least* this duration, but potentially longer as an
-    /// in-progress back-off delay will not be interrupted.
-    ///
-    /// If unspecified, this will default to [`DEFAULT_MIN_RETRY_DURATION`].
-    #[serde(default)]
-    #[structopt(long, parse(try_from_str = parse_millis), value_name = "MILLIS")]
-    pub min_retry_duration: Option<Duration>,
 }
 
 fn parse_millis(millis: &str) -> std::result::Result<Duration, std::num::ParseIntError> {
@@ -444,24 +406,16 @@ pub(crate) struct InternalConfig {
     pub(crate) forward_port: bool,
     pub(crate) external_port: Option<u16>,
     pub(crate) external_ip: Option<IpAddr>,
-    pub(crate) upnp_lease_duration: Duration,
-    pub(crate) min_retry_duration: Duration,
 }
 
 impl InternalConfig {
     pub(crate) fn try_from_config(config: Config) -> Result<Self> {
         let idle_timeout = config.idle_timeout.unwrap_or(DEFAULT_IDLE_TIMEOUT);
-        let keep_alive_interval = config
-            .keep_alive_interval
-            .unwrap_or(DEFAULT_KEEP_ALIVE_INTERVAL);
-        let upnp_lease_duration = config
-            .upnp_lease_duration
-            .unwrap_or(DEFAULT_UPNP_LEASE_DURATION);
-        let min_retry_duration = config
-            .min_retry_duration
-            .unwrap_or(DEFAULT_MIN_RETRY_DURATION);
 
-        let transport = Self::new_transport_config(idle_timeout, keep_alive_interval);
+        let mut tconfig = quinn::TransportConfig::default();
+        let _ = tconfig.max_idle_timeout(Some(idle_timeout)).ok();
+        let transport = Arc::new(tconfig);
+
         let client = Self::new_client_config(transport.clone());
         let server = Self::new_server_config(transport)?;
 
@@ -471,24 +425,7 @@ impl InternalConfig {
             forward_port: config.forward_port,
             external_port: config.external_port,
             external_ip: config.external_ip,
-            upnp_lease_duration,
-            min_retry_duration,
         })
-    }
-
-    fn new_transport_config(
-        idle_timeout: Duration,
-        keep_alive_interval: Duration,
-    ) -> Arc<quinn::TransportConfig> {
-        let mut config = quinn::TransportConfig::default();
-
-        // QUIC encodes idle timeout in a varint with max size 2^62, which is below what can be
-        // represented by Duration. For now, just ignore too large idle timeouts.
-        // FIXME: don't ignore (e.g. clamp/error/panic)?
-        let _ = config.max_idle_timeout(Some(idle_timeout)).ok();
-        let _ = config.keep_alive_interval(Some(keep_alive_interval));
-
-        Arc::new(config)
     }
 
     fn new_client_config(transport: Arc<quinn::TransportConfig>) -> quinn::ClientConfig {
