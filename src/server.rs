@@ -439,6 +439,23 @@ pub async fn start(
                     global.peer_list.write().await.peer_disconnect(&addr).await;
                 }
                 Some(SendMessage::Data(tid, to, data)) => {
+                    // check if send to self. better circle for application.
+                    if &to == global.peer_id() {
+                        info!("CHAMOMILE: DATA TO SELF.");
+                        if tid != 0 {
+                            let _ = global
+                                .out_send(ReceiveMessage::Delivery(
+                                    DeliveryType::Data,
+                                    tid,
+                                    true,
+                                    delivery_split!(data, delivery_length),
+                                ))
+                                .await;
+                            let _ = global.out_send(ReceiveMessage::Data(to, data)).await;
+                        }
+                        continue;
+                    }
+
                     if let Some((sender, _, is_it)) = global.peer_list.read().await.get(&to) {
                         if is_it {
                             let _ = sender.send(SessionMessage::Data(tid, data)).await;

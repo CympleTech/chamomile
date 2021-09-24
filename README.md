@@ -1,4 +1,4 @@
-[![crate](https://img.shields.io/badge/crates.io-v0.6.1-green.svg)](https://crates.io/crates/chamomile) [![doc](https://img.shields.io/badge/docs.rs-v0.6.1-blue.svg)](https://docs.rs/chamomile)
+[![crate](https://img.shields.io/badge/crates.io-v0.6.2-green.svg)](https://crates.io/crates/chamomile) [![doc](https://img.shields.io/badge/docs.rs-v0.6.2-blue.svg)](https://docs.rs/chamomile)
 
 # Chamomile
 *Build a robust stable connection on p2p network*
@@ -14,6 +14,7 @@
 - A: `cargo run --example permissionless 0.0.0.0:8000`
 - B: `cargo run --example permissionless 0.0.0.0:8001 0.0.0.0:8000`
 - C: `cargo run --example permissionless 0.0.0.0:8002 0.0.0.0:8000`
+If not support `0.0.0.0` binding, you can change to `127.0.0.1`.
 
 ## Relay test.
 - A: `cargo run --example relay 192.168.xx.xx:8000`

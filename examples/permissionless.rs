@@ -62,19 +62,26 @@ async fn main() {
 
     while let Some(message) = recv.recv().await {
         match message {
-            ReceiveMessage::Data(peer_id, bytes) => {
+            ReceiveMessage::Data(remote_id, bytes) => {
                 println!(
                     "Recv permissionless data from: {}, {}-{:?}",
-                    peer_id.short_show(),
+                    remote_id.short_show(),
                     bytes.len(),
                     bytes
                 );
+
+                // only for test circle to send-self.
+                if bytes != vec![9, 9, 9, 9] {
+                    let _ = send
+                        .send(SendMessage::Data(9999, peer_id, vec![9, 9, 9, 9]))
+                        .await;
+                }
             }
             ReceiveMessage::Stream(..) => {
                 panic!("Nerver here (stream)");
             }
             ReceiveMessage::StableConnect(from, data) => {
-                println!("Recv peer what to build a stable connected: {:?}", data);
+                println!("Recv peer want to build a stable connected: {:?}", data);
 
                 let tid = 2u64;
 
