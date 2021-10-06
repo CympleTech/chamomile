@@ -250,18 +250,6 @@ async fn process_stream(
         loop {
             match self_receiver.recv().await {
                 Some(msg) => {
-                    // info!("GOT OUTSIDE MESSAGE");
-                    // match msg {
-                    //     EndpointMessage::Close => info!("===== close====="),
-                    //     EndpointMessage::Handshake(..) => info!("===== handshake ====="),
-                    //     EndpointMessage::DHT(..) => info!("===== DHT ====="),
-                    //     EndpointMessage::Hole(..) => info!("===== hole ====="),
-                    //     EndpointMessage::HoleConnect => info!("===== hole connect ====="),
-                    //     EndpointMessage::Data(..) => info!("===== data ====="),
-                    //     EndpointMessage::RelayHandshake(..) => info!("===== relay handshake"),
-                    //     EndpointMessage::RelayData(..) => info!("===== relay data ====="),
-                    // }
-
                     let mut writer = connection.open_uni().await.map_err(|_e| ())?;
                     let is_close = match msg {
                         EndpointMessage::Close => true,
@@ -269,7 +257,7 @@ async fn process_stream(
                     };
 
                     let _ = writer.write_all(&msg.to_bytes()).await;
-                    writer.finish();
+                    let _ = writer.finish().await;
 
                     if is_close {
                         break;
@@ -353,13 +341,7 @@ impl From<rustls::TLSError> for ConfigError {
 /// An error that occured when generating the TLS certificate.
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
-pub struct CertificateGenerationError(
-    // Though there are multiple different errors that could occur by the code, since we are
-    // generating a certificate, they should only really occur due to buggy implementations. As
-    // such, we don't attempt to expose more detail than 'something went wrong', which will
-    // hopefully be enough for someone to file a bug report...
-    Box<dyn std::error::Error + Send + Sync>,
-);
+pub struct CertificateGenerationError(Box<dyn std::error::Error + Send + Sync>);
 
 /// Quic configurations
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq, StructOpt)]
