@@ -15,8 +15,8 @@ use super::{
 const DOMAIN: &str = "chamomile.quic";
 const SIZE_LIMIT: usize = 67108864; // 64 * 1024 * 1024 = 64 MB
 
-/// Init and run a TcpEndpoint object.
-/// You need send a socketaddr str and tcp send message's addr,
+/// Init and run a QuicEndpoint object.
+/// You need send a socketaddr str and quic send message's addr,
 /// and receiver outside message addr.
 pub async fn start(
     bind_addr: SocketAddr,
@@ -30,7 +30,7 @@ pub async fn start(
 
     let (endpoint, mut incoming) = builder.bind(&bind_addr).unwrap();
 
-    // TCP listen incoming.
+    // QUIC listen incoming.
     let out_send = send.clone();
     tokio::spawn(async move {
         loop {
@@ -59,7 +59,7 @@ pub async fn start(
         }
     });
 
-    // TCP listen from outside.
+    // QUIC listen from outside.
     tokio::spawn(run_self_recv(endpoint, config.client, recv, send));
 
     Ok(())
