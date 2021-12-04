@@ -25,10 +25,7 @@ pub async fn start(
 ) -> tokio::io::Result<SocketAddr> {
     let config = InternalConfig::try_from_config(Default::default()).unwrap();
 
-    let mut builder = quinn::Endpoint::builder();
-    let _ = builder.listen(config.server.clone());
-
-    let (endpoint, mut incoming) = builder.bind(&bind_addr).unwrap();
+    let (endpoint, mut incoming) = quinn::Endpoint::server(config.server.clone(), bind_addr)?;
     let addr = endpoint.local_addr()?;
     info!("QUIC listening at: {:?}", addr);
 
@@ -88,7 +85,7 @@ async fn dht_connect_to(
     remote_pk: RemotePublic,
     session_key: SessionKey,
 ) -> Result<()> {
-    let conn = connect_to(connect, remote_pk).await?;
+    let conn = connect_to(connect, remote_pk).await.unwrap();
 
     let (self_sender, self_receiver) = new_endpoint_channel();
     let (out_sender, out_receiver) = new_endpoint_channel();
@@ -127,7 +124,7 @@ async fn run_self_recv(
     while let Some(m) = recv.recv().await {
         match m {
             TransportSendMessage::Connect(addr, remote_pk, session_key) => {
-                let connect = endpoint.connect_with(client_cfg.clone(), &addr, DOMAIN);
+                let connect = endpoint.connect_with(client_cfg.clone(), addr, DOMAIN);
                 info!("QUIC dht connect to: {:?}", addr);
                 tokio::spawn(dht_connect_to(
                     connect,
@@ -137,7 +134,7 @@ async fn run_self_recv(
                 ));
             }
             TransportSendMessage::StableConnect(out_sender, self_receiver, addr, remote_pk) => {
-                let connect = endpoint.connect_with(client_cfg.clone(), &addr, DOMAIN);
+                let connect = endpoint.connect_with(client_cfg.clone(), addr, DOMAIN);
                 info!("QUIC stable connect to: {:?}", addr);
                 tokio::spawn(stable_connect_to(
                     connect,
@@ -314,37 +311,6 @@ async fn process_stream(
 /// see no conversation between them.
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Configuration errors.
-#[derive(Debug, thiserror::Error)]
-pub enum ConfigError {
-    /// An error occurred when generating the TLS certificate.
-    #[error("An error occurred when generating the TLS certificate")]
-    CertificateGeneration(#[from] CertificateGenerationError),
-}
-
-impl From<rcgen::RcgenError> for ConfigError {
-    fn from(error: rcgen::RcgenError) -> Self {
-        Self::CertificateGeneration(CertificateGenerationError(error.into()))
-    }
-}
-
-impl From<quinn::ParseError> for ConfigError {
-    fn from(error: quinn::ParseError) -> Self {
-        Self::CertificateGeneration(CertificateGenerationError(error.into()))
-    }
-}
-
-impl From<rustls::TLSError> for ConfigError {
-    fn from(error: rustls::TLSError) -> Self {
-        Self::CertificateGeneration(CertificateGenerationError(error.into()))
-    }
-}
-
-/// An error that occured when generating the TLS certificate.
-#[derive(Debug, thiserror::Error)]
-#[error(transparent)]
-pub struct CertificateGenerationError(Box<dyn std::error::Error + Send + Sync>);
-
 /// Quic configurations
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq, StructOpt)]
 pub struct Config {
@@ -394,10 +360,14 @@ pub(crate) struct InternalConfig {
 
 impl InternalConfig {
     pub(crate) fn try_from_config(config: Config) -> Result<Self> {
-        let idle_timeout = config.idle_timeout.unwrap_or(DEFAULT_IDLE_TIMEOUT);
+        let idle_timeout =
+            quinn::IdleTimeout::try_from(config.idle_timeout.unwrap_or(DEFAULT_IDLE_TIMEOUT))
+                .map_err(|_e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, "rcgen generate failure.")
+                })?;
 
         let mut tconfig = quinn::TransportConfig::default();
-        let _ = tconfig.max_idle_timeout(Some(idle_timeout)).ok();
+        let _ = tconfig.max_idle_timeout(Some(idle_timeout));
         let transport = Arc::new(tconfig);
 
         let client = Self::new_client_config(transport.clone());
@@ -413,29 +383,36 @@ impl InternalConfig {
     }
 
     fn new_client_config(transport: Arc<quinn::TransportConfig>) -> quinn::ClientConfig {
-        let mut config = quinn::ClientConfig {
-            transport,
-            ..Default::default()
-        };
-        Arc::make_mut(&mut config.crypto)
+        let mut client_crypto = rustls::ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth();
+
+        client_crypto
             .dangerous()
             .set_certificate_verifier(Arc::new(SkipCertificateVerification));
+
+        let mut config = quinn::ClientConfig::new(Arc::new(client_crypto));
+        config.transport = transport;
         config
     }
 
     fn new_server_config(transport: Arc<quinn::TransportConfig>) -> Result<quinn::ServerConfig> {
         let (cert, key) = Self::generate_cert()?;
 
-        let mut config = quinn::ServerConfig::default();
+        let server_crypto = rustls::ServerConfig::builder()
+            .with_safe_defaults()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert], key)
+            .map_err(|_e| {
+                std::io::Error::new(std::io::ErrorKind::Other, "server config failure.")
+            })?;
+        let mut config = quinn::ServerConfig::with_crypto(Arc::new(server_crypto));
         config.transport = transport;
-
-        let mut config = quinn::ServerConfigBuilder::new(config);
-        let _ = config.certificate(quinn::CertificateChain::from_certs(vec![cert]), key);
-
-        Ok(config.build())
+        Ok(config)
     }
 
-    fn generate_cert() -> Result<(quinn::Certificate, quinn::PrivateKey)> {
+    fn generate_cert() -> Result<(rustls::Certificate, rustls::PrivateKey)> {
         let cert = rcgen::generate_simple_self_signed(vec![DOMAIN.to_string()]).map_err(|_e| {
             std::io::Error::new(std::io::ErrorKind::Other, "rcgen generate failure.")
         })?;
@@ -445,27 +422,22 @@ impl InternalConfig {
         })?;
         let key_der = cert.serialize_private_key_der();
 
-        Ok((
-            quinn::Certificate::from_der(&cert_der).map_err(|_e| {
-                std::io::Error::new(std::io::ErrorKind::Other, "cert_cer deserialize failure.")
-            })?,
-            quinn::PrivateKey::from_der(&key_der).map_err(|_e| {
-                std::io::Error::new(std::io::ErrorKind::Other, "cert_psk deserialize failure.")
-            })?,
-        ))
+        Ok((rustls::Certificate(cert_der), rustls::PrivateKey(key_der)))
     }
 }
 
 struct SkipCertificateVerification;
 
-impl rustls::ServerCertVerifier for SkipCertificateVerification {
+impl rustls::client::ServerCertVerifier for SkipCertificateVerification {
     fn verify_server_cert(
         &self,
-        _roots: &rustls::RootCertStore,
-        _presented_certs: &[rustls::Certificate],
-        _dns_name: webpki::DNSNameRef,
-        _ocsp_response: &[u8],
-    ) -> std::result::Result<rustls::ServerCertVerified, rustls::TLSError> {
-        Ok(rustls::ServerCertVerified::assertion())
+        _: &rustls::Certificate,
+        _: &[rustls::Certificate],
+        _: &rustls::ServerName,
+        _: &mut dyn Iterator<Item = &[u8]>,
+        _: &[u8],
+        _: std::time::SystemTime,
+    ) -> std::result::Result<rustls::client::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::ServerCertVerified::assertion())
     }
 }

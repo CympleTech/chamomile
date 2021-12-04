@@ -19,21 +19,21 @@ toml = "0.5"
 rand = "0.7"
 log = "0.4"
 bit-vec = "0.6"
-blake3 = "1.0"
+blake3 = "1.2"
 ed25519-dalek = "1.0"
-x25519-dalek = "1.1"
+x25519-dalek = "1.2"
 aes-gcm = "0.9"
 rcgen = "0.8"
 structopt = "0.3"
 thiserror = "1.0"
-webpki = "0.21"
-quinn-proto = "0.7"
+webpki = "0.22"
+quinn-proto = "0.8"
 futures-util = { version = "0.3", default-features = false }
 tokio = { version = "1", features = ["full"] }
 bytes = {version = "1.0", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
-rustls = { version = "0.19", features = ["dangerous_configuration"] }
-quinn = { version = "0.7", features = ["tls-rustls"], default-features = false }
+rustls = { version = "0.20", features = ["dangerous_configuration"] }
+quinn = { version = "0.8", features = ["tls-rustls"], default-features = false }
 zeroize = { version = "1", features = ["zeroize_derive"] }
 chamomile_types = { version = "0.6", path = "./types" }
 

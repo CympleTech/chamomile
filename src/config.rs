@@ -45,7 +45,7 @@ impl Config {
         Self {
             db_dir: PathBuf::from("./"),
             addr: addr,
-            transport: "quic".to_owned(), // TODO Default
+            transport: "tcp".to_owned(), // TODO Default quic
             allowlist: vec![],
             blocklist: vec![],
             allow_peer_list: vec![],
