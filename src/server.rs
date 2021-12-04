@@ -80,12 +80,12 @@ pub async fn start(
     )));
 
     let default_transport = TransportType::from_str(&transport);
-    let peer = Peer::new(key.peer_id(), addr, default_transport, true);
-
     let mut transports: HashMap<TransportType, Sender<TransportSendMessage>> = HashMap::new();
-    let (trans_send, mut trans_recv) = transport_start(peer.transport(), *peer.addr())
+    let (local_addr, trans_send, mut trans_recv) = transport_start(&default_transport, addr)
         .await
         .expect("Transport binding failure!");
+    let peer = Peer::new(key.peer_id(), local_addr, default_transport, true);
+
     transports.insert(default_transport, trans_send.clone());
     let _transports = Arc::new(RwLock::new(transports)); // TODO more about multiple transports.
 

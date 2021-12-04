@@ -20,11 +20,13 @@ pub async fn start(
     bind_addr: SocketAddr,
     send: Sender<TransportRecvMessage>,
     recv: Receiver<TransportSendMessage>,
-) -> Result<()> {
+) -> Result<SocketAddr> {
     let listener = TcpListener::bind(bind_addr).await.map_err(|e| {
-        error!("Chamomile TCP listen {:?}", e);
+        error!("TCP listen {:?}", e);
         std::io::Error::new(std::io::ErrorKind::Other, "TCP Listen")
     })?;
+    let addr = listener.local_addr()?;
+    info!("TCP listening at: {:?}", addr);
 
     // TCP listen incoming.
     tokio::spawn(run_listen(listener, send.clone()));
@@ -32,7 +34,7 @@ pub async fn start(
     // TCP listen from outside.
     tokio::spawn(run_self_recv(recv, send));
 
-    Ok(())
+    Ok(addr)
 }
 
 async fn run_listen(listener: TcpListener, out_send: Sender<TransportRecvMessage>) -> Result<()> {

@@ -81,18 +81,22 @@ pub enum EndpointMessage {
 pub async fn start(
     transport: &TransportType,
     addr: SocketAddr,
-) -> Result<(Sender<TransportSendMessage>, Receiver<TransportRecvMessage>)> {
+) -> Result<(
+    SocketAddr,
+    Sender<TransportSendMessage>,
+    Receiver<TransportRecvMessage>,
+)> {
     let (send_send, send_recv) = new_transport_send_channel();
     let (recv_send, recv_recv) = new_transport_recv_channel();
 
-    match transport {
+    let local_addr = match transport {
         //&TransportType::UDP => udp::UdpEndpoint::start(addr, recv_send, send_recv).await?,
         &TransportType::TCP => tcp::start(addr, recv_send, send_recv).await?,
         &TransportType::QUIC => quic::start(addr, recv_send, send_recv).await?,
         _ => panic!("Not suppert, waiting"),
-    }
+    };
 
-    Ok((send_send, recv_recv))
+    Ok((local_addr, send_send, recv_recv))
 }
 
 /// Rtemote Public Info, include local transport and public key bytes, session_key out_bytes.

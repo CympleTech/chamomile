@@ -22,13 +22,15 @@ pub async fn start(
     bind_addr: SocketAddr,
     send: Sender<TransportRecvMessage>,
     recv: Receiver<TransportSendMessage>,
-) -> tokio::io::Result<()> {
+) -> tokio::io::Result<SocketAddr> {
     let config = InternalConfig::try_from_config(Default::default()).unwrap();
 
     let mut builder = quinn::Endpoint::builder();
     let _ = builder.listen(config.server.clone());
 
     let (endpoint, mut incoming) = builder.bind(&bind_addr).unwrap();
+    let addr = endpoint.local_addr()?;
+    info!("QUIC listening at: {:?}", addr);
 
     // QUIC listen incoming.
     let out_send = send.clone();
@@ -62,7 +64,7 @@ pub async fn start(
     // QUIC listen from outside.
     tokio::spawn(run_self_recv(endpoint, config.client, recv, send));
 
-    Ok(())
+    Ok(addr)
 }
 
 async fn connect_to(
