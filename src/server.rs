@@ -86,16 +86,14 @@ pub async fn start(
         .expect("Transport binding failure!");
     peer.id = key.peer_id();
     peer.socket = local_addr;
-
-    transports.insert(peer.transport, trans_send.clone());
-    let _transports = Arc::new(RwLock::new(transports)); // TODO more about multiple transports.
+    transports.insert(peer.transport, trans_send);
 
     let global = Arc::new(Global {
         peer,
         key,
         out_sender,
         delivery_length,
-        transport_sender: trans_send,
+        transports: transports,
         buffer: Arc::new(RwLock::new(Buffer::init())),
         peer_list: peer_list.clone(),
         is_relay_data: !permission,
@@ -105,12 +103,10 @@ pub async fn start(
     for a in peer_list.read().await.bootstrap() {
         let (session_key, remote_pk) = global.generate_remote();
         let _ = global
-            .transport_sender
-            .send(TransportSendMessage::Connect(
-                a.socket,
-                remote_pk,
-                session_key,
-            ))
+            .trans_send(
+                &a.transport,
+                TransportSendMessage::Connect(a.socket, remote_pk, session_key),
+            )
             .await;
     }
 
@@ -442,11 +438,10 @@ pub async fn start(
                     debug!("Outside: DHT Connect to {}.", peer.socket);
                     let (session_key, remote_pk) = global.generate_remote();
                     let _ = global
-                        .trans_send(TransportSendMessage::Connect(
-                            peer.socket,
-                            remote_pk,
-                            session_key,
-                        ))
+                        .trans_send(
+                            &peer.transport,
+                            TransportSendMessage::Connect(peer.socket, remote_pk, session_key),
+                        )
                         .await;
                 }
                 Some(SendMessage::DisConnect(peer)) => {
@@ -548,12 +543,10 @@ pub async fn start(
                     for a in global.peer_list.read().await.bootstrap() {
                         let (session_key, remote_pk) = global.generate_remote();
                         let _ = global
-                            .transport_sender
-                            .send(TransportSendMessage::Connect(
-                                a.socket,
-                                remote_pk,
-                                session_key,
-                            ))
+                            .trans_send(
+                                &a.transport,
+                                TransportSendMessage::Connect(a.socket, remote_pk, session_key),
+                            )
                             .await;
                     }
                 }

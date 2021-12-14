@@ -1,10 +1,15 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::{
     io::Result,
     sync::{mpsc::Sender, RwLock},
 };
 
-use chamomile_types::{message::ReceiveMessage, types::new_io_error, Peer, PeerId};
+use chamomile_types::{
+    message::ReceiveMessage,
+    types::{new_io_error, TransportType},
+    Peer, PeerId,
+};
 
 use crate::buffer::Buffer;
 use crate::kad::KadValue;
@@ -15,7 +20,7 @@ use crate::transports::{RemotePublic, TransportSendMessage};
 pub(crate) struct Global {
     pub peer: Peer,
     pub key: Keypair,
-    pub transport_sender: Sender<TransportSendMessage>,
+    pub transports: HashMap<TransportType, Sender<TransportSendMessage>>,
     pub out_sender: Sender<ReceiveMessage>,
     pub peer_list: Arc<RwLock<PeerList>>,
     pub buffer: Arc<RwLock<Buffer>>,
@@ -63,11 +68,21 @@ impl Global {
     }
 
     #[inline]
-    pub async fn trans_send(&self, msg: TransportSendMessage) -> Result<()> {
-        self.transport_sender
-            .send(msg)
-            .await
-            .map_err(|_e| new_io_error("Transport missing"))
+    pub async fn trans_send(
+        &self,
+        trans_type: &TransportType,
+        msg: TransportSendMessage,
+    ) -> Result<()> {
+        if let Some(sender) = self.transports.get(trans_type) {
+            sender
+                .send(msg)
+                .await
+                .map_err(|_e| new_io_error("Transport missing"))
+        } else {
+            // start new transport to send it.
+            // TOOD
+            Err(new_io_error("Transport missing"))
+        }
     }
 
     #[inline]

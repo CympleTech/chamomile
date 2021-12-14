@@ -36,12 +36,15 @@ pub(crate) async fn direct_stable(
 
     // 1. send stable connect.
     global
-        .trans_send(TransportSendMessage::StableConnect(
-            stream_sender.clone(),
-            endpoint_receiver,
-            to.socket,
-            remote_pk,
-        ))
+        .trans_send(
+            &to.transport,
+            TransportSendMessage::StableConnect(
+                stream_sender.clone(),
+                endpoint_receiver,
+                to.socket,
+                remote_pk,
+            ),
+        )
         .await?;
 
     // 2. waiting remote send remote info.
@@ -725,20 +728,17 @@ impl Session {
             }
             EndpointMessage::DHT(DHT(peers)) => {
                 if peers.len() > 0 {
-                    let sender = &self.global.transport_sender;
-
                     for p in peers {
                         if &p.id != self.my_id()
                             && !self.global.peer_list.read().await.contains(&p.id)
                         {
                             let (session_key, remote_pk) = self.global.generate_remote();
-                            //if let Some(sender) = self.global.transports.read().await.get(p.transport()) {}
-                            let _ = sender
-                                .send(TransportSendMessage::Connect(
-                                    p.socket,
-                                    remote_pk,
-                                    session_key,
-                                ))
+                            let _ = self
+                                .global
+                                .trans_send(
+                                    &p.transport,
+                                    TransportSendMessage::Connect(p.socket, remote_pk, session_key),
+                                )
                                 .await;
                         }
                     }
