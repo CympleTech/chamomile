@@ -5,10 +5,9 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use tokio::{fs, io::Result, sync::mpsc::Sender};
 
-use chamomile_types::types::{new_io_error, PeerId};
+use chamomile_types::{types::new_io_error, Peer, PeerId};
 
 use crate::kad::{DoubleKadTree, KadValue};
-use crate::peer::Peer;
 use crate::session::SessionMessage;
 use crate::transports::EndpointMessage;
 
@@ -16,8 +15,7 @@ use crate::transports::EndpointMessage;
 /// contains: dhts(KadTree) & stables(HashMap)
 pub(crate) struct PeerList {
     save_path: PathBuf,
-    bootstraps: Vec<SocketAddr>,
-    allows: (Vec<PeerId>, Vec<SocketAddr>),
+    allows: Vec<Peer>,
     blocks: (Vec<PeerId>, Vec<IpAddr>),
 
     /// PeerId => KadValue(Sender<Sessionmessage>, Sender<EndpointMessage>, Peer)
@@ -29,8 +27,8 @@ pub(crate) struct PeerList {
 impl PeerList {
     pub async fn save(&self) {
         let mut file_string = String::new();
-        for addr in &self.bootstraps {
-            file_string = format!("{}\n{}", file_string, addr.to_string());
+        for addr in &self.allows {
+            file_string = format!("{}\n{}", file_string, addr.to_multiaddr_string());
         }
         let _ = fs::write(&self.save_path, file_string).await;
     }
@@ -38,26 +36,30 @@ impl PeerList {
     pub fn load(
         peer_id: PeerId,
         save_path: PathBuf,
-        allows: (Vec<PeerId>, Vec<SocketAddr>),
+        mut allows: Vec<Peer>,
         blocks: (Vec<PeerId>, Vec<IpAddr>),
     ) -> Self {
         let default_socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
-        let mut bootstraps = allows.1.clone();
         match std::fs::File::open(&save_path) {
             Ok(file) => {
                 let addrs = std::io::BufReader::new(file).lines();
                 for addr in addrs {
                     if let Ok(addr) = addr {
-                        if let Ok(socket) = addr.parse::<SocketAddr>() {
-                            if !bootstraps.contains(&socket) {
-                                bootstraps.push(socket);
+                        if let Ok(p) = Peer::from_multiaddr_string(&addr) {
+                            let mut is_new = true;
+                            for ap in allows.iter() {
+                                if ap.socket == p.socket {
+                                    is_new = false;
+                                }
+                            }
+                            if is_new {
+                                allows.push(p);
                             }
                         }
                     }
                 }
                 PeerList {
                     save_path,
-                    bootstraps,
                     allows: allows,
                     blocks: blocks,
                     dhts: DoubleKadTree::new(peer_id, default_socket),
@@ -66,7 +68,6 @@ impl PeerList {
             }
             Err(_) => PeerList {
                 save_path,
-                bootstraps,
                 allows: allows,
                 blocks: blocks,
                 dhts: DoubleKadTree::new(peer_id, default_socket),
@@ -181,7 +182,7 @@ impl PeerList {
             }
             if let Some((KadValue(_, _, peer), is_it)) = self.dhts.search(&key) {
                 if is_it {
-                    peers.insert(peer.id(), peer);
+                    peers.insert(&peer.id, peer);
                 }
             }
         }
@@ -208,14 +209,14 @@ impl PeerList {
     /// 1. remove from bootstrap.
     pub async fn peer_disconnect(&mut self, addr: &SocketAddr) {
         let mut d: Option<usize> = None;
-        for (k, i) in self.bootstraps.iter().enumerate() {
-            if i == addr {
+        for (k, i) in self.allows.iter().enumerate() {
+            if &i.socket == addr {
                 d = Some(k);
             }
         }
 
         if let Some(i) = d {
-            self.bootstraps.remove(i);
+            self.allows.remove(i);
             self.save().await;
         }
     }
@@ -231,8 +232,8 @@ impl PeerList {
     /// 2. add to kad.
     pub async fn add_dht(&mut self, v: KadValue) -> bool {
         // 1. add to boostraps.
-        if v.2.is_pub() && !self.bootstraps.contains(v.2.addr()) {
-            self.add_bootstrap(v.2.addr().clone());
+        if v.2.is_pub && !self.allows.contains(&v.2) {
+            self.add_bootstrap(v.2);
             self.save().await;
         }
 
@@ -289,50 +290,43 @@ impl PeerList {
 
 // Block and allow list.
 impl PeerList {
-    pub fn bootstrap(&self) -> &Vec<SocketAddr> {
-        &self.bootstraps
+    pub fn bootstrap(&self) -> Vec<&Peer> {
+        self.allows
+            .iter()
+            .filter_map(|p| if p.effective_socket() { Some(p) } else { None })
+            .collect()
     }
 
-    pub fn add_bootstrap(&mut self, addr: SocketAddr) {
-        if !self.bootstraps.contains(&addr) {
-            self.bootstraps.push(addr);
+    pub fn add_bootstrap(&mut self, peer: Peer) {
+        let mut is_new = true;
+        for ap in self.allows.iter() {
+            if ap.socket == peer.socket {
+                is_new = false;
+            }
+        }
+        if is_new {
+            self.allows.push(peer);
         }
     }
 
-    pub fn _is_allow_peer(&self, peer: &PeerId) -> bool {
-        self.allows.0.contains(peer)
-    }
-
-    pub fn _is_allow_addr(&self, addr: &SocketAddr) -> bool {
-        self.allows.1.contains(addr)
-    }
-
-    pub fn add_allow_peer(&mut self, peer: PeerId) {
-        if !self.allows.0.contains(&peer) {
-            self.allows.0.push(peer)
+    pub fn add_allow_peer(&mut self, pid: PeerId) {
+        let mut is_new = true;
+        for ap in self.allows.iter() {
+            if ap.id == pid {
+                is_new = false;
+            }
+        }
+        if is_new {
+            self.allows.push(Peer::peer(pid));
         }
     }
 
-    pub fn _add_allow_addr(&mut self, addr: SocketAddr) {
-        if !self.allows.1.contains(&addr) {
-            self.allows.1.push(addr)
-        }
-    }
-
-    pub fn remove_allow_peer(&mut self, peer: &PeerId) -> Option<PeerId> {
-        let pos = match self.allows.0.iter().position(|x| *x == *peer) {
+    pub fn remove_allow_peer(&mut self, peer: &PeerId) -> Option<Peer> {
+        let pos = match self.allows.iter().position(|x| &x.id == peer) {
             Some(x) => x,
             None => return None,
         };
-        Some(self.allows.0.remove(pos))
-    }
-
-    pub fn _remove_allow_addr(&mut self, addr: &SocketAddr) -> Option<SocketAddr> {
-        let pos = match self.allows.1.iter().position(|x| *x == *addr) {
-            Some(x) => x,
-            None => return None,
-        };
-        Some(self.allows.1.remove(pos))
+        Some(self.allows.remove(pos))
     }
 
     pub fn is_block_peer(&self, peer: &PeerId) -> bool {

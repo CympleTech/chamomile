@@ -1,9 +1,11 @@
 use std::io::Result;
 use std::net::SocketAddr;
 
-use chamomile_types::types::{new_io_error, PeerId, TransportType};
+use chamomile_types::{
+    peer::{Peer, PEER_LENGTH},
+    types::{new_io_error, PeerId, TransportType},
+};
 
-use super::peer::{Peer, PEER_LENGTH};
 use super::peer_list::PeerList;
 
 pub enum Hole {
@@ -65,15 +67,15 @@ impl DHT {
 }
 
 pub fn nat(mut remote_addr: SocketAddr, mut local: Peer) -> Peer {
-    local.set_is_pub(remote_addr.port() == local.addr().port());
-    match local.transport() {
+    local.is_pub = remote_addr.port() == local.socket.port();
+    match local.transport {
         TransportType::TCP => {
-            remote_addr.set_port(local.addr().port()); // TODO TCP hole punching
+            remote_addr.set_port(local.socket.port()); // TODO TCP hole punching
         }
         _ => {}
     }
 
-    local.set_addr(remote_addr);
+    local.socket = remote_addr;
     local
 }
 

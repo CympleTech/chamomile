@@ -12,6 +12,7 @@ use chamomile_types::{
     delivery_split,
     message::{DeliveryType, ReceiveMessage, SendMessage, StateRequest, StateResponse},
     types::{Broadcast, PeerId, TransportType},
+    Peer,
 };
 
 use crate::buffer::Buffer;
@@ -20,7 +21,6 @@ use crate::global::Global;
 use crate::hole_punching::{nat, DHT};
 use crate::kad::KadValue;
 use crate::keys::{KeyType, Keypair};
-use crate::peer::Peer;
 use crate::peer_list::PeerList;
 use crate::primitives::{STORAGE_KEY_KEY, STORAGE_NAME, STORAGE_PEER_LIST_KEY};
 use crate::session::{
@@ -40,9 +40,8 @@ pub async fn start(
 ) -> Result<PeerId> {
     let Config {
         mut db_dir,
-        addr,
-        transport,
-        allowlist,
+        mut peer,
+        mut allowlist,
         blocklist,
         allow_peer_list,
         block_peer_list,
@@ -50,6 +49,7 @@ pub async fn start(
         only_stable_data,
         delivery_length,
     } = config;
+    allowlist.extend(allow_peer_list.iter().map(|pid| Peer::peer(*pid)));
     db_dir.push(STORAGE_NAME);
     if !db_dir.exists() {
         fs::create_dir_all(&db_dir).await?;
@@ -75,18 +75,19 @@ pub async fn start(
     let peer_list = Arc::new(RwLock::new(PeerList::load(
         peer_id,
         peer_list_path,
-        (allow_peer_list, allowlist),
+        allowlist,
         (block_peer_list, blocklist),
     )));
 
-    let default_transport = TransportType::from_str(&transport);
     let mut transports: HashMap<TransportType, Sender<TransportSendMessage>> = HashMap::new();
-    let (local_addr, trans_send, mut trans_recv) = transport_start(&default_transport, addr)
+
+    let (local_addr, trans_send, mut trans_recv) = transport_start(&peer)
         .await
         .expect("Transport binding failure!");
-    let peer = Peer::new(key.peer_id(), local_addr, default_transport, true);
+    peer.id = key.peer_id();
+    peer.socket = local_addr;
 
-    transports.insert(default_transport, trans_send.clone());
+    transports.insert(peer.transport, trans_send.clone());
     let _transports = Arc::new(RwLock::new(transports)); // TODO more about multiple transports.
 
     let global = Arc::new(Global {
@@ -105,7 +106,11 @@ pub async fn start(
         let (session_key, remote_pk) = global.generate_remote();
         let _ = global
             .transport_sender
-            .send(TransportSendMessage::Connect(*a, remote_pk, session_key))
+            .send(TransportSendMessage::Connect(
+                a.socket,
+                remote_pk,
+                session_key,
+            ))
             .await;
     }
 
@@ -155,7 +160,7 @@ pub async fn start(
 
                     let remote_id = remote_key.peer_id();
                     let remote_peer = nat(addr, remote_peer);
-                    debug!("Incoming remote NAT addr: {}", remote_peer.addr());
+                    debug!("Incoming remote NAT addr: {}", remote_peer.socket);
 
                     // 2. check is self or is block peer.
                     if &remote_id == inner_global.peer_id()
@@ -254,9 +259,9 @@ pub async fn start(
     tokio::spawn(async move {
         loop {
             match self_receiver.recv().await {
-                Some(SendMessage::StableConnect(tid, to, socket, data)) => {
-                    debug!("Outside: StableConnect to {}.", to.short_show());
-                    if &to == global.peer_id() {
+                Some(SendMessage::StableConnect(tid, to, data)) => {
+                    debug!("Outside: StableConnect to {}.", to.id.short_show());
+                    if &to.id == global.peer_id() {
                         warn!("CHAMOMILE: STABLE CONNECT NERVER TO SELF.");
                         if tid != 0 {
                             let _ = global
@@ -273,7 +278,7 @@ pub async fn start(
 
                     // 1. get it or closest peer.
                     let peer_list_lock = global.peer_list.read().await;
-                    let results = peer_list_lock.get(&to);
+                    let results = peer_list_lock.get(&to.id);
                     if results.is_none() {
                         drop(peer_list_lock);
                         warn!("CHAMOMILE: CANNOT REACH NETWORK.");
@@ -301,7 +306,7 @@ pub async fn start(
                         drop(peer_list_lock);
 
                         // 3. check if had in buffer tmp.
-                        if let Some(sender) = global.buffer.read().await.get_tmp_session(&to) {
+                        if let Some(sender) = global.buffer.read().await.get_tmp_session(&to.id) {
                             debug!("Outside: StableConnect is in tmp, send to it.");
                             let _ = sender.send(SessionMessage::StableConnect(tid, data)).await;
                             continue;
@@ -310,7 +315,7 @@ pub async fn start(
                         // 4. add to stable buffer.
                         let mut buffer_lock = global.buffer.write().await;
                         let delivery = delivery_split!(data, global.delivery_length);
-                        if buffer_lock.add_connect(to, tid, data) {
+                        if buffer_lock.add_connect(to.id, tid, data) {
                             debug!("Outside: StableConnect is processing, save to buffer.");
                             drop(buffer_lock);
                             continue;
@@ -318,10 +323,10 @@ pub async fn start(
                         drop(buffer_lock);
 
                         let g = global.clone();
-                        if let Some(addr) = socket {
+                        if to.effective_socket() {
                             debug!("Outside: StableConnect start new connection with IP.");
                             tokio::spawn(async move {
-                                let _ = direct_stable(tid, delivery, to, addr, g, recv_data).await;
+                                let _ = direct_stable(tid, delivery, to, g, recv_data).await;
                             });
                         } else {
                             debug!("Outside: StableConnect start new connection with ID.");
@@ -332,8 +337,8 @@ pub async fn start(
                     }
                 }
                 Some(SendMessage::StableResult(tid, to, is_ok, is_force, data)) => {
-                    debug!("Outside: StableResult to {}.", to.short_show());
-                    if &to == global.peer_id() {
+                    debug!("Outside: StableResult to {}.", to.id.short_show());
+                    if &to.id == global.peer_id() {
                         warn!("CHAMOMILE: STABLE CONNECT NERVER TO SELF.");
                         if tid != 0 {
                             let _ = global
@@ -349,7 +354,7 @@ pub async fn start(
                     }
 
                     // 1. check if in tmp.
-                    if let Some(sender) = global.buffer.read().await.get_tmp_session(&to) {
+                    if let Some(sender) = global.buffer.read().await.get_tmp_session(&to.id) {
                         debug!("Outside: StableResult get the tmp session.");
                         let _ = sender
                             .send(SessionMessage::StableResult(tid, is_ok, is_force, data))
@@ -359,7 +364,7 @@ pub async fn start(
 
                     // 2. check if in DHT or stable.
                     let peer_list_lock = global.peer_list.read().await;
-                    let results = peer_list_lock.get(&to);
+                    let results = peer_list_lock.get(&to.id);
                     if results.is_none() {
                         drop(peer_list_lock);
                         warn!("CHAMOMILE: CANNOT REACH NETWORK.");
@@ -394,7 +399,7 @@ pub async fn start(
                         drop(peer_list_lock);
 
                         // 4. check if had in buffer tmp.
-                        if let Some(sender) = global.buffer.read().await.get_tmp_session(&to) {
+                        if let Some(sender) = global.buffer.read().await.get_tmp_session(&to.id) {
                             debug!("Outside: StableResult had tmp session.");
                             let _ = sender
                                 .send(SessionMessage::StableResult(tid, is_ok, is_force, data))
@@ -405,7 +410,7 @@ pub async fn start(
                         // 5. add to stable buffer.
                         let mut buffer_lock = global.buffer.write().await;
                         let delivery = delivery_split!(data, global.delivery_length);
-                        if buffer_lock.add_result(to, tid, data) {
+                        if buffer_lock.add_result(to.id, tid, data) {
                             debug!("Outside: StableResult is processing, save to buffer.");
                             drop(buffer_lock);
                             continue;
@@ -414,9 +419,15 @@ pub async fn start(
 
                         let g = global.clone();
                         debug!("Outside: StableResult start new connection with ID.");
-                        tokio::spawn(async move {
-                            let _ = relay_stable(tid, delivery, to, ss, g, recv_data).await;
-                        });
+                        if to.effective_socket() {
+                            tokio::spawn(async move {
+                                let _ = direct_stable(tid, delivery, to, g, recv_data).await;
+                            });
+                        } else {
+                            tokio::spawn(async move {
+                                let _ = relay_stable(tid, delivery, to, ss, g, recv_data).await;
+                            });
+                        }
                     }
                 }
                 Some(SendMessage::StableDisconnect(pid)) => {
@@ -427,16 +438,25 @@ pub async fn start(
                         }
                     }
                 }
-                Some(SendMessage::Connect(addr)) => {
-                    debug!("Outside: DHT Connect to {}.", addr);
+                Some(SendMessage::Connect(peer)) => {
+                    debug!("Outside: DHT Connect to {}.", peer.socket);
                     let (session_key, remote_pk) = global.generate_remote();
                     let _ = global
-                        .trans_send(TransportSendMessage::Connect(addr, remote_pk, session_key))
+                        .trans_send(TransportSendMessage::Connect(
+                            peer.socket,
+                            remote_pk,
+                            session_key,
+                        ))
                         .await;
                 }
-                Some(SendMessage::DisConnect(addr)) => {
-                    debug!("Outside: DHT Disconnect to {}.", addr);
-                    global.peer_list.write().await.peer_disconnect(&addr).await;
+                Some(SendMessage::DisConnect(peer)) => {
+                    debug!("Outside: DHT Disconnect to {}.", peer.socket);
+                    global
+                        .peer_list
+                        .write()
+                        .await
+                        .peer_disconnect(&peer.socket)
+                        .await;
                 }
                 Some(SendMessage::Data(tid, to, data)) => {
                     // check if send to self. better circle for application.
@@ -512,7 +532,14 @@ pub async fn start(
                         let _ = res_sender.send(StateResponse::DHT(peers)).await;
                     }
                     StateRequest::Seed => {
-                        let seeds = global.peer_list.read().await.bootstrap().clone();
+                        let seeds = global
+                            .peer_list
+                            .read()
+                            .await
+                            .bootstrap()
+                            .iter()
+                            .map(|p| **p)
+                            .collect();
                         let _ = res_sender.send(StateResponse::Seed(seeds)).await;
                     }
                 },
@@ -522,7 +549,11 @@ pub async fn start(
                         let (session_key, remote_pk) = global.generate_remote();
                         let _ = global
                             .transport_sender
-                            .send(TransportSendMessage::Connect(*a, remote_pk, session_key))
+                            .send(TransportSendMessage::Connect(
+                                a.socket,
+                                remote_pk,
+                                session_key,
+                            ))
                             .await;
                     }
                 }

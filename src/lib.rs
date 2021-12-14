@@ -11,7 +11,7 @@
 //! use std::net::SocketAddr;
 //! use std::path::PathBuf;
 //!
-//! use chamomile::prelude::{start, Config, ReceiveMessage, SendMessage};
+//! use chamomile::prelude::{start, Config, Peer, ReceiveMessage, SendMessage};
 //!
 //! #[tokio::main]
 //! async fn main() {
@@ -20,7 +20,7 @@
 //!
 //!    println!("START A INDEPENDENT P2P RELAY SERVER. : {}", self_addr);
 //!
-//!    let mut config = Config::default(self_addr);
+//!    let mut config = Config::default(Peer::socket(self_addr));
 //!    config.permission = false;
 //!    config.only_stable_data = true;
 //!    config.db_dir = std::path::PathBuf::from("./");
@@ -31,7 +31,7 @@
 //!    if args().nth(2).is_some() {
 //!        let remote_addr: SocketAddr = args().nth(2).unwrap().parse().expect("invalid addr");
 //!        println!("start DHT connect to remote: {}", remote_addr);
-//!        send.send(SendMessage::Connect(remote_addr))
+//!        send.send(SendMessage::Connect(Peer::socket(remote_addr)))
 //!            .await
 //!            .expect("channel failure");
 //!    }
@@ -61,10 +61,11 @@
 //!
 //! # Features
 //!
-//! - Directly connection & DHT-based connection & Relay connection.
-//! - Diff transports: UDP/TCP/UDP-Based Special Protocol.
-//! - Support common broadcast.
-//!
+//! - Support build a robust stable connection between two peers on the p2p network.
+//! - Support permissionless network.
+//! - Support permissioned network (distributed network).
+//! - DHT-based & Relay connection.
+//! - Diff transports: QUIC(*default*) / TCP / UDP-Based Special Protocol.
 
 #[macro_use]
 extern crate log;
@@ -76,7 +77,6 @@ mod hole_punching;
 mod kad;
 mod keys;
 mod lan;
-mod peer;
 mod peer_list;
 mod server;
 mod session;
@@ -89,6 +89,8 @@ pub mod prelude {
         DeliveryType, ReceiveMessage, SendMessage, StateRequest, StateResponse, StreamType,
     };
     pub use chamomile_types::types::{Broadcast, PeerId};
+    pub use chamomile_types::Peer;
+
     use tokio::{
         io::Result,
         sync::mpsc::{self, Receiver, Sender},

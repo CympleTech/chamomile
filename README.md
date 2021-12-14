@@ -11,11 +11,11 @@
 - Diff transports: QUIC(*default*) / TCP / UDP-Based Special Protocol.
 
 ## Simple test.
-- A: `cargo run --example permissionless 0.0.0.0:8000`
-- B: `cargo run --example permissionless 0.0.0.0:8001 0.0.0.0:8000`
-- C: `cargo run --example permissionless 0.0.0.0:8002 0.0.0.0:8000`
+- A: `cargo run --example permissionless 127.0.0.1:8000`
+- B: `cargo run --example permissionless 127.0.0.1:8001 127.0.0.1:8000`
+- C: `cargo run --example permissionless 127.0.0.1:8002 127.0.0.1:8000`
 
-If not support `0.0.0.0` binding, you can change to `127.0.0.1`.
+If not support `127.0.0.1` binding, you can change to `0.0.0.0` and try again.
 
 ## Relay test.
 - A: `cargo run --example relay 192.168.xx.xx:8000`
@@ -24,6 +24,7 @@ If not support `0.0.0.0` binding, you can change to `127.0.0.1`.
   - start waiting stable connected by relay.
 - C: `cargo run --example relay 127.0.0.1:8002 192.168.xx.xx:8000 XX..`
   - XX.. is above's B network `peer id` will connected it.
+  - And if change B and C `127.0.0.1` to `0.0.0.0`, they will automatically connect after the handshake is successful, no longer need relay.
 
 ## Design point
 - Mobile phones, IoT devices, PC and servers are first-class citizens

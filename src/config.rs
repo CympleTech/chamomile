@@ -1,19 +1,18 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::path::PathBuf;
 
-use chamomile_types::types::PeerId;
+use chamomile_types::{Peer, PeerId};
 
 /// Chammomile Configs.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Default Data saved directory.
     pub db_dir: PathBuf,
-    /// Default binding SocketAddr.
-    pub addr: SocketAddr,
-    /// Default transport type.
-    pub transport: String,
-    /// Allowed Ip's list.
-    pub allowlist: Vec<SocketAddr>,
+    /// Default binding multiaddr string.
+    /// Example: "/ip4/0.0.0.0/quic/7364"
+    pub peer: Peer,
+    /// Allowed MultiAddr style peer list.
+    pub allowlist: Vec<Peer>,
     /// Blocked Ip's list.
     pub blocklist: Vec<IpAddr>,
     /// Allowed peer's `PeerId` list.
@@ -41,11 +40,10 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn default(addr: SocketAddr) -> Self {
+    pub fn default(peer: Peer) -> Self {
         Self {
             db_dir: PathBuf::from("./"),
-            addr: addr,
-            transport: "tcp".to_owned(), // TODO Default quic
+            peer: peer,
             allowlist: vec![],
             blocklist: vec![],
             allow_peer_list: vec![],
@@ -58,9 +56,8 @@ impl Config {
 
     pub fn new(
         db_dir: PathBuf,
-        addr: SocketAddr,
-        transport: String,
-        allowlist: Vec<SocketAddr>,
+        peer: Peer,
+        allowlist: Vec<Peer>,
         blocklist: Vec<IpAddr>,
         allow_peer_list: Vec<PeerId>,
         block_peer_list: Vec<PeerId>,
@@ -70,8 +67,7 @@ impl Config {
     ) -> Self {
         Self {
             db_dir,
-            addr,
-            transport,
+            peer,
             allowlist,
             blocklist,
             allow_peer_list,

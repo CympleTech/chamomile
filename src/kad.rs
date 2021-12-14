@@ -1,12 +1,12 @@
 use bit_vec::BitVec;
-use chamomile_types::types::PeerId;
 use core::cmp::Ordering;
 use rand::Rng;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use tokio::sync::mpsc::Sender;
 
-use crate::peer::Peer;
+use chamomile_types::{Peer, PeerId};
+
 use crate::session::SessionMessage;
 use crate::transports::EndpointMessage;
 
@@ -89,8 +89,8 @@ impl DoubleKadTree {
     pub fn add(&mut self, value: KadValue) -> bool {
         let mut rng = rand::thread_rng();
         let value_key = rng.gen::<u32>();
-        let peer_id = value.2.id().clone();
-        let ip_addr = value.2.addr().clone();
+        let peer_id = value.2.id;
+        let ip_addr = value.2.socket;
         let (is_ok, removed) = self.peers.add(peer_id, value_key);
         for i in removed {
             self.values.remove(&i);
@@ -128,7 +128,7 @@ impl DoubleKadTree {
     pub fn remove(&mut self, key: &PeerId) -> Option<KadValue> {
         if let Some(k) = self.peers.remove(key) {
             if let Some(value) = self.values.remove(&k) {
-                self.ips.remove(value.2.addr());
+                self.ips.remove(&value.2.socket);
                 return Some(value);
             }
         }

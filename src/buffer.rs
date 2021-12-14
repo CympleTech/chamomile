@@ -2,10 +2,9 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use tokio::sync::mpsc::Sender;
 
-use chamomile_types::types::PeerId;
+use chamomile_types::{Peer, PeerId};
 
 use crate::kad::KadValue;
-use crate::peer::Peer;
 use crate::session::SessionMessage;
 use crate::transports::EndpointMessage;
 

@@ -1,7 +1,7 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-use std::{net::IpAddr, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use structopt::StructOpt;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::{io::Result, join, select};
@@ -85,7 +85,7 @@ async fn dht_connect_to(
     remote_pk: RemotePublic,
     session_key: SessionKey,
 ) -> Result<()> {
-    let conn = connect_to(connect, remote_pk).await.unwrap();
+    let conn = connect_to(connect, remote_pk).await?;
 
     let (self_sender, self_receiver) = new_endpoint_channel();
     let (out_sender, out_receiver) = new_endpoint_channel();
@@ -316,20 +316,20 @@ pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct Config {
     /// Specify if port forwarding via UPnP should be done or not. This can be set to false if the network
     /// is run locally on the network loopback or on a local area network.
-    #[structopt(long)]
-    pub forward_port: bool,
+    //#[structopt(long)]
+    //pub forward_port: bool,
 
     /// External port number assigned to the socket address of the program.
     /// If this is provided, QP2p considers that the local port provided has been mapped to the
     /// provided external port number and automatic port forwarding will be skipped.
-    #[structopt(long)]
-    pub external_port: Option<u16>,
+    //#[structopt(long)]
+    //pub external_port: Option<u16>,
 
     /// External IP address of the computer on the WAN. This field is mandatory if the node is the genesis node and
     /// port forwarding is not available. In case of non-genesis nodes, the external IP address will be resolved
     /// using the Echo service.
-    #[structopt(long)]
-    pub external_ip: Option<IpAddr>,
+    //#[structopt(long)]
+    //pub external_ip: Option<IpAddr>,
 
     /// How long to wait to hear from a peer before timing out a connection.
     ///
@@ -353,9 +353,9 @@ fn parse_millis(millis: &str) -> std::result::Result<Duration, std::num::ParseIn
 pub(crate) struct InternalConfig {
     pub(crate) client: quinn::ClientConfig,
     pub(crate) server: quinn::ServerConfig,
-    pub(crate) forward_port: bool,
-    pub(crate) external_port: Option<u16>,
-    pub(crate) external_ip: Option<IpAddr>,
+    //pub(crate) forward_port: bool,
+    //pub(crate) external_port: Option<u16>,
+    //pub(crate) external_ip: Option<IpAddr>,
 }
 
 impl InternalConfig {
@@ -376,9 +376,9 @@ impl InternalConfig {
         Ok(Self {
             client,
             server,
-            forward_port: config.forward_port,
-            external_port: config.external_port,
-            external_ip: config.external_ip,
+            //forward_port: config.forward_port,
+            //external_port: config.external_port,
+            //external_ip: config.external_ip,
         })
     }
 

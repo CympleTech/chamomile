@@ -1,7 +1,11 @@
-use chamomile_types::types::{new_io_error, PeerId, TransportType, PEER_ID_LENGTH};
 use std::io::Result;
 use std::net::SocketAddr;
 use tokio::sync::mpsc::{self, Receiver, Sender};
+
+use chamomile_types::{
+    peer::{Peer, PEER_LENGTH},
+    types::{new_io_error, PeerId, TransportType, PEER_ID_LENGTH},
+};
 
 mod rtp;
 mod tcp;
@@ -11,7 +15,6 @@ mod udt;
 
 use crate::hole_punching::{Hole, DHT};
 use crate::keys::{Keypair, SessionKey};
-use crate::peer::{Peer, PEER_LENGTH};
 
 /// new a channel for send TransportSendMessage.
 pub fn new_transport_send_channel() -> (Sender<TransportSendMessage>, Receiver<TransportSendMessage>)
@@ -79,8 +82,7 @@ pub enum EndpointMessage {
 
 /// main function. start the endpoint listening.
 pub async fn start(
-    transport: &TransportType,
-    addr: SocketAddr,
+    peer: &Peer,
 ) -> Result<(
     SocketAddr,
     Sender<TransportSendMessage>,
@@ -89,10 +91,10 @@ pub async fn start(
     let (send_send, send_recv) = new_transport_send_channel();
     let (recv_send, recv_recv) = new_transport_recv_channel();
 
-    let local_addr = match transport {
+    let local_addr = match peer.transport {
         //&TransportType::UDP => udp::UdpEndpoint::start(addr, recv_send, send_recv).await?,
-        &TransportType::TCP => tcp::start(addr, recv_send, send_recv).await?,
-        &TransportType::QUIC => quic::start(addr, recv_send, send_recv).await?,
+        TransportType::TCP => tcp::start(peer.socket, recv_send, send_recv).await?,
+        TransportType::QUIC => quic::start(peer.socket, recv_send, send_recv).await?,
         _ => panic!("Not suppert, waiting"),
     };
 
@@ -104,7 +106,7 @@ pub struct RemotePublic(pub Keypair, pub Peer, pub Vec<u8>);
 
 impl RemotePublic {
     pub fn id(&self) -> &PeerId {
-        self.1.id()
+        &self.1.id
     }
 
     pub fn from_bytes(mut bytes: Vec<u8>) -> Result<Self> {

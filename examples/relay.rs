@@ -4,7 +4,7 @@ use simplelog::{
 use std::env::args;
 use std::net::SocketAddr;
 
-use chamomile::prelude::{start, Config, ReceiveMessage, SendMessage};
+use chamomile::prelude::{start, Config, Peer, ReceiveMessage, SendMessage};
 use chamomile_types::types::PeerId;
 use std::time::Duration;
 
@@ -23,7 +23,7 @@ async fn main() {
 
     println!("START A PERMISSIONLESS PEER. socket: {}", self_addr);
 
-    let mut config = Config::default(self_addr);
+    let mut config = Config::default(Peer::socket(self_addr));
     config.permission = false; // Permissionless.
     config.only_stable_data = true; // Only receive stable connected peer's data.
     config.db_dir = std::path::PathBuf::from(addr_str);
@@ -34,7 +34,9 @@ async fn main() {
     if args().nth(2).is_some() {
         let remote_addr: SocketAddr = args().nth(2).unwrap().parse().expect("invalid addr");
         println!("start DHT connect to remote: {}", remote_addr);
-        let _ = send.send(SendMessage::Connect(remote_addr)).await;
+        let _ = send
+            .send(SendMessage::Connect(Peer::socket(remote_addr)))
+            .await;
 
         if args().nth(3).is_some() {
             println!("sleep 3s and then start stable connection...");
@@ -47,12 +49,7 @@ async fn main() {
                 bytes.push(i);
             }
             let _ = send
-                .send(SendMessage::StableConnect(
-                    1,
-                    peer_id,
-                    Some("127.0.0.1:7367".parse().unwrap()),
-                    bytes,
-                ))
+                .send(SendMessage::StableConnect(1, Peer::peer(peer_id), bytes))
                 .await;
         }
     }
@@ -78,9 +75,11 @@ async fn main() {
                     if args().nth(3).is_some() {
                         println!("=========== START DIRECTLY INCOMING TEST=============");
                         // upgrade to directly
-                        send.send(SendMessage::Connect("127.0.0.1:7365".parse().unwrap()))
-                            .await
-                            .unwrap();
+                        send.send(SendMessage::Connect(Peer::socket(
+                            "127.0.0.1:7365".parse().unwrap(),
+                        )))
+                        .await
+                        .unwrap();
                     }
                 }
             }
@@ -109,12 +108,10 @@ async fn main() {
                     peer_id.to_hex()
                 );
             }
-            ReceiveMessage::StableResult(peer_id, is_ok, remark) => {
+            ReceiveMessage::StableResult(peer, is_ok, remark) => {
                 println!(
-                    "=========Recv stable connected result: {} {} {:?}",
-                    peer_id.to_hex(),
-                    is_ok,
-                    remark
+                    "=========Recv stable connected result: {:?} {} {:?}",
+                    peer, is_ok, remark
                 );
 
                 send.send(SendMessage::Data(4, peer_id, vec![1, 2, 3, 4, 5]))
@@ -122,7 +119,7 @@ async fn main() {
                     .unwrap();
             }
             ReceiveMessage::ResultConnect(from, _data) => {
-                println!("Recv Result Connect {}", from.to_hex());
+                println!("Recv Result Connect {:?}", from);
             }
             ReceiveMessage::Delivery(t, tid, had, _data) => {
                 println!("======== ===== Recv {:?} Delivery: {} {}", t, tid, had);

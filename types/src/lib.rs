@@ -1,5 +1,9 @@
 pub mod message;
+pub mod peer;
 pub mod types;
+
+pub use peer::Peer;
+pub use types::PeerId;
 
 /// delivery data.
 #[macro_export]

@@ -4,15 +4,11 @@ use tokio::{
     sync::{mpsc::Sender, RwLock},
 };
 
-use chamomile_types::{
-    message::ReceiveMessage,
-    types::{new_io_error, PeerId},
-};
+use chamomile_types::{message::ReceiveMessage, types::new_io_error, Peer, PeerId};
 
 use crate::buffer::Buffer;
 use crate::kad::KadValue;
 use crate::keys::{Keypair, SessionKey};
-use crate::peer::Peer;
 use crate::peer_list::PeerList;
 use crate::transports::{RemotePublic, TransportSendMessage};
 
@@ -30,7 +26,7 @@ pub(crate) struct Global {
 impl Global {
     #[inline]
     pub fn peer_id(&self) -> &PeerId {
-        self.peer.id()
+        &self.peer.id
     }
 
     #[inline]

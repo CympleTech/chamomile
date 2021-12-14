@@ -1,13 +1,13 @@
-use std::net::SocketAddr;
 use tokio::sync::mpsc::Sender;
 
-use crate::types::{Broadcast, PeerId, TransportStream, TransportType};
+use crate::peer::Peer;
+use crate::types::{Broadcast, PeerId, TransportStream};
 
 /// Custom apply for build a stream between nodes.
 #[derive(Debug, Eq, PartialEq)]
 pub enum StreamType {
     /// request for build a stream, params is peer id, transport type and request custom info.
-    Req(PeerId, TransportType),
+    Req(Peer),
     /// response for build a stream, params is is_ok, and response custom info.
     Res(bool),
     /// if response is ok, will build a stream, and return the stream to ouside.
@@ -26,15 +26,15 @@ pub enum DeliveryType {
 #[derive(Debug)]
 pub enum ReceiveMessage {
     /// when peer what to stable connect, send from chamomile to outside.
-    /// params is `peer_id`, `socket_addr` and peer `connect_info`.
-    StableConnect(PeerId, Vec<u8>),
+    /// params is `peer` and `connect_info`.
+    StableConnect(Peer, Vec<u8>),
     /// when peer get stable connect result.
-    /// params is `peer_id`, `is_ok` and `result_data`.
-    StableResult(PeerId, bool, Vec<u8>),
+    /// params is `peer`, `is_ok` and `result_data`.
+    StableResult(Peer, bool, Vec<u8>),
     /// when peer want to response a stable result, but the session is closed,
     /// if stable result is ok, then need create a result connect to sender.
     /// the data type is stable result data type.
-    ResultConnect(PeerId, Vec<u8>),
+    ResultConnect(Peer, Vec<u8>),
     /// when a stable connection's peer leave,
     /// send from chamomile to outside.
     /// params is `peer_id`.
@@ -56,31 +56,32 @@ pub enum ReceiveMessage {
 #[derive(Debug)]
 pub enum SendMessage {
     /// when peer request for join, outside decide connect or not.
-    /// params is `delivery_feedback_id`, `peer_id`, `is_connect`, `is_force_close`, `result info`.
+    /// params is `delivery_feedback_id`, `peer`, `is_connect`, `is_force_close`, `result info`.
     /// if `delivery_feedback_id = 0` will not feedback.
     /// if `is_connect` is true, it will add to allow directly list.
     /// we want to build a better network, add a `is_force_close`.
     /// if `is_connect` is false, but `is_force_close` if true, we
     /// will use this peer to build our DHT for better connection.
     /// if false, we will force close it.
-    StableResult(u64, PeerId, bool, bool, Vec<u8>),
+    /// In general, you can example as `StableResult(0, Peer, is_ok, false, vec![])`.
+    StableResult(u64, Peer, bool, bool, Vec<u8>),
     /// when need add a peer to stable connect, send to chamomile from outside.
     /// if success connect, will start a stable connection, and add peer to kad, stables,
     /// bootstraps and allowlists. if failure, will send `PeerLeave` to outside.
-    /// params is `delivery_feedback_id`, `peer_id`, `socket_addr` and peer `join_info`.
+    /// params is `delivery_feedback_id`, `peer` and custom `join_info`.
     /// if `delivery_feedback_id = 0` will not feedback.
-    StableConnect(u64, PeerId, Option<SocketAddr>, Vec<u8>),
+    StableConnect(u64, Peer, Vec<u8>),
     /// when outside want to close a stable connectioned peer. use it force close.
     /// params is `peer_id`.
     StableDisconnect(PeerId),
     /// (DHT connected) when outside want to connect a peer. will try connect directly.
     /// if connected, chamomile will add to kad and bootstrap.
-    /// params is `socket_addr`.
-    Connect(SocketAddr),
+    /// params is `Peer`.
+    Connect(Peer),
     /// (DHT connected) when outside donnot want to connect peer. use it to force close.
     /// it will remove from kad and bootstrap list.
-    /// params is `socket_addr`.
-    DisConnect(SocketAddr),
+    /// params is `Peer`.
+    DisConnect(Peer),
     /// when need send a data to a peer, only need know the peer_id,
     /// the chamomile will help you send data to there.
     /// params is `delivery_feedback_id`, `peer_id` and `data_bytes`.
@@ -116,5 +117,5 @@ pub enum StateResponse {
     /// response is peer list.
     DHT(Vec<PeerId>),
     /// response is socket list.
-    Seed(Vec<SocketAddr>),
+    Seed(Vec<Peer>),
 }

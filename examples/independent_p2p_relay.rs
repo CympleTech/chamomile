@@ -1,4 +1,4 @@
-use chamomile::prelude::{start, Config, ReceiveMessage, SendMessage};
+use chamomile::prelude::{start, Config, Peer, ReceiveMessage, SendMessage};
 use simplelog::{CombinedLogger, Config as LogConfig, LevelFilter, WriteLogger};
 use std::env::args;
 use std::net::SocketAddr;
@@ -18,7 +18,7 @@ async fn main() {
 
     println!("START A INDEPENDENT P2P RELAY SERVER. : {}", self_addr);
 
-    let mut config = Config::default(self_addr);
+    let mut config = Config::default(Peer::socket(self_addr));
     config.permission = false;
     config.only_stable_data = true;
     config.db_dir = std::path::PathBuf::from("./");
@@ -29,7 +29,7 @@ async fn main() {
     if args().nth(2).is_some() {
         let remote_addr: SocketAddr = args().nth(2).unwrap().parse().expect("invalid addr");
         println!("start DHT connect to remote: {}", remote_addr);
-        send.send(SendMessage::Connect(remote_addr))
+        send.send(SendMessage::Connect(Peer::socket(remote_addr)))
             .await
             .expect("channel failure");
     }

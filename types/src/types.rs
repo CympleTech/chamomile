@@ -103,6 +103,15 @@ impl TransportType {
         }
     }
 
+    pub fn to_str<'a>(&self) -> &'a str {
+        match self {
+            TransportType::QUIC => "quic",
+            TransportType::TCP => "tcp",
+            TransportType::RTP => "rtp",
+            TransportType::UDT => "udt",
+        }
+    }
+
     pub fn from_byte(b: u8) -> Result<Self> {
         match b {
             0u8 => Ok(TransportType::QUIC),

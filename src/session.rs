@@ -1,10 +1,4 @@
-use chamomile_types::{
-    delivery_split,
-    message::{DeliveryType, ReceiveMessage},
-    types::{new_io_error, PeerId},
-};
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::{
     io::Result,
@@ -12,11 +6,17 @@ use tokio::{
     sync::mpsc::{self, Receiver, Sender},
 };
 
+use chamomile_types::{
+    delivery_split,
+    message::{DeliveryType, ReceiveMessage},
+    types::new_io_error,
+    Peer, PeerId,
+};
+
 use crate::global::Global;
 use crate::hole_punching::{nat, DHT};
 use crate::kad::KadValue;
 use crate::keys::SessionKey;
-use crate::peer::Peer;
 use crate::transports::{
     new_endpoint_channel, EndpointMessage, RemotePublic, TransportSendMessage,
 };
@@ -25,8 +25,7 @@ use crate::transports::{
 pub(crate) async fn direct_stable(
     tid: u64,
     delivery: Vec<u8>,
-    to: PeerId,
-    addr: SocketAddr,
+    to: Peer,
     global: Arc<Global>,
     is_recv_data: bool,
 ) -> Result<()> {
@@ -40,7 +39,7 @@ pub(crate) async fn direct_stable(
         .trans_send(TransportSendMessage::StableConnect(
             stream_sender.clone(),
             endpoint_receiver,
-            addr,
+            to.socket,
             remote_pk,
         ))
         .await?;
@@ -51,7 +50,7 @@ pub(crate) async fn direct_stable(
     {
         // 3.1.1 if ok connected. keep it and update to stable.
         let remote_id = remote_key.peer_id();
-        if remote_id != to {
+        if !to.effective_id() && remote_id != to.id {
             warn!("CHAMOMILE: STABLE CONNECT FAILURE UNKNOWN PEER.");
             return Err(new_io_error("session stable unknown peer."));
         }
@@ -74,11 +73,11 @@ pub(crate) async fn direct_stable(
 
         // 3.1.2 check & update session key.
         if !session_key.complete(&remote_key.pk, dh_key) {
-            global.buffer.write().await.remove_connect(&to);
+            global.buffer.write().await.remove_connect(&to.id);
             return Err(new_io_error("session stable key failure."));
         }
 
-        let remote_peer = nat(addr, remote_peer);
+        let remote_peer = nat(to.socket, remote_peer);
         let (session_sender, session_receiver) = new_session_channel(); // server's use.
 
         // 3.1.3 save to tmp buffer.
@@ -120,7 +119,7 @@ pub(crate) async fn direct_stable(
         drop(endpoint_sender);
 
         // 3.2.1 try start relay stable.
-        let ss = if let Some((s, _, _)) = global.peer_list.read().await.get(&to) {
+        let ss = if let Some((s, _, _)) = global.peer_list.read().await.get(&to.id) {
             Some(s.clone())
         } else {
             None
@@ -139,7 +138,7 @@ pub(crate) async fn direct_stable(
                     ))
                     .await?;
             }
-            global.buffer.write().await.remove_connect(&to);
+            global.buffer.write().await.remove_connect(&to.id);
             Err(new_io_error("no closest peer."))
         }
     }
@@ -148,7 +147,7 @@ pub(crate) async fn direct_stable(
 pub(crate) async fn relay_stable(
     tid: u64,
     delivery: Vec<u8>,
-    to: PeerId,
+    to: Peer,
     relay_sender: Sender<SessionMessage>,
     global: Arc<Global>,
     is_recv_data: bool,
@@ -165,14 +164,14 @@ pub(crate) async fn relay_stable(
 
     let (connects, results) = global
         .add_all_tmp(
-            to,
+            to.id,
             KadValue(session_sender.clone(), stream_sender, Peer::default()),
             false,
         )
         .await;
 
     relay_sender
-        .send(SessionMessage::RelayConnect(remote_pk, to))
+        .send(SessionMessage::RelayConnect(remote_pk, to.id))
         .await
         .map_err(|_e| new_io_error("Session missing"))?;
     drop(relay_sender);
@@ -190,15 +189,15 @@ pub(crate) async fn relay_stable(
         let RemotePublic(remote_key, remote_peer, dh_key) = remote;
 
         let remote_id = remote_key.peer_id();
-        if remote_id != to {
+        if remote_id != to.id {
             warn!("CHAMOMILE: STABLE CONNECT FAILURE UNKNOWN PEER.");
-            global.buffer.write().await.remove_tmp(&to);
+            global.buffer.write().await.remove_tmp(&to.id);
             return Err(new_io_error("session stable unknown peer."));
         }
 
         if &remote_id == global.peer_id() {
             warn!("CHAMOMILE: STABLE CONNECT NERVER TO SELF.");
-            global.buffer.write().await.remove_tmp(&to);
+            global.buffer.write().await.remove_tmp(&to.id);
             if tid != 0 {
                 global
                     .out_send(ReceiveMessage::Delivery(
@@ -213,11 +212,11 @@ pub(crate) async fn relay_stable(
         }
 
         if !session_key.complete(&remote_key.pk, dh_key) {
-            global.buffer.write().await.remove_tmp(&to);
+            global.buffer.write().await.remove_tmp(&to.id);
             return Err(new_io_error("session stable key failure."));
         }
 
-        global.buffer.write().await.update_peer(&to, remote_peer);
+        global.buffer.write().await.update_peer(&to.id, remote_peer);
         let mut session = Session::new(
             remote_peer,
             session_sender,
@@ -257,7 +256,7 @@ pub(crate) async fn relay_stable(
                 ))
                 .await?;
         }
-        global.buffer.write().await.remove_tmp(&to);
+        global.buffer.write().await.remove_tmp(&to.id);
         debug!("Session clear stable buffer.");
         Err(new_io_error("session relay reach faiure."))
     }
@@ -321,7 +320,7 @@ impl Session {
     }
 
     fn remote_id(&self) -> &PeerId {
-        self.remote_peer.id()
+        &self.remote_peer.id
     }
 
     async fn close(&mut self, is_leave: bool) -> Result<()> {
@@ -502,7 +501,7 @@ impl Session {
                     }
                     CoreData::StableConnect(tid, data) => {
                         let delivery_data = delivery_split!(data, self.global.delivery_length);
-                        self.out_send(ReceiveMessage::StableConnect(*self.remote_id(), data))
+                        self.out_send(ReceiveMessage::StableConnect(self.remote_peer, data))
                             .await?;
                         if tid != 0 {
                             self.send_core_data(CoreData::Delivery(
@@ -515,7 +514,7 @@ impl Session {
                     }
                     CoreData::StableResult(tid, is_ok, data) => {
                         let delivery_data = delivery_split!(data, self.global.delivery_length);
-                        self.out_send(ReceiveMessage::StableResult(*self.remote_id(), is_ok, data))
+                        self.out_send(ReceiveMessage::StableResult(self.remote_peer, is_ok, data))
                             .await?;
                         if tid != 0 {
                             self.send_core_data(CoreData::Delivery(
@@ -528,7 +527,7 @@ impl Session {
                     }
                     CoreData::ResultConnect(tid, data) => {
                         let delivery_data = delivery_split!(data, self.global.delivery_length);
-                        self.out_send(ReceiveMessage::ResultConnect(*self.remote_id(), data))
+                        self.out_send(ReceiveMessage::ResultConnect(self.remote_peer, data))
                             .await?;
                         if tid != 0 {
                             self.send_core_data(CoreData::Delivery(
@@ -729,14 +728,14 @@ impl Session {
                     let sender = &self.global.transport_sender;
 
                     for p in peers {
-                        if p.id() != self.my_id()
-                            && !self.global.peer_list.read().await.contains(p.id())
+                        if &p.id != self.my_id()
+                            && !self.global.peer_list.read().await.contains(&p.id)
                         {
                             let (session_key, remote_pk) = self.global.generate_remote();
                             //if let Some(sender) = self.global.transports.read().await.get(p.transport()) {}
                             let _ = sender
                                 .send(TransportSendMessage::Connect(
-                                    *p.addr(),
+                                    p.socket,
                                     remote_pk,
                                     session_key,
                                 ))
