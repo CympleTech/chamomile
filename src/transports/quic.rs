@@ -22,6 +22,7 @@ pub async fn start(
     bind_addr: SocketAddr,
     send: Sender<TransportRecvMessage>,
     recv: Receiver<TransportSendMessage>,
+    both: bool,
 ) -> tokio::io::Result<SocketAddr> {
     let config = InternalConfig::try_from_config(Default::default()).unwrap();
 
@@ -36,16 +37,18 @@ pub async fn start(
             match incoming.next().await {
                 Some(quinn_conn) => match quinn_conn.await {
                     Ok(conn) => {
-                        let (self_sender, self_receiver) = new_endpoint_channel();
-                        let (out_sender, out_receiver) = new_endpoint_channel();
+                        if both {
+                            let (self_sender, self_receiver) = new_endpoint_channel();
+                            let (out_sender, out_receiver) = new_endpoint_channel();
 
-                        tokio::spawn(process_stream(
-                            conn,
-                            out_sender,
-                            self_receiver,
-                            OutType::DHT(out_send.clone(), self_sender, out_receiver),
-                            None,
-                        ));
+                            tokio::spawn(process_stream(
+                                conn,
+                                out_sender,
+                                self_receiver,
+                                OutType::DHT(out_send.clone(), self_sender, out_receiver),
+                                None,
+                            ));
+                        }
                     }
                     Err(err) => {
                         error!("An incoming failed because of an error: {:?}", err);

@@ -83,22 +83,30 @@ pub enum EndpointMessage {
 /// main function. start the endpoint listening.
 pub async fn start(
     peer: &Peer,
+    out_send: Option<Sender<TransportRecvMessage>>,
 ) -> Result<(
     SocketAddr,
     Sender<TransportSendMessage>,
-    Receiver<TransportRecvMessage>,
+    Option<Receiver<TransportRecvMessage>>,
+    Option<Sender<TransportRecvMessage>>,
 )> {
+    let both = out_send.is_none();
     let (send_send, send_recv) = new_transport_send_channel();
-    let (recv_send, recv_recv) = new_transport_recv_channel();
+    let (recv_send, recv_recv, main_out) = if let Some(out_send) = out_send {
+        (out_send, None, None)
+    } else {
+        let (recv_send, recv_recv) = new_transport_recv_channel();
+        (recv_send.clone(), Some(recv_recv), Some(recv_send))
+    };
 
     let local_addr = match peer.transport {
         //&TransportType::UDP => udp::UdpEndpoint::start(addr, recv_send, send_recv).await?,
-        TransportType::TCP => tcp::start(peer.socket, recv_send, send_recv).await?,
-        TransportType::QUIC => quic::start(peer.socket, recv_send, send_recv).await?,
+        TransportType::TCP => tcp::start(peer.socket, recv_send, send_recv, both).await?,
+        TransportType::QUIC => quic::start(peer.socket, recv_send, send_recv, both).await?,
         _ => panic!("Not suppert, waiting"),
     };
 
-    Ok((local_addr, send_send, recv_recv))
+    Ok((local_addr, send_send, recv_recv, main_out))
 }
 
 /// Rtemote Public Info, include local transport and public key bytes, session_key out_bytes.

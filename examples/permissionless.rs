@@ -21,8 +21,11 @@ async fn main() {
     let self_addr: SocketAddr = addr_str.parse().expect("invalid addr");
 
     println!("START A PERMISSIONLESS PEER. socket: {}", self_addr);
+    let peer = Peer::socket(self_addr);
+    // let mut peer = Peer::socket(self_addr);
+    // peer.transport = chamomile_types::types::TransportType::TCP; // DEBUG different transport.
 
-    let mut config = Config::default(Peer::socket(self_addr));
+    let mut config = Config::default(peer);
     config.permission = false; // Permissionless.
     config.only_stable_data = false; // Receive all peer's data.
     config.db_dir = std::path::PathBuf::from(addr_str);

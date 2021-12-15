@@ -15,12 +15,13 @@ use crate::buffer::Buffer;
 use crate::kad::KadValue;
 use crate::keys::{Keypair, SessionKey};
 use crate::peer_list::PeerList;
-use crate::transports::{RemotePublic, TransportSendMessage};
+use crate::transports::{start, RemotePublic, TransportRecvMessage, TransportSendMessage};
 
 pub(crate) struct Global {
     pub peer: Peer,
     pub key: Keypair,
-    pub transports: HashMap<TransportType, Sender<TransportSendMessage>>,
+    pub trans: Sender<TransportRecvMessage>,
+    pub transports: Arc<RwLock<HashMap<TransportType, Sender<TransportSendMessage>>>>,
     pub out_sender: Sender<ReceiveMessage>,
     pub peer_list: Arc<RwLock<PeerList>>,
     pub buffer: Arc<RwLock<Buffer>>,
@@ -73,15 +74,31 @@ impl Global {
         trans_type: &TransportType,
         msg: TransportSendMessage,
     ) -> Result<()> {
-        if let Some(sender) = self.transports.get(trans_type) {
+        let trans_lock = self.transports.read().await;
+        if let Some(sender) = trans_lock.get(trans_type) {
             sender
                 .send(msg)
                 .await
                 .map_err(|_e| new_io_error("Transport missing"))
         } else {
+            drop(trans_lock);
             // start new transport to send it.
-            // TOOD
-            Err(new_io_error("Transport missing"))
+            // Only TCP & QUIC
+            let main_send = self.trans.clone();
+            let mut new_peer = self.peer.clone();
+            new_peer.transport = *trans_type;
+            new_peer.zero_port();
+
+            let (_, trans_send, _, _) = start(&new_peer, Some(main_send)).await?;
+            trans_send
+                .send(msg)
+                .await
+                .map_err(|_e| new_io_error("Transport missing"))?;
+            self.transports
+                .write()
+                .await
+                .insert(*trans_type, trans_send);
+            Ok(())
         }
     }
 

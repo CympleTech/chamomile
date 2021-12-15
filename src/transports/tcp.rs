@@ -20,16 +20,22 @@ pub async fn start(
     bind_addr: SocketAddr,
     send: Sender<TransportRecvMessage>,
     recv: Receiver<TransportSendMessage>,
+    both: bool,
 ) -> Result<SocketAddr> {
-    let listener = TcpListener::bind(bind_addr).await.map_err(|e| {
-        error!("TCP listen {:?}", e);
-        std::io::Error::new(std::io::ErrorKind::Other, "TCP Listen")
-    })?;
-    let addr = listener.local_addr()?;
-    info!("TCP listening at: {:?}", addr);
+    let addr = if both {
+        let listener = TcpListener::bind(bind_addr).await.map_err(|e| {
+            error!("TCP listen {:?}", e);
+            std::io::Error::new(std::io::ErrorKind::Other, "TCP Listen")
+        })?;
+        let addr = listener.local_addr()?;
+        info!("TCP listening at: {:?}", addr);
 
-    // TCP listen incoming.
-    tokio::spawn(run_listen(listener, send.clone()));
+        // TCP listen incoming.
+        tokio::spawn(run_listen(listener, send.clone()));
+        addr
+    } else {
+        bind_addr
+    };
 
     // TCP listen from outside.
     tokio::spawn(run_self_recv(recv, send));

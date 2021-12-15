@@ -81,19 +81,23 @@ pub async fn start(
 
     let mut transports: HashMap<TransportType, Sender<TransportSendMessage>> = HashMap::new();
 
-    let (local_addr, trans_send, mut trans_recv) = transport_start(&peer)
+    let (local_addr, trans_send, trans_option, main_option) = transport_start(&peer, None)
         .await
         .expect("Transport binding failure!");
+    let mut trans_recv = trans_option.unwrap(); // safe
+    let main_trans = main_option.unwrap(); // safe
+
     peer.id = key.peer_id();
     peer.socket = local_addr;
-    transports.insert(peer.transport, trans_send);
+    transports.insert(peer.transport, trans_send.clone());
 
     let global = Arc::new(Global {
         peer,
         key,
         out_sender,
         delivery_length,
-        transports: transports,
+        trans: main_trans,
+        transports: Arc::new(RwLock::new(transports)),
         buffer: Arc::new(RwLock::new(Buffer::init())),
         peer_list: peer_list.clone(),
         is_relay_data: !permission,

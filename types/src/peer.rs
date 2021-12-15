@@ -91,6 +91,11 @@ impl Peer {
         self.socket != SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0)
     }
 
+    /// change socket port to 0, and bind generate by system.
+    pub fn zero_port(&mut self) {
+        self.socket.set_port(0)
+    }
+
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != PEER_LENGTH {
             return Err(new_io_error("peer bytes failure."));
