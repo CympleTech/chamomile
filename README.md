@@ -1,4 +1,4 @@
-[![crate](https://img.shields.io/badge/crates.io-v0.6.6-green.svg)](https://crates.io/crates/chamomile) [![doc](https://img.shields.io/badge/docs.rs-v0.6.6-blue.svg)](https://docs.rs/chamomile)
+[![crate](https://img.shields.io/badge/crates.io-v0.7.0-green.svg)](https://crates.io/crates/chamomile) [![doc](https://img.shields.io/badge/docs.rs-v0.7.0-blue.svg)](https://docs.rs/chamomile)
 
 # Chamomile
 *Build a robust stable connection on p2p network*
@@ -9,6 +9,7 @@
 - Support permissioned network (distributed network).
 - DHT-based & Relay connection.
 - Diff transports: QUIC(*default*) / TCP / UDP-Based Special Protocol.
+- Multiple transports connecting at same runtime.
 
 ## Simple test.
 - A: `cargo run --example permissionless 127.0.0.1:8000`
@@ -31,8 +32,9 @@ If not support `127.0.0.1` binding, you can change to `0.0.0.0` and try again.
 - Ability to adapt to the transmission and penetration of complex network environments
 - Support for springboard function, virtual connection with other nodes, build virtual DHT
 - Encrypted transmission and secure DHT protection
-- It can support all interconnections and single-center connections under the LAN, and can also support DHT in the public network environment.
+- It can support all interconnections and single-center connections under the LAN, and can also support DHT in the public network environment
 - Automatically switch the connection according to the number of connections and the network environment
+- If Alice use QUIC, Bob use TCP, they can still connect and communicate with each other.
 
 ## License
 
