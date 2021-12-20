@@ -1,4 +1,4 @@
-[![crate](https://img.shields.io/badge/crates.io-v0.7.0-green.svg)](https://crates.io/crates/chamomile) [![doc](https://img.shields.io/badge/docs.rs-v0.7.0-blue.svg)](https://docs.rs/chamomile)
+[![crate](https://img.shields.io/badge/crates.io-v0.7.1-green.svg)](https://crates.io/crates/chamomile) [![doc](https://img.shields.io/badge/docs.rs-v0.7.1-blue.svg)](https://docs.rs/chamomile)
 
 # Chamomile
 *Build a robust stable connection on p2p network*
@@ -35,6 +35,12 @@ If not support `127.0.0.1` binding, you can change to `0.0.0.0` and try again.
 - It can support all interconnections and single-center connections under the LAN, and can also support DHT in the public network environment
 - Automatically switch the connection according to the number of connections and the network environment
 - If Alice use QUIC, Bob use TCP, they can still connect and communicate with each other.
+
+## For more information, please visit:
+- Website: https://cympletech.com
+- Twitter: https://twitter.com/cympletech
+- Discord: https://discord.gg/UfFjp6Kaj4
+- E-mail: dev@cympletech.com
 
 ## License
 

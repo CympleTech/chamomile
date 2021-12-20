@@ -1,10 +1,10 @@
 [package]
 name = "chamomile_types"
-version = "0.7.0"
-authors = ["Contact <contact@cypherlink.io>"]
+version = "0.7.1"
+authors = ["Dev <dev@cympletech.com>"]
 readme = "README.md"
 description = "Another P2P Library. Support IoT devices."
-repository = "https://github.com/cypherlink/chamomile"
+repository = "https://github.com/cympletech/chamomile"
 keywords = ["distributed", "blockchain", "p2p", "libp2p", "peer-to-peer"]
 license = "MIT/Apache-2.0"
 edition = "2021"
