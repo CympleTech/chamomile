@@ -15,15 +15,12 @@ members = [
 ]
 
 [dependencies]
-toml = "0.5"
 rand = "0.7"
 log = "0.4"
 bit-vec = "0.6"
-blake3 = "1.2"
-ed25519-dalek = "1.0"
 x25519-dalek = "1.2"
 aes-gcm = "0.9"
-rcgen = "0.8"
+rcgen = "0.9"
 structopt = "0.3"
 thiserror = "1.0"
 webpki = "0.22"
