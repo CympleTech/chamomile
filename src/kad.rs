@@ -21,9 +21,9 @@ trait Key: Eq + Clone {
 }
 
 impl Key for PeerId {
-    const KEY_LENGTH: usize = 256;
+    const KEY_LENGTH: usize = 160;
     fn distance(&self) -> Distance {
-        // 256-bit
+        // 160-bit
         Distance(BitVec::from_bytes(self.as_bytes()))
     }
 }
@@ -45,7 +45,7 @@ impl Key for SocketAddr {
 
 const MAX_LEVEL: usize = 8;
 
-// max peer-id is 4 * 256 = 1024
+// max peer-id is 4 * 160 = 640
 // max ip-address is 4 * 128 = 512
 const K_BUCKET: usize = 4;
 
@@ -499,6 +499,6 @@ impl Distance {
 
 impl Default for Distance {
     fn default() -> Self {
-        Distance::min(256)
+        Distance::min(160)
     }
 }

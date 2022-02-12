@@ -44,7 +44,8 @@ pub struct Peer {
     pub is_pub: bool,
 }
 
-pub const PEER_LENGTH: usize = 52;
+// PEER_ID_LENGTH + SOCKET_ADDR_LENGTH + 2 = 20 + 18 + 2 = 40
+pub const PEER_LENGTH: usize = 40;
 
 impl Peer {
     /// create peer.
@@ -101,10 +102,10 @@ impl Peer {
             return Err(new_io_error("peer bytes failure."));
         }
 
-        let id = PeerId::from_bytes(&bytes[0..32])?;
-        let socket = socket_addr_from_bytes(&bytes[32..50])?;
-        let transport = TransportType::from_byte(bytes[50])?;
-        let is_pub = bytes[51] == 1u8;
+        let id = PeerId::from_bytes(&bytes[0..20])?;
+        let socket = socket_addr_from_bytes(&bytes[20..38])?;
+        let transport = TransportType::from_byte(bytes[38])?;
+        let is_pub = bytes[39] == 1u8;
         Ok(Self {
             id,
             socket,
@@ -114,7 +115,7 @@ impl Peer {
     }
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = vec![];
-        bytes.append(&mut self.id.to_bytes()); // 32-bytes
+        bytes.append(&mut self.id.to_bytes()); // 20-bytes
         bytes.append(&mut socket_addr_to_bytes(&self.socket)); // 18-bytes
         bytes.push(self.transport.to_byte()); // 1-bytes
         bytes.push(if self.is_pub { 1u8 } else { 0u8 }); // 1-bytes

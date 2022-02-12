@@ -10,27 +10,26 @@ pub fn new_io_error(s: &str) -> std::io::Error {
 
 /// peer's network id.
 #[derive(Copy, Clone, Default, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
-pub struct PeerId(pub [u8; 32]);
+pub struct PeerId(pub [u8; 20]);
 
-pub const PEER_ID_LENGTH: usize = 32;
+pub const PEER_ID_LENGTH: usize = 20;
 
 impl PeerId {
     pub fn short_show(&self) -> String {
-        let mut hex = String::new();
-        hex.extend(self.0.iter().map(|byte| format!("{:02x?}", byte)));
         let mut new_hex = String::new();
+        let s = hex::encode(&self.0);
         new_hex.push_str("0x");
-        new_hex.push_str(&hex[0..4]);
+        new_hex.push_str(&s[0..4]);
         new_hex.push_str("...");
-        new_hex.push_str(&hex[hex.len() - 5..]);
+        new_hex.push_str(&s[s.len() - 5..]);
         new_hex
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != 32 {
+        if bytes.len() != PEER_ID_LENGTH {
             return Err(new_io_error("peer id bytes failure."));
         }
-        let mut raw = [0u8; 32];
+        let mut raw = [0u8; PEER_ID_LENGTH];
         raw.copy_from_slice(bytes);
         Ok(Self(raw))
     }
@@ -43,35 +42,24 @@ impl PeerId {
         self.0.to_vec()
     }
 
-    pub fn from_hex(s: impl ToString) -> Result<PeerId> {
-        let s = s.to_string();
-        if s.len() != 64 {
-            return Err(new_io_error("peer bytes failure."));
+    pub fn from_hex<S: AsRef<[u8]>>(s: S) -> Result<PeerId> {
+        let bytes = hex::decode(s).map_err(|_e| new_io_error("peer id hex failure."))?;
+        if bytes.len() != PEER_ID_LENGTH {
+            return Err(new_io_error("peer id hex failure."));
         }
-
-        let mut value = [0u8; 32];
-
-        for i in 0..(s.len() / 2) {
-            let res = u8::from_str_radix(&s[2 * i..2 * i + 2], 16)
-                .map_err(|_e| new_io_error("peer hex failure."))?;
-            value[i] = res;
-        }
-
+        let mut value = [0u8; PEER_ID_LENGTH];
+        value.copy_from_slice(&bytes);
         Ok(PeerId(value))
     }
 
     pub fn to_hex(&self) -> String {
-        let mut hex = String::new();
-        hex.extend(self.0.iter().map(|byte| format!("{:02x?}", byte)));
-        hex
+        hex::encode(&self.0)
     }
 }
 
 impl Debug for PeerId {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        let mut hex = String::new();
-        hex.extend(self.0.iter().map(|byte| format!("{:02x?}", byte)));
-        write!(f, "0x{}", hex)
+        write!(f, "0x{}", hex::encode(&self.0))
     }
 }
 

@@ -16,7 +16,7 @@ use chamomile_types::{
 use crate::global::Global;
 use crate::hole_punching::{nat, DHT};
 use crate::kad::KadValue;
-use crate::keys::SessionKey;
+use crate::session_key::SessionKey;
 use crate::transports::{
     new_endpoint_channel, EndpointMessage, RemotePublic, TransportSendMessage,
 };
@@ -48,11 +48,11 @@ pub(crate) async fn direct_stable(
         .await?;
 
     // 2. waiting remote send remote info.
-    if let Some(EndpointMessage::Handshake(RemotePublic(remote_key, remote_peer, dh_key))) =
+    if let Some(EndpointMessage::Handshake(RemotePublic(remote_peer, dh_key))) =
         stream_receiver.recv().await
     {
         // 3.1.1 if ok connected. keep it and update to stable.
-        let remote_id = remote_key.peer_id();
+        let remote_id = remote_peer.id;
         if !to.effective_id() && remote_id != to.id {
             warn!("CHAMOMILE: STABLE CONNECT FAILURE UNKNOWN PEER.");
             return Err(new_io_error("session stable unknown peer."));
@@ -75,7 +75,7 @@ pub(crate) async fn direct_stable(
         }
 
         // 3.1.2 check & update session key.
-        if !session_key.complete(&remote_key.pk, dh_key) {
+        if !session_key.complete(&remote_id, dh_key) {
             global.buffer.write().await.remove_connect(&to.id);
             return Err(new_io_error("session stable key failure."));
         }
@@ -189,9 +189,9 @@ pub(crate) async fn relay_stable(
     };
 
     if let Some(SessionMessage::RelayResult(remote, recv_ss)) = msg {
-        let RemotePublic(remote_key, remote_peer, dh_key) = remote;
+        let RemotePublic(remote_peer, dh_key) = remote;
 
-        let remote_id = remote_key.peer_id();
+        let remote_id = remote_peer.id;
         if remote_id != to.id {
             warn!("CHAMOMILE: STABLE CONNECT FAILURE UNKNOWN PEER.");
             global.buffer.write().await.remove_tmp(&to.id);
@@ -214,7 +214,7 @@ pub(crate) async fn relay_stable(
             return Err(new_io_error("session stable self failure."));
         }
 
-        if !session_key.complete(&remote_key.pk, dh_key) {
+        if !session_key.complete(&remote_id, dh_key) {
             global.buffer.write().await.remove_tmp(&to.id);
             return Err(new_io_error("session stable key failure."));
         }
@@ -824,9 +824,9 @@ impl Session {
                     }
 
                     // this is relay connect receiver.
-                    let RemotePublic(remote_key, remote_peer, dh_key) = from_peer;
+                    let RemotePublic(remote_peer, dh_key) = from_peer;
 
-                    let result = self.global.complete_remote(&remote_key, dh_key);
+                    let result = self.global.complete_remote(&remote_peer.id, dh_key);
                     if result.is_none() {
                         return Ok(());
                     }

@@ -6,7 +6,7 @@ use structopt::StructOpt;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::{io::Result, join, select};
 
-use crate::keys::SessionKey;
+use crate::session_key::SessionKey;
 
 use super::{
     new_endpoint_channel, EndpointMessage, RemotePublic, TransportRecvMessage, TransportSendMessage,

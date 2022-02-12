@@ -7,7 +7,7 @@ use tokio::{
     sync::mpsc::{Receiver, Sender},
 };
 
-use crate::keys::SessionKey;
+use crate::session_key::SessionKey;
 
 use super::{
     new_endpoint_channel, EndpointMessage, RemotePublic, TransportRecvMessage, TransportSendMessage,

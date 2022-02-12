@@ -10,6 +10,7 @@ use tokio::{
 
 use chamomile_types::{
     delivery_split,
+    key::Key,
     message::{DeliveryType, ReceiveMessage, SendMessage, StateRequest, StateResponse},
     types::{Broadcast, PeerId, TransportType},
     Peer,
@@ -20,9 +21,8 @@ use crate::config::Config;
 use crate::global::Global;
 use crate::hole_punching::{nat, DHT};
 use crate::kad::KadValue;
-use crate::keys::{KeyType, Keypair};
 use crate::peer_list::PeerList;
-use crate::primitives::{STORAGE_KEY_KEY, STORAGE_NAME, STORAGE_PEER_LIST_KEY};
+use crate::primitives::{STORAGE_KEY_KEY, STORAGE_PEER_LIST_KEY};
 use crate::session::{
     direct_stable, new_session_channel, relay_stable, session_spawn, ConnectType, Session,
     SessionMessage,
@@ -32,14 +32,37 @@ use crate::transports::{
     TransportSendMessage,
 };
 
-/// start server
 pub async fn start(
     config: Config,
     out_sender: Sender<ReceiveMessage>,
-    mut self_receiver: Receiver<SendMessage>,
+    self_receiver: Receiver<SendMessage>,
 ) -> Result<PeerId> {
+    let mut key_path = config.db_dir.clone();
+    key_path.push(STORAGE_KEY_KEY);
+    let key_bytes = fs::read(&key_path).await.unwrap_or(vec![]); // safe.
+    let key = match Key::from_db_bytes(&key_bytes) {
+        Ok(keypair) => keypair,
+        Err(_) => {
+            let key = Key::generate(&mut rand::thread_rng());
+            let key_bytes = key.to_db_bytes();
+            fs::write(key_path, key_bytes).await?;
+            key
+        }
+    };
+    start_with_key(config, out_sender, self_receiver, key).await
+}
+
+/// start server
+pub async fn start_with_key(
+    config: Config,
+    out_sender: Sender<ReceiveMessage>,
+    mut self_receiver: Receiver<SendMessage>,
+    key: Key,
+) -> Result<PeerId> {
+    let peer_id = key.peer_id();
+
     let Config {
-        mut db_dir,
+        db_dir,
         mut peer,
         mut allowlist,
         blocklist,
@@ -50,25 +73,6 @@ pub async fn start(
         delivery_length,
     } = config;
     allowlist.extend(allow_peer_list.iter().map(|pid| Peer::peer(*pid)));
-    db_dir.push(STORAGE_NAME);
-    if !db_dir.exists() {
-        fs::create_dir_all(&db_dir).await?;
-    }
-    let mut key_path = db_dir.clone();
-    key_path.push(STORAGE_KEY_KEY);
-    let key_bytes = fs::read(&key_path).await.unwrap_or(vec![]); // safe.
-
-    let key = match Keypair::from_db_bytes(&key_bytes) {
-        Ok(keypair) => keypair,
-        Err(_) => {
-            let key = KeyType::Ed25519.generate_kepair();
-            let key_bytes = key.to_db_bytes();
-            fs::write(key_path, key_bytes).await?;
-            key
-        }
-    };
-
-    let peer_id = key.peer_id();
 
     let mut peer_list_path = db_dir;
     peer_list_path.push(STORAGE_PEER_LIST_KEY);
@@ -87,7 +91,7 @@ pub async fn start(
     let mut trans_recv = trans_option.unwrap(); // safe
     let main_trans = main_option.unwrap(); // safe
 
-    peer.id = key.peer_id();
+    peer.id = peer_id;
     peer.socket = local_addr;
     transports.insert(peer.transport, trans_send.clone());
 
@@ -144,7 +148,7 @@ pub async fn start(
             match futres {
                 Some(FutureResult::Trans(TransportRecvMessage(
                     addr,
-                    RemotePublic(remote_key, remote_peer, dh_key),
+                    RemotePublic(remote_peer, dh_key),
                     is_self,
                     stream_sender,
                     stream_receiver,
@@ -158,7 +162,7 @@ pub async fn start(
                         continue;
                     }
 
-                    let remote_id = remote_key.peer_id();
+                    let remote_id = remote_peer.id;
                     let remote_peer = nat(addr, remote_peer);
                     debug!("Incoming remote NAT addr: {}", remote_peer.socket);
 
@@ -177,7 +181,7 @@ pub async fn start(
 
                     // 3. check session key and send self info to remote.
                     let session_key = if let Some(mut session_key) = is_self {
-                        if session_key.complete(&remote_key.pk, dh_key) {
+                        if session_key.complete(&remote_id, dh_key) {
                             session_key
                         } else {
                             debug!("Incoming remote session key is invalid, close it.");
@@ -186,7 +190,7 @@ pub async fn start(
                         }
                     } else {
                         if let Some((session_key, remote_pk)) =
-                            inner_global.complete_remote(&remote_key, dh_key)
+                            inner_global.complete_remote(&remote_id, dh_key)
                         {
                             let _ = endpoint_sender
                                 .send(EndpointMessage::Handshake(remote_pk))

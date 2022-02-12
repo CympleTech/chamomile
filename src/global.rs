@@ -6,6 +6,7 @@ use tokio::{
 };
 
 use chamomile_types::{
+    key::Key,
     message::ReceiveMessage,
     types::{new_io_error, TransportType},
     Peer, PeerId,
@@ -13,13 +14,13 @@ use chamomile_types::{
 
 use crate::buffer::Buffer;
 use crate::kad::KadValue;
-use crate::keys::{Keypair, SessionKey};
 use crate::peer_list::PeerList;
+use crate::session_key::SessionKey;
 use crate::transports::{start, RemotePublic, TransportRecvMessage, TransportSendMessage};
 
 pub(crate) struct Global {
     pub peer: Peer,
-    pub key: Keypair,
+    pub key: Key,
     pub trans: Sender<TransportRecvMessage>,
     pub transports: Arc<RwLock<HashMap<TransportType, Sender<TransportSendMessage>>>>,
     pub out_sender: Sender<ReceiveMessage>,
@@ -37,31 +38,20 @@ impl Global {
 
     #[inline]
     pub fn generate_remote(&self) -> (SessionKey, RemotePublic) {
-        // random gennerate, so must return. no keep-loop.
-        loop {
-            if let Ok(session_key) = self.key.generate_session_key() {
-                let remote_pk = RemotePublic(
-                    self.key.public(),
-                    self.peer.clone(),
-                    session_key.out_bytes(),
-                );
-                return (session_key, remote_pk);
-            }
-        }
+        let session_key = SessionKey::generate(&self.key);
+        let remote_pk = RemotePublic(self.peer.clone(), session_key.out_bytes(&self.key.public()));
+        (session_key, remote_pk)
     }
 
     #[inline]
     pub fn complete_remote(
         &self,
-        remote_key: &Keypair,
+        remote_id: &PeerId,
         dh_bytes: Vec<u8>,
     ) -> Option<(SessionKey, RemotePublic)> {
-        if let Some(session_key) = self.key.complete_session_key(remote_key, dh_bytes) {
-            let remote_pk = RemotePublic(
-                self.key.public(),
-                self.peer.clone(),
-                session_key.out_bytes(),
-            );
+        if let Some(session_key) = SessionKey::generate_complete(&self.key, remote_id, dh_bytes) {
+            let remote_pk =
+                RemotePublic(self.peer.clone(), session_key.out_bytes(&self.key.public()));
             Some((session_key, remote_pk))
         } else {
             None
