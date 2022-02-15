@@ -37,8 +37,8 @@ pub enum ReceiveMessage {
     ResultConnect(Peer, Vec<u8>),
     /// when a stable connection's peer leave,
     /// send from chamomile to outside.
-    /// params is `peer_id`.
-    StableLeave(PeerId),
+    /// params is `peer`.
+    StableLeave(Peer),
     /// when received a data from a trusted peer,
     /// send to outside.
     /// params is `peer_id` and `data_bytes`.

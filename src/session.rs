@@ -330,7 +330,9 @@ impl Session {
         let peer_id = self.remote_id();
 
         if self.is_stable {
-            let _ = self.out_send(ReceiveMessage::StableLeave(*peer_id)).await;
+            let _ = self
+                .out_send(ReceiveMessage::StableLeave(self.remote_peer))
+                .await;
             if !self.is_direct() {
                 let _ = self
                     .relay_send(SessionMessage::RelayClose(*self.my_id()))
