@@ -102,11 +102,8 @@ async fn main() {
                     ))
                     .await;
             }
-            ReceiveMessage::StableLeave(peer_id) => {
-                println!(
-                    "===========Recv stable connected leave: {}",
-                    peer_id.to_hex()
-                );
+            ReceiveMessage::StableLeave(peer) => {
+                println!("===========Recv stable connected leave: {:?}", peer);
             }
             ReceiveMessage::StableResult(peer, is_ok, remark) => {
                 println!(

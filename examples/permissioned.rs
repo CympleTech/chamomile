@@ -53,8 +53,8 @@ async fn main() {
             ReceiveMessage::ResultConnect(from, _data) => {
                 println!("Recv Result Connect {:?}", from);
             }
-            ReceiveMessage::StableLeave(peer_id) => {
-                println!("Peer_leave: {:?}", peer_id);
+            ReceiveMessage::StableLeave(peer) => {
+                println!("Peer_leave: {:?}", peer);
             }
             ReceiveMessage::Stream(..) => {
                 panic!("Not stream");

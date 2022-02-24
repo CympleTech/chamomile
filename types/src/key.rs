@@ -1,6 +1,6 @@
 use ed25519_dalek::{
     Keypair as Ed25519_Keypair, PublicKey as Ed25519_PublicKey, Signature as Ed25519_Signature,
-    Signer, Verifier, PUBLIC_KEY_LENGTH,
+    Signer, Verifier, KEYPAIR_LENGTH, PUBLIC_KEY_LENGTH,
 };
 use rand_core::{CryptoRng, RngCore};
 use ripemd::{Digest, Ripemd160};
@@ -14,6 +14,10 @@ pub enum Key {
 }
 
 impl Key {
+    pub fn default() -> Self {
+        Key::Ed25519(Ed25519_Keypair::from_bytes(&[0u8; KEYPAIR_LENGTH]).unwrap())
+    }
+
     pub fn generate<R: CryptoRng + RngCore>(rng: &mut R) -> Key {
         let keypair = Ed25519_Keypair::generate(rng);
         Key::Ed25519(keypair)
