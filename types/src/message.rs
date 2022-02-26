@@ -99,6 +99,8 @@ pub enum SendMessage {
     NetworkState(StateRequest, Sender<StateResponse>),
     /// When receive `ReceiveMessage::NetworkLost`, want to reboot network, it can use.
     NetworkReboot,
+    /// When want to close p2p network.
+    NetworkStop,
 }
 
 /// Network state info response.

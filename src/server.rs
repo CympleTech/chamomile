@@ -558,6 +558,10 @@ pub async fn start_with_key(
                             .await;
                     }
                 }
+                Some(SendMessage::NetworkStop) => {
+                    // clear all sessions and transports.
+                    break;
+                }
                 None => break,
             }
         }
