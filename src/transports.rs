@@ -45,6 +45,7 @@ pub enum TransportSendMessage {
         SocketAddr,
         RemotePublic,
     ),
+    Stop,
 }
 
 /// when endpoint get a incoming connection, will send to outside.

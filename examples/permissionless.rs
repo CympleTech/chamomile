@@ -17,6 +17,8 @@ async fn main() {
     )])
     .unwrap();
 
+    console_subscriber::init();
+
     let addr_str = args().nth(1).expect("missing path");
     let self_addr: SocketAddr = addr_str.parse().expect("invalid addr");
 
@@ -63,6 +65,9 @@ async fn main() {
         let _ = send
             .send(SendMessage::Broadcast(Broadcast::Gossip, bytes))
             .await;
+
+        // if send this will stop and close the network.
+        //let _ = send.send(SendMessage::NetworkStop).await;
     }
 
     while let Some(message) = recv.recv().await {

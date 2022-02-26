@@ -5,6 +5,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     select,
     sync::mpsc::{Receiver, Sender},
+    task::JoinHandle,
 };
 
 use crate::session_key::SessionKey;
@@ -22,7 +23,7 @@ pub async fn start(
     recv: Receiver<TransportSendMessage>,
     both: bool,
 ) -> Result<SocketAddr> {
-    let addr = if both {
+    let (addr, task) = if both {
         let listener = TcpListener::bind(bind_addr).await.map_err(|e| {
             error!("TCP listen {:?}", e);
             std::io::Error::new(std::io::ErrorKind::Other, "TCP Listen")
@@ -31,14 +32,14 @@ pub async fn start(
         info!("TCP listening at: {:?}", addr);
 
         // TCP listen incoming.
-        tokio::spawn(run_listen(listener, send.clone()));
-        addr
+        let task = tokio::spawn(run_listen(listener, send.clone()));
+        (addr, Some(task))
     } else {
-        bind_addr
+        (bind_addr, None)
     };
 
     // TCP listen from outside.
-    tokio::spawn(run_self_recv(recv, send));
+    tokio::spawn(run_self_recv(recv, send, task));
 
     Ok(addr)
 }
@@ -62,6 +63,7 @@ async fn run_listen(listener: TcpListener, out_send: Sender<TransportRecvMessage
 async fn run_self_recv(
     mut recv: Receiver<TransportSendMessage>,
     out_send: Sender<TransportRecvMessage>,
+    task: Option<JoinHandle<Result<()>>>,
 ) -> Result<()> {
     while let Some(m) = recv.recv().await {
         match m {
@@ -111,6 +113,12 @@ async fn run_self_recv(
                         let _ = out_sender.send(EndpointMessage::Close).await;
                     }
                 });
+            }
+            TransportSendMessage::Stop => {
+                if let Some(task) = task {
+                    task.abort();
+                }
+                break;
             }
         }
     }

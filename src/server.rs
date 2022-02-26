@@ -122,7 +122,7 @@ pub async fn start_with_key(
 
     let recv_data = !only_stable_data;
     let inner_global = global.clone();
-    tokio::spawn(async move {
+    let listen_task = tokio::spawn(async move {
         enum FutureResult {
             Trans(TransportRecvMessage),
             Clear,
@@ -559,7 +559,17 @@ pub async fn start_with_key(
                     }
                 }
                 Some(SendMessage::NetworkStop) => {
-                    // clear all sessions and transports.
+                    // clear all sessions
+                    for (_, sender) in global.peer_list.read().await.all() {
+                        let _ = sender.send(SessionMessage::Close).await;
+                    }
+
+                    // clear all transports.
+                    for (_, sender) in global.transports.read().await.iter() {
+                        let _ = sender.send(TransportSendMessage::Stop).await;
+                    }
+
+                    listen_task.abort();
                     break;
                 }
                 None => break,

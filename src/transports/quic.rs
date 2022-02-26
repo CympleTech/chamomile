@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::{sync::Arc, time::Duration};
 use structopt::StructOpt;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::{io::Result, join, select};
+use tokio::{io::Result, join, select, task::JoinHandle};
 
 use crate::session_key::SessionKey;
 
@@ -32,7 +32,7 @@ pub async fn start(
 
     // QUIC listen incoming.
     let out_send = send.clone();
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         loop {
             match incoming.next().await {
                 Some(quinn_conn) => match quinn_conn.await {
@@ -62,7 +62,7 @@ pub async fn start(
     });
 
     // QUIC listen from outside.
-    tokio::spawn(run_self_recv(endpoint, config.client, recv, send));
+    tokio::spawn(run_self_recv(endpoint, config.client, recv, send, task));
 
     Ok(addr)
 }
@@ -123,6 +123,7 @@ async fn run_self_recv(
     client_cfg: quinn::ClientConfig,
     mut recv: Receiver<TransportSendMessage>,
     out_send: Sender<TransportRecvMessage>,
+    task: JoinHandle<()>,
 ) -> Result<()> {
     while let Some(m) = recv.recv().await {
         match m {
@@ -145,6 +146,10 @@ async fn run_self_recv(
                     self_receiver,
                     remote_pk,
                 ));
+            }
+            TransportSendMessage::Stop => {
+                task.abort();
+                break;
             }
         }
     }
