@@ -74,7 +74,7 @@ async fn start_boot_strap_peers(
         allow_peer_list,
         block_peer_list,
         permission,
-        only_stable_data,
+        only_stable_data: _,
         delivery_length,
     } = config;
 
