@@ -32,33 +32,38 @@ use crate::transports::{
     TransportSendMessage,
 };
 
-pub async fn start(
-    config: Config,
-    out_sender: Sender<ReceiveMessage>,
-    self_receiver: Receiver<SendMessage>,
-) -> Result<PeerId> {
+async fn get_keypair(config: Config) -> Key {
     let mut key_path = config.db_dir.clone();
     key_path.push(STORAGE_KEY_KEY);
+
     let key_bytes = fs::read(&key_path).await.unwrap_or(vec![]); // safe.
     let key = match Key::from_db_bytes(&key_bytes) {
         Ok(keypair) => keypair,
         Err(_) => {
             let key = Key::generate(&mut rand::thread_rng());
             let key_bytes = key.to_db_bytes();
-            fs::write(key_path, key_bytes).await?;
+            let _ = fs::write(key_path, key_bytes).await;
             key
         }
     };
+
+    key
+}
+
+pub async fn start(
+    config: Config,
+    out_sender: Sender<ReceiveMessage>,
+    self_receiver: Receiver<SendMessage>,
+) -> Result<PeerId> {
+    let key = get_keypair(config.clone()).await;
     start_with_key(config, out_sender, self_receiver, key).await
 }
 
-/// start server
-pub async fn start_with_key(
+async fn start_boot_strap_peers(
     config: Config,
     out_sender: Sender<ReceiveMessage>,
-    mut self_receiver: Receiver<SendMessage>,
     key: Key,
-) -> Result<PeerId> {
+) -> (Arc<Global>, Receiver<TransportRecvMessage>) {
     let peer_id = key.peer_id();
 
     let Config {
@@ -69,9 +74,10 @@ pub async fn start_with_key(
         allow_peer_list,
         block_peer_list,
         permission,
-        only_stable_data,
+        only_stable_data: _,
         delivery_length,
     } = config;
+
     allowlist.extend(allow_peer_list.iter().map(|pid| Peer::peer(*pid)));
 
     let mut peer_list_path = db_dir;
@@ -88,7 +94,7 @@ pub async fn start_with_key(
     let (local_addr, trans_send, trans_option, main_option) = transport_start(&peer, None)
         .await
         .expect("Transport binding failure!");
-    let mut trans_recv = trans_option.unwrap(); // safe
+    let trans_recv = trans_option.unwrap(); // safe
     let main_trans = main_option.unwrap(); // safe
 
     peer.id = peer_id;
@@ -118,7 +124,22 @@ pub async fn start_with_key(
             .await;
     }
 
-    drop(peer_list);
+    (global, trans_recv)
+}
+
+/// start server
+pub async fn start_with_key(
+    config: Config,
+    out_sender: Sender<ReceiveMessage>,
+    mut self_receiver: Receiver<SendMessage>,
+    key: Key,
+) -> Result<PeerId> {
+    let peer_id = key.peer_id();
+
+    let (global, mut trans_recv) = start_boot_strap_peers(config.clone(), out_sender, key).await;
+
+    let only_stable_data = config.only_stable_data;
+    let delivery_length = config.delivery_length;
 
     let recv_data = !only_stable_data;
     let inner_global = global.clone();
