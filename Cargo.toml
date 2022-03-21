@@ -37,6 +37,3 @@ chamomile_types = { version = "0.8", path = "./types" }
 [dev-dependencies]
 simplelog = "0.11"
 console-subscriber = "0.1"
-
-[build]
-rustflags = ["--cfg", "tokio_unstable"]

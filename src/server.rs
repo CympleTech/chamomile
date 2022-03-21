@@ -32,10 +32,10 @@ use crate::transports::{
     TransportSendMessage,
 };
 
-async fn  get_keypair(config: Config) -> Key {
+async fn get_keypair(config: Config) -> Key {
     let mut key_path = config.db_dir.clone();
     key_path.push(STORAGE_KEY_KEY);
-    
+
     let key_bytes = fs::read(&key_path).await.unwrap_or(vec![]); // safe.
     let key = match Key::from_db_bytes(&key_bytes) {
         Ok(keypair) => keypair,
@@ -55,7 +55,6 @@ pub async fn start(
     out_sender: Sender<ReceiveMessage>,
     self_receiver: Receiver<SendMessage>,
 ) -> Result<PeerId> {
-
     let key = get_keypair(config.clone()).await;
     start_with_key(config, out_sender, self_receiver, key).await
 }
@@ -63,9 +62,8 @@ pub async fn start(
 async fn start_boot_strap_peers(
     config: Config,
     out_sender: Sender<ReceiveMessage>,
-    key: Key
+    key: Key,
 ) -> (Arc<Global>, Receiver<TransportRecvMessage>) {
-    
     let peer_id = key.peer_id();
 
     let Config {
@@ -96,7 +94,7 @@ async fn start_boot_strap_peers(
     let (local_addr, trans_send, trans_option, main_option) = transport_start(&peer, None)
         .await
         .expect("Transport binding failure!");
-    let  trans_recv = trans_option.unwrap(); // safe
+    let trans_recv = trans_option.unwrap(); // safe
     let main_trans = main_option.unwrap(); // safe
 
     peer.id = peer_id;
@@ -126,9 +124,7 @@ async fn start_boot_strap_peers(
             .await;
     }
 
-    drop(peer_list);
-   
-    (global,trans_recv)
+    (global, trans_recv)
 }
 
 /// start server
@@ -140,7 +136,7 @@ pub async fn start_with_key(
 ) -> Result<PeerId> {
     let peer_id = key.peer_id();
 
-    let (global,  mut trans_recv) = start_boot_strap_peers(config.clone(), out_sender, key).await;
+    let (global, mut trans_recv) = start_boot_strap_peers(config.clone(), out_sender, key).await;
 
     let only_stable_data = config.only_stable_data;
     let delivery_length = config.delivery_length;
@@ -604,4 +600,3 @@ pub async fn start_with_key(
 
     Ok(peer_id)
 }
-
