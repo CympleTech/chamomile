@@ -21,6 +21,13 @@ use crate::transports::{
     new_endpoint_channel, EndpointMessage, RemotePublic, TransportSendMessage,
 };
 
+/// To solve the tokio async cycle.
+fn own_spawn(p: Peer, global: Arc<Global>) {
+    tokio::spawn(async move {
+        let _ = direct_stable(0, vec![], p, global, true).await;
+    });
+}
+
 /// direct start stable connection, if had IP.
 pub(crate) async fn direct_stable(
     tid: u64,
@@ -58,20 +65,24 @@ pub(crate) async fn direct_stable(
             return Err(new_io_error("session stable unknown peer."));
         }
 
+        let mut is_own = false;
         if &remote_id == global.peer_id() {
-            warn!("CHAMOMILE: STABLE CONNECT NERVER TO SELF.");
-            let _ = endpoint_sender.send(EndpointMessage::Close).await;
-            if tid != 0 {
-                global
-                    .out_send(ReceiveMessage::Delivery(
-                        DeliveryType::StableConnect,
-                        tid,
-                        false,
-                        delivery,
-                    ))
-                    .await?;
+            if &remote_peer.assist == global.assist_id() {
+                warn!("CHAMOMILE: STABLE CONNECT NERVER TO SELF.");
+                let _ = endpoint_sender.send(EndpointMessage::Close).await;
+                if tid != 0 {
+                    global
+                        .out_send(ReceiveMessage::Delivery(
+                            DeliveryType::StableConnect,
+                            tid,
+                            false,
+                            delivery,
+                        ))
+                        .await?;
+                }
+                return Err(new_io_error("session stable self failure."));
             }
-            return Err(new_io_error("session stable self failure."));
+            is_own = true;
         }
 
         // 3.1.2 check & update session key.
@@ -100,7 +111,15 @@ pub(crate) async fn direct_stable(
             session_key,
             global,
             is_recv_data,
+            is_own,
         );
+
+        // 3.1.4.0 check if it is auto-own.
+        if buffers.len() == 0 && session.is_own {
+            session
+                .send_core_data(CoreData::StableConnect(0, vec![]))
+                .await?;
+        }
 
         // 3.1.4 send all connect info to remote.
         for buffer in buffers {
@@ -198,20 +217,24 @@ pub(crate) async fn relay_stable(
             return Err(new_io_error("session stable unknown peer."));
         }
 
+        let mut is_own = false;
         if &remote_id == global.peer_id() {
-            warn!("CHAMOMILE: STABLE CONNECT NERVER TO SELF.");
-            global.buffer.write().await.remove_tmp(&to.id);
-            if tid != 0 {
-                global
-                    .out_send(ReceiveMessage::Delivery(
-                        DeliveryType::StableConnect,
-                        tid,
-                        false,
-                        delivery,
-                    ))
-                    .await?;
+            if &remote_peer.assist == global.assist_id() {
+                warn!("CHAMOMILE: STABLE CONNECT NERVER TO SELF.");
+                global.buffer.write().await.remove_tmp(&to.id);
+                if tid != 0 {
+                    global
+                        .out_send(ReceiveMessage::Delivery(
+                            DeliveryType::StableConnect,
+                            tid,
+                            false,
+                            delivery,
+                        ))
+                        .await?;
+                }
+                return Err(new_io_error("session stable self failure."));
             }
-            return Err(new_io_error("session stable self failure."));
+            is_own = true;
         }
 
         if !session_key.complete(&remote_id, dh_key) {
@@ -228,7 +251,15 @@ pub(crate) async fn relay_stable(
             session_key,
             global,
             is_recv_data,
+            is_own,
         );
+
+        // 3.1.4.0 check if it is auto-own.
+        if connects.len() == 0 && session.is_own {
+            session
+                .send_core_data(CoreData::StableConnect(0, vec![]))
+                .await?;
+        }
 
         for buffer in connects {
             session
@@ -283,6 +314,7 @@ pub(crate) struct Session {
     pub global: Arc<Global>,
     pub is_recv_data: bool,
     pub is_stable: bool,
+    pub is_own: bool,
     pub heartbeat: u32,
     pub relay_sessions: HashMap<PeerId, Sender<SessionMessage>>,
 }
@@ -303,6 +335,7 @@ impl Session {
         session_key: SessionKey,
         global: Arc<Global>,
         is_recv_data: bool,
+        is_own: bool,
     ) -> Session {
         Session {
             remote_peer,
@@ -312,30 +345,47 @@ impl Session {
             session_key,
             global,
             is_recv_data,
+            is_own,
             is_stable: false,
             heartbeat: 0,
             relay_sessions: HashMap::new(),
         }
     }
 
-    fn my_id(&self) -> &PeerId {
-        self.global.peer_id()
+    fn is_to_me(&self, to: &PeerId) -> bool {
+        self.global.peer_id() == to || self.global.assist_id() == to
     }
 
-    fn remote_id(&self) -> &PeerId {
-        &self.remote_peer.id
+    fn is_from_remote(&self, from: &PeerId) -> bool {
+        &self.remote_peer.id == from || &self.remote_peer.assist == from
+    }
+
+    fn is_own_remote(&self, peer: &Peer) -> bool {
+        self.global.peer_id() == &peer.id && self.global.assist_id() != &peer.assist
+    }
+
+    async fn is_new_remote(&self, p: &Peer) -> bool {
+        self.global.peer_id() != &p.id && !self.global.peer_list.read().await.contains(&p.id)
     }
 
     async fn close(&mut self, is_leave: bool) -> Result<()> {
-        let peer_id = self.remote_id();
+        let peer_id = &self.remote_peer.id;
+        let assist_id = &self.remote_peer.assist;
 
         if self.is_stable {
-            let _ = self
-                .out_send(ReceiveMessage::StableLeave(self.remote_peer))
-                .await;
+            if self.is_own {
+                let _ = self
+                    .out_send(ReceiveMessage::OwnLeave(self.remote_peer))
+                    .await;
+            } else {
+                let _ = self
+                    .out_send(ReceiveMessage::StableLeave(self.remote_peer))
+                    .await;
+            }
+
             if !self.is_direct() {
                 let _ = self
-                    .relay_send(SessionMessage::RelayClose(*self.my_id()))
+                    .relay_send(SessionMessage::RelayClose(*self.global.peer_id()))
                     .await;
             }
 
@@ -347,8 +397,13 @@ impl Session {
             }
         } else if self.is_direct() {
             if is_leave {
-                self.global.buffer.write().await.remove_tmp(peer_id);
-                self.global.peer_list.write().await.remove_peer(peer_id);
+                let mut buffer_lock = self.global.buffer.write().await;
+                buffer_lock.remove_tmp(peer_id);
+                buffer_lock.remove_tmp(assist_id);
+                drop(buffer_lock);
+                let mut peers_lock = self.global.peer_list.write().await;
+                peers_lock.remove_peer(peer_id, assist_id);
+                drop(peers_lock);
             } else {
                 self.global.tmp_to_dht(peer_id).await?;
             }
@@ -453,12 +508,13 @@ impl Session {
         if self.is_direct() {
             self.direct_send(EndpointMessage::Data(e_data)).await
         } else {
-            self.relay_send(SessionMessage::RelayData(
-                *self.my_id(),
-                *self.remote_id(),
-                e_data,
-            ))
-            .await
+            let (from, to) = if self.is_own {
+                (*self.global.assist_id(), self.remote_peer.assist)
+            } else {
+                (*self.global.peer_id(), self.remote_peer.id)
+            };
+            self.relay_send(SessionMessage::RelayData(from, to, e_data))
+                .await
         }
     }
 
@@ -476,8 +532,13 @@ impl Session {
                         if self.is_recv_data {
                             let delivery_data =
                                 delivery_split!(p_data, self.global.delivery_length);
-                            self.out_send(ReceiveMessage::Data(*self.remote_id(), p_data))
-                                .await?;
+                            if self.is_own {
+                                self.out_send(ReceiveMessage::OwnEvent(p_data)).await?;
+                            } else {
+                                self.out_send(ReceiveMessage::Data(self.remote_peer.id, p_data))
+                                    .await?;
+                            }
+
                             if tid != 0 {
                                 self.send_core_data(CoreData::Delivery(
                                     DeliveryType::Data,
@@ -506,8 +567,17 @@ impl Session {
                     }
                     CoreData::StableConnect(tid, data) => {
                         let delivery_data = delivery_split!(data, self.global.delivery_length);
-                        self.out_send(ReceiveMessage::StableConnect(self.remote_peer, data))
-                            .await?;
+                        if self.is_own {
+                            self.out_send(ReceiveMessage::OwnConnect(self.remote_peer))
+                                .await?;
+                            self.send_core_data(CoreData::StableResult(0, true, data))
+                                .await?;
+                            self.upgrade().await?;
+                        } else {
+                            self.out_send(ReceiveMessage::StableConnect(self.remote_peer, data))
+                                .await?;
+                        }
+
                         if tid != 0 {
                             self.send_core_data(CoreData::Delivery(
                                 DeliveryType::StableConnect,
@@ -519,8 +589,17 @@ impl Session {
                     }
                     CoreData::StableResult(tid, is_ok, data) => {
                         let delivery_data = delivery_split!(data, self.global.delivery_length);
-                        self.out_send(ReceiveMessage::StableResult(self.remote_peer, is_ok, data))
+                        if self.is_own {
+                            self.out_send(ReceiveMessage::OwnConnect(self.remote_peer))
+                                .await?;
+                        } else {
+                            self.out_send(ReceiveMessage::StableResult(
+                                self.remote_peer,
+                                is_ok,
+                                data,
+                            ))
                             .await?;
+                        }
                         if tid != 0 {
                             self.send_core_data(CoreData::Delivery(
                                 DeliveryType::StableResult,
@@ -532,8 +611,17 @@ impl Session {
                     }
                     CoreData::ResultConnect(tid, data) => {
                         let delivery_data = delivery_split!(data, self.global.delivery_length);
-                        self.out_send(ReceiveMessage::ResultConnect(self.remote_peer, data))
-                            .await?;
+                        if self.is_own {
+                            self.out_send(ReceiveMessage::OwnConnect(self.remote_peer))
+                                .await?;
+                            self.send_core_data(CoreData::StableResult(0, true, data))
+                                .await?;
+                            self.upgrade().await?;
+                        } else {
+                            self.out_send(ReceiveMessage::ResultConnect(self.remote_peer, data))
+                                .await?;
+                        }
+
                         if tid != 0 {
                             self.send_core_data(CoreData::Delivery(
                                 DeliveryType::StableResult,
@@ -557,7 +645,14 @@ impl Session {
         debug!("UPGRADE TO STABLE CONNECTION");
         self.is_stable = true;
         self.is_recv_data = true;
-        self.global.upgrade(self.remote_id()).await
+        if self.is_own {
+            self.global.upgrade_own(&self.remote_peer.id).await;
+            Ok(())
+        } else {
+            self.global
+                .upgrade(&self.remote_peer.id, &self.remote_peer.assist)
+                .await
+        }
     }
 
     async fn forever(&mut self, mut session_receiver: Receiver<SessionMessage>) -> Result<()> {
@@ -606,9 +701,9 @@ impl Session {
     }
 
     pub async fn listen(&mut self, session_receiver: Receiver<SessionMessage>) -> Result<()> {
-        debug!("Session running: {}.", self.remote_id().short_show());
+        debug!("Session running: {}.", self.remote_peer.id.short_show());
         let _ = self.forever(session_receiver).await;
-        debug!("Session broke: {}.", self.remote_id().short_show());
+        debug!("Session broke: {}.", self.remote_peer.id.short_show());
         self.close(true).await
     }
 
@@ -620,7 +715,7 @@ impl Session {
             SessionMessage::StableConnect(tid, data) => {
                 debug!(
                     "SessionMessage StableConnect to: {:?}",
-                    self.remote_id().short_show()
+                    self.remote_peer.id.short_show()
                 );
 
                 self.send_core_data(CoreData::StableConnect(tid, data))
@@ -633,7 +728,7 @@ impl Session {
             SessionMessage::StableResult(tid, is_ok, is_force, data) => {
                 debug!(
                     "SessionMessage StableResult to: {:?}",
-                    self.remote_id().short_show()
+                    self.remote_peer.id.short_show()
                 );
 
                 self.send_core_data(CoreData::StableResult(tid, is_ok, data))
@@ -653,7 +748,7 @@ impl Session {
             }
             SessionMessage::RelayData(from, to, data) => {
                 debug!("SessionMessage RelayData to: {:?}", to.short_show());
-                if &to == self.remote_id() && &from == self.my_id() {
+                if !self.is_own && to == self.remote_peer.id && &from == self.global.peer_id() {
                     warn!("CHAMOMILE: RELAY TO SELF, MUST DIRECTLY.");
                     self.failure_send(data).await?;
                     return Ok(());
@@ -673,7 +768,10 @@ impl Session {
             }
             SessionMessage::RelayConnect(from_peer, to) => {
                 debug!("SessionMessage RelayConnect to: {:?}", to.short_show());
-                if &to == self.remote_id() && from_peer.id() == self.my_id() {
+                if !self.is_own
+                    && to == self.remote_peer.id
+                    && from_peer.id() == self.global.peer_id()
+                {
                     warn!("CHAMOMILE: RELAY TO SELF, MUST DIRECTLY.");
                     return Ok(());
                 }
@@ -707,7 +805,7 @@ impl Session {
             ) => {
                 // 1. close relay.
                 let _ = self
-                    .relay_send(SessionMessage::RelayClose(*self.my_id()))
+                    .relay_send(SessionMessage::RelayClose(*self.global.peer_id()))
                     .await;
                 // 2. update stream and info.
                 self.stream_receiver = stream_receiver;
@@ -731,9 +829,11 @@ impl Session {
             EndpointMessage::DHT(DHT(peers)) => {
                 if peers.len() > 0 {
                     for p in peers {
-                        if &p.id != self.my_id()
-                            && !self.global.peer_list.read().await.contains(&p.id)
-                        {
+                        println!("=== SYNC DHT: {} - {}", p.id.to_hex(), p.assist.to_hex());
+                        if self.is_own_remote(&p) {
+                            let new_g = self.global.clone();
+                            own_spawn(p, new_g);
+                        } else if self.is_new_remote(&p).await {
                             let (session_key, remote_pk) = self.global.generate_remote();
                             let _ = self
                                 .global
@@ -756,8 +856,8 @@ impl Session {
                 self.handle_core_data(e_data).await?;
             }
             EndpointMessage::RelayData(from, to, data) => {
-                if &to == self.my_id() {
-                    if &from == self.remote_id() {
+                if self.is_to_me(&to) {
+                    if self.is_from_remote(&from) {
                         self.handle_core_data(data).await?;
                     } else {
                         if let Some(stream_sender) =
@@ -785,7 +885,7 @@ impl Session {
                             .peer_list
                             .read()
                             .await
-                            .next_closest(&to, self.remote_id())
+                            .next_closest(&to, &self.remote_peer.id)
                         {
                             let _ = sender.send(SessionMessage::RelayData(from, to, data)).await;
                         } else {
@@ -798,13 +898,18 @@ impl Session {
                 debug!(
                     "Relay Handshake to: {:?}, is me: {}",
                     to.short_show(),
-                    &to == self.my_id()
+                    &to == self.global.peer_id()
                 );
-                if &to == self.my_id() {
-                    let remote_peer_id = from_peer.id().clone();
-                    if &remote_peer_id == self.my_id() {
-                        warn!("CHAMOMILE: RELAY NERVER TO SELF.");
-                        return Ok(());
+                if self.is_to_me(&to) {
+                    let mut remote_peer_id = from_peer.id().clone();
+                    let mut is_own = false;
+                    if &remote_peer_id == self.global.peer_id() {
+                        if from_peer.assist() == self.global.assist_id() {
+                            warn!("CHAMOMILE: RELAY NERVER TO SELF.");
+                            return Ok(());
+                        }
+                        remote_peer_id = from_peer.assist().clone();
+                        is_own = true;
                     }
 
                     if let Some(sender) = self
@@ -850,7 +955,8 @@ impl Session {
                         ConnectType::Relay(self.session_sender.clone()),
                         new_session_key,
                         self.global.clone(),
-                        false, // default is not recv data.
+                        is_own || false, // default is not recv data.
+                        is_own,
                     );
 
                     // if use session_run directly, it will cycle error in rust check.
@@ -868,7 +974,7 @@ impl Session {
                             .peer_list
                             .read()
                             .await
-                            .next_closest(&to, self.remote_id())
+                            .next_closest(&to, &self.remote_peer.id)
                         {
                             let _ = sender
                                 .send(SessionMessage::RelayConnect(from_peer, to))

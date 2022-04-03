@@ -4,7 +4,7 @@ use crate::peer::Peer;
 use crate::types::{Broadcast, PeerId, TransportStream};
 
 /// Custom apply for build a stream between nodes.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum StreamType {
     /// request for build a stream, params is peer id, transport type and request custom info.
     Req(Peer),
@@ -50,6 +50,12 @@ pub enum ReceiveMessage {
     Delivery(DeliveryType, u64, bool, Vec<u8>),
     /// when network lost all DHT network and direct stables. will tell outside.
     NetworkLost,
+    /// when same PeerId peer is connected.
+    OwnConnect(Peer),
+    /// when same PeerId is leaved.
+    OwnLeave(Peer),
+    /// when receive same PeerId message.
+    OwnEvent(Vec<u8>),
 }
 
 /// main send message for outside channel, send from outside to chamomile.
@@ -101,6 +107,8 @@ pub enum SendMessage {
     NetworkReboot,
     /// When want to close p2p network.
     NetworkStop,
+    /// when want to broadcast message with same PeerId.
+    OwnEvent(Vec<u8>),
 }
 
 /// Network state info response.

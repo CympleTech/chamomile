@@ -1,17 +1,9 @@
 use chamomile::prelude::{start, Config, Peer, ReceiveMessage, SendMessage};
-use simplelog::{CombinedLogger, Config as LogConfig, LevelFilter, WriteLogger};
-use std::env::args;
-use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::{env::args, net::SocketAddr};
 
 #[tokio::main]
 async fn main() {
-    CombinedLogger::init(vec![WriteLogger::new(
-        LevelFilter::Debug,
-        LogConfig::default(),
-        std::fs::File::create(PathBuf::from("./log.txt")).unwrap(),
-    )])
-    .unwrap();
+    tracing_subscriber::fmt::init();
 
     let addr_str = args().nth(1).expect("missing path");
     let self_addr: SocketAddr = addr_str.parse().expect("invalid addr");
@@ -36,8 +28,6 @@ async fn main() {
 
     while let Some(message) = recv.recv().await {
         match message {
-            ReceiveMessage::Data(..) => {}
-            ReceiveMessage::Stream(..) => {}
             ReceiveMessage::StableConnect(from, ..) => {
                 let _ = send
                     .send(SendMessage::StableResult(0, from, false, false, vec![]))
@@ -48,10 +38,7 @@ async fn main() {
                     .send(SendMessage::StableResult(0, from, false, false, vec![]))
                     .await;
             }
-            ReceiveMessage::StableLeave(..) => {}
-            ReceiveMessage::StableResult(..) => {}
-            ReceiveMessage::Delivery(..) => {}
-            ReceiveMessage::NetworkLost => {}
+            _ => {}
         }
     }
 }

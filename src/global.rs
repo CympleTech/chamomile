@@ -37,6 +37,11 @@ impl Global {
     }
 
     #[inline]
+    pub fn assist_id(&self) -> &PeerId {
+        &self.peer.assist
+    }
+
+    #[inline]
     pub fn generate_remote(&self) -> (SessionKey, RemotePublic) {
         let session_key = SessionKey::generate(&self.key);
         let remote_pk = RemotePublic(self.peer.clone(), session_key.out_bytes(&self.key.public()));
@@ -123,13 +128,23 @@ impl Global {
         (connects, results)
     }
 
-    pub async fn upgrade(&self, peer_id: &PeerId) -> Result<()> {
+    pub async fn upgrade(&self, peer_id: &PeerId, assist_id: &PeerId) -> Result<()> {
         let v_some = self.buffer.write().await.remove_tmp(peer_id);
         if let Some((v, is_d)) = v_some {
             self.peer_list.write().await.add_stable(*peer_id, v, is_d);
             Ok(())
         } else {
-            self.peer_list.write().await.dht_to_stable(peer_id)
+            self.peer_list
+                .write()
+                .await
+                .dht_to_stable(peer_id, assist_id)
+        }
+    }
+
+    pub async fn upgrade_own(&self, peer_id: &PeerId) {
+        let v_some = self.buffer.write().await.remove_tmp(peer_id);
+        if let Some((v, is_d)) = v_some {
+            self.peer_list.write().await.add_own(*peer_id, v, is_d);
         }
     }
 

@@ -118,6 +118,10 @@ impl RemotePublic {
         &self.0.id
     }
 
+    pub fn assist(&self) -> &PeerId {
+        &self.0.assist
+    }
+
     pub fn from_bytes(mut bytes: Vec<u8>) -> Result<Self> {
         if bytes.len() < PEER_LENGTH + 2 {
             return Err(new_io_error("Remote bytes failure."));

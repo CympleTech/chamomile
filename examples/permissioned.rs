@@ -1,20 +1,9 @@
-use simplelog::{
-    ColorChoice, CombinedLogger, Config as LogConfig, LevelFilter, TermLogger, TerminalMode,
-};
-use std::env::args;
-use std::net::SocketAddr;
-
 use chamomile::prelude::{start, Config, Peer, ReceiveMessage, SendMessage};
+use std::{env::args, net::SocketAddr};
 
 #[tokio::main]
 async fn main() {
-    CombinedLogger::init(vec![TermLogger::new(
-        LevelFilter::Debug,
-        LogConfig::default(),
-        TerminalMode::Mixed,
-        ColorChoice::Auto,
-    )])
-    .unwrap();
+    tracing_subscriber::fmt::init();
 
     let self_addr: SocketAddr = args()
         .nth(1)
@@ -56,12 +45,11 @@ async fn main() {
             ReceiveMessage::StableLeave(peer) => {
                 println!("Peer_leave: {:?}", peer);
             }
-            ReceiveMessage::Stream(..) => {
-                panic!("Not stream");
-            }
-            ReceiveMessage::Delivery(..) => {}
             ReceiveMessage::NetworkLost => {
                 println!("No peers conneced.")
+            }
+            _ => {
+                panic!("nerver here!");
             }
         }
     }

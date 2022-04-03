@@ -47,6 +47,7 @@ const MAX_LEVEL: usize = 8;
 
 // max peer-id is 4 * 160 = 640
 // max ip-address is 4 * 128 = 512
+// max assists is 4 * 160 = 640
 const K_BUCKET: usize = 4;
 
 pub(crate) struct KadValue(
@@ -56,8 +57,10 @@ pub(crate) struct KadValue(
 );
 
 pub(crate) struct DoubleKadTree {
-    values: HashMap<u32, KadValue>,
+    /// index => (in_peers, [value])
+    pub values: HashMap<u32, (bool, Vec<KadValue>)>,
     peers: KadTree<PeerId>,
+    assists: KadTree<PeerId>,
     ips: KadTree<SocketAddr>,
 }
 
@@ -78,26 +81,96 @@ struct Node<K: Key> {
 struct Cell<K>(K, u32, Distance);
 
 impl DoubleKadTree {
-    pub fn new(root_peer: PeerId, root_ip: SocketAddr) -> Self {
+    pub fn new(root_peer: PeerId, root_assist: PeerId, root_ip: SocketAddr) -> Self {
         DoubleKadTree {
             peers: KadTree::new(root_peer),
+            assists: KadTree::new(root_assist),
             ips: KadTree::new(root_ip),
             values: HashMap::new(),
         }
     }
 
-    pub fn add(&mut self, value: KadValue) -> bool {
+    fn gen_index() -> u32 {
         let mut rng = rand::thread_rng();
-        let value_key = rng.gen::<u32>();
-        let peer_id = value.2.id;
-        let ip_addr = value.2.socket;
-        let (is_ok, removed) = self.peers.add(peer_id, value_key);
-        for i in removed {
-            self.values.remove(&i);
+        loop {
+            let v = rng.gen::<u32>();
+            if v > 0 {
+                return v;
+            }
         }
-        if is_ok {
-            self.ips.add(ip_addr, value_key);
-            self.values.insert(value_key, value);
+    }
+
+    pub fn add(&mut self, value: KadValue) -> bool {
+        let value_key = Self::gen_index();
+        let peer_id = value.2.id;
+        let assist_id = value.2.assist;
+        let ip_addr = value.2.socket;
+        let (is_ok_p, key_p, removed_p) = self.peers.add(peer_id, value_key);
+        let (is_ok_a, key_a, removed_a) = self.assists.add(assist_id, key_p);
+        if removed_p > 0 {
+            let mut deletable = false;
+            if let Some((p, v)) = self.values.get_mut(&removed_p) {
+                if removed_p == removed_a && v.len() < 2 {
+                    deletable = true;
+                } else {
+                    *p = false;
+                }
+            }
+
+            if deletable {
+                if let Some((_, v)) = self.values.remove(&removed_p) {
+                    for va in v {
+                        self.ips.remove(&va.2.socket);
+                    }
+                }
+            }
+        }
+
+        if removed_a > 0 {
+            let mut deletable = false;
+            if let Some((p, v)) = self.values.get_mut(&removed_a) {
+                if !*p && v.len() < 2 {
+                    deletable = true;
+                } else {
+                    let mut index = 0;
+                    for (i, va) in v.iter().enumerate() {
+                        if va.2.assist == assist_id {
+                            self.ips.remove(&va.2.socket);
+                            index = i;
+                        }
+                    }
+
+                    v.remove(index);
+                }
+            }
+
+            if deletable {
+                if let Some((_, v)) = self.values.remove(&removed_p) {
+                    for va in v {
+                        self.ips.remove(&va.2.socket);
+                    }
+                }
+            }
+        }
+
+        if is_ok_p || is_ok_a {
+            if key_a != value_key && self.values.contains_key(&key_a) {
+                if let Some((is_p, v)) = self.values.get_mut(&key_a) {
+                    *is_p = is_ok_p;
+                    if is_ok_a {
+                        for va in v.iter() {
+                            if va.2.assist == assist_id {
+                                return true;
+                            }
+                        }
+                        v.push(value);
+                    }
+                }
+            } else {
+                self.ips.add(ip_addr, key_a);
+                self.values.insert(key_a, (is_ok_p, vec![value]));
+            }
+
             true
         } else {
             false
@@ -109,6 +182,7 @@ impl DoubleKadTree {
             .next_closest(key, prev)
             .map(|k| self.values.get(k))
             .flatten()
+            .map(|v| &(v.1)[0])
     }
 
     pub fn _ip_next_closest(&self, key: &SocketAddr, prev: &SocketAddr) -> Option<&KadValue> {
@@ -116,23 +190,68 @@ impl DoubleKadTree {
             .next_closest(key, prev)
             .map(|k| self.values.get(k))
             .flatten()
+            .map(|v| &(v.1)[0])
     }
 
     pub fn search(&self, key: &PeerId) -> Option<(&KadValue, bool)> {
+        if let Some((v, is_it)) = self
+            .assists
+            .search(key)
+            .map(|(_, k, is_it)| self.values.get(k).map(|(_, v)| (&v[0], is_it)))
+            .flatten()
+        {
+            if is_it {
+                return Some((v, true));
+            }
+        }
+
         self.peers
             .search(key)
-            .map(|(_, k, is_it)| self.values.get(k).map(|v| (v, is_it)))
+            .map(|(_, k, is_it)| self.values.get(k).map(|(_, v)| (&v[0], is_it)))
             .flatten()
     }
 
-    pub fn remove(&mut self, key: &PeerId) -> Option<KadValue> {
-        if let Some(k) = self.peers.remove(key) {
-            if let Some(value) = self.values.remove(&k) {
-                self.ips.remove(&value.2.socket);
-                return Some(value);
+    pub fn take(&mut self, key: &PeerId, assist: &PeerId) -> Option<Vec<KadValue>> {
+        match (self.peers.remove(key), self.assists.remove(assist)) {
+            (Some(k), _) | (_, Some(k)) => {
+                if let Some((_, value)) = self.values.remove(&k) {
+                    self.ips.remove(&(value[0]).2.socket);
+                    let mut vs = vec![];
+                    for v in value {
+                        self.assists.remove(&v.2.assist);
+                        vs.push(v);
+                    }
+                    Some(vs)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub fn remove(&mut self, key: &PeerId, assist: &PeerId) {
+        if let Some(k) = self.assists.remove(assist) {
+            if let Some((_, v)) = self.values.get_mut(&k) {
+                let mut index = 0;
+                for (i, v) in v.iter().enumerate() {
+                    if &v.2.assist == assist {
+                        index = i;
+                    }
+                }
+                v.remove(index);
+                if v.len() > 0 {
+                    return;
+                }
             }
         }
-        None
+        if let Some(k) = self.peers.remove(key) {
+            if let Some((_, v)) = self.values.remove(&k) {
+                for va in v {
+                    self.ips.remove(&va.2.socket);
+                }
+            }
+        }
     }
 
     pub fn contains(&self, key: &PeerId) -> bool {
@@ -157,7 +276,7 @@ impl<K: Key> KadTree<K> {
         }
     }
 
-    fn add(&mut self, key: K, value: u32) -> (bool, Vec<u32>) {
+    fn add(&mut self, key: K, value: u32) -> (bool, u32, u32) {
         let distance = K::calc_distance(&self.root_key, &key);
 
         if distance.get(0) {
@@ -278,7 +397,7 @@ impl<K: Key> Node<K> {
         }
     }
 
-    fn insert(&mut self, mut cell: Cell<K>, index: usize, k_bucket: usize) -> (bool, Vec<u32>) {
+    fn insert(&mut self, mut cell: Cell<K>, index: usize, k_bucket: usize) -> (bool, u32, u32) {
         if self.right.is_some() || self.left.is_some() {
             if cell.2.get(index) {
                 if self.right.is_none() {
@@ -298,31 +417,27 @@ impl<K: Key> Node<K> {
                     .unwrap() // safe checked.
             }
         } else {
-            let mut need_deleted = usize::MAX;
-            let mut removed = vec![];
-            for (i, c) in self.list.iter().enumerate() {
+            // check if in the lists.
+            for c in &self.list {
                 if c == &cell {
-                    need_deleted = i;
-                    removed.push(c.1);
+                    return (true, c.1, 0);
                 }
             }
-            if need_deleted != usize::MAX {
-                self.list.remove(need_deleted);
-            }
+            let v_index = cell.1;
 
             if self.list.len() < k_bucket {
                 self.list.push(cell);
-                (true, removed)
+                (true, v_index, 0)
             } else {
                 if index >= MAX_LEVEL {
                     for v in self.list.iter_mut() {
                         if v > &mut cell {
-                            removed.push(v.1);
+                            let removed = v.1;
                             *v = cell;
-                            return (true, removed);
+                            return (true, v_index, removed);
                         }
                     }
-                    return (false, removed);
+                    return (false, v_index, 0);
                 } else {
                     self.right = Some(Box::new(Node::default()));
                     self.left = Some(Box::new(Node::default()));

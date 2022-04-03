@@ -80,10 +80,14 @@ async fn start_boot_strap_peers(
 
     allowlist.extend(allow_peer_list.iter().map(|pid| Peer::peer(*pid)));
 
+    peer.id = peer_id;
+    peer.gen_assist(&mut rand::thread_rng());
+
     let mut peer_list_path = db_dir;
     peer_list_path.push(STORAGE_PEER_LIST_KEY);
     let peer_list = Arc::new(RwLock::new(PeerList::load(
         peer_id,
+        peer.assist,
         peer_list_path,
         allowlist,
         (block_peer_list, blocklist),
@@ -97,7 +101,6 @@ async fn start_boot_strap_peers(
     let trans_recv = trans_option.unwrap(); // safe
     let main_trans = main_option.unwrap(); // safe
 
-    peer.id = peer_id;
     peer.socket = local_addr;
     transports.insert(peer.transport, trans_send.clone());
 
@@ -188,7 +191,8 @@ pub async fn start_with_key(
                     debug!("Incoming remote NAT addr: {}", remote_peer.socket);
 
                     // 2. check is self or is block peer.
-                    if &remote_id == inner_global.peer_id()
+                    if (&remote_id == inner_global.peer_id()
+                        && &remote_peer.assist == inner_global.assist_id())
                         || inner_global
                             .peer_list
                             .read()
@@ -238,21 +242,30 @@ pub async fn start_with_key(
                         continue;
                     }
 
-                    // 5. save to DHTs.
+                    // 5. save to DHTs or Owns.
                     let (session_sender, session_receiver) = new_session_channel();
                     let kv = KadValue(session_sender.clone(), stream_sender, remote_peer);
-                    let is_new = inner_global.peer_list.write().await.add_dht(kv).await;
 
-                    // 6. check if had connected.
-                    if !is_new {
-                        debug!("Incoming remote add dht failure, close it.");
-                        let _ = endpoint_sender.send(EndpointMessage::Close).await;
-                        continue;
+                    let is_own = &remote_id == inner_global.peer_id();
+                    if is_own {
+                        inner_global
+                            .peer_list
+                            .write()
+                            .await
+                            .add_own(remote_peer.assist, kv, true);
+                    } else {
+                        let is_new = inner_global.peer_list.write().await.add_dht(kv).await;
+                        // 6. check if had connected.
+                        if !is_new {
+                            debug!("Incoming remote add dht failure, close it.");
+                            let _ = endpoint_sender.send(EndpointMessage::Close).await;
+                            continue;
+                        }
+
+                        // 7. DHT help.
+                        let peers = inner_global.peer_list.read().await.help_dht(&remote_id);
+                        let _ = endpoint_sender.send(EndpointMessage::DHT(DHT(peers))).await;
                     }
-
-                    // 7. DHT help.
-                    let peers = inner_global.peer_list.read().await.help_dht(&remote_id);
-                    let _ = endpoint_sender.send(EndpointMessage::DHT(DHT(peers))).await;
 
                     session_spawn(
                         Session::new(
@@ -262,7 +275,8 @@ pub async fn start_with_key(
                             ConnectType::Direct(endpoint_sender),
                             session_key,
                             inner_global.clone(),
-                            recv_data,
+                            is_own || recv_data,
+                            is_own,
                         ),
                         session_receiver,
                     );
@@ -485,7 +499,7 @@ pub async fn start_with_key(
                 Some(SendMessage::Data(tid, to, data)) => {
                     // check if send to self. better circle for application.
                     if &to == global.peer_id() {
-                        info!("CHAMOMILE: DATA TO SELF.");
+                        warn!("CHAMOMILE: Data to self. PLEASE use SendMessage::OwnEvent.");
                         if tid != 0 {
                             let _ = global
                                 .out_send(ReceiveMessage::Delivery(
@@ -536,6 +550,16 @@ pub async fn start_with_key(
                         }
                     }
                 },
+                Some(SendMessage::OwnEvent(data)) => {
+                    let peer_list = global.peer_list.read().await;
+                    for pid in peer_list.own() {
+                        if let Some((sender, _, is_it)) = peer_list.get(&pid) {
+                            if is_it {
+                                let _ = sender.send(SessionMessage::Data(0, data.clone())).await;
+                            }
+                        }
+                    }
+                }
                 Some(SendMessage::Stream(_symbol, _stream_type, _data)) => {
                     // TODO WIP
                 }

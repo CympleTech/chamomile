@@ -54,6 +54,9 @@
 //!            ReceiveMessage::StableResult(..) => {}
 //!            ReceiveMessage::Delivery(..) => {}
 //!            ReceiveMessage::NetworkLost => {}
+//!            ReceiveMessage::OwnConnect(..) => {}
+//!            ReceiveMessage::OwnLeave(..) => {}
+//!            ReceiveMessage::OwnEvent(..) => {}
 //!        }
 //!    }
 //! }
@@ -68,7 +71,7 @@
 //! - Diff transports: QUIC(*default*) / TCP / UDP-Based Special Protocol.
 
 #[macro_use]
-extern crate log;
+extern crate tracing;
 
 mod buffer;
 mod config;

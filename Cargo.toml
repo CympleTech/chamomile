@@ -1,6 +1,6 @@
 [package]
 name = "chamomile"
-version = "0.8.0"
+version = "0.9.0"
 authors = ["Dev <dev@cympletech.com>"]
 readme = "README.md"
 description = "Another P2P Library. Support IoT devices."
@@ -16,7 +16,7 @@ members = [
 
 [dependencies]
 rand = "0.7"
-log = "0.4"
+tracing = "0.1"
 bit-vec = "0.6"
 x25519-dalek = "1.2"
 aes-gcm = "0.9"
@@ -30,10 +30,10 @@ tokio = { version = "1", features = ["full"] }
 bytes = {version = "1.0", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 rustls = { version = "0.20", features = ["dangerous_configuration"] }
-quinn = { version = "=0.8.0", features = ["tls-rustls"], default-features = false }
+quinn = { version = "0.8", features = ["ring"], default-features = false }
 zeroize = { version = "1", features = ["zeroize_derive"] }
 chamomile_types = { version = "0.8", path = "./types" }
 
 [dev-dependencies]
-simplelog = "0.11"
+tracing-subscriber = "0.2"
 console-subscriber = "0.1"

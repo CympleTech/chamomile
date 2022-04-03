@@ -22,6 +22,8 @@ pub(crate) struct PeerList {
     dhts: DoubleKadTree,
     /// PeerId => KadValue(Sender<SessionMessage>, Sender<EndpointMessage>, Peer)
     stables: HashMap<PeerId, (KadValue, bool)>,
+    /// Own assist-ids
+    owns: Vec<PeerId>,
 }
 
 impl PeerList {
@@ -35,6 +37,7 @@ impl PeerList {
 
     pub fn load(
         peer_id: PeerId,
+        assist_id: PeerId,
         save_path: PathBuf,
         mut allows: Vec<Peer>,
         blocks: (Vec<PeerId>, Vec<IpAddr>),
@@ -62,16 +65,18 @@ impl PeerList {
                     save_path,
                     allows: allows,
                     blocks: blocks,
-                    dhts: DoubleKadTree::new(peer_id, default_socket),
+                    dhts: DoubleKadTree::new(peer_id, assist_id, default_socket),
                     stables: HashMap::new(),
+                    owns: vec![],
                 }
             }
             Err(_) => PeerList {
                 save_path,
                 allows: allows,
                 blocks: blocks,
-                dhts: DoubleKadTree::new(peer_id, default_socket),
+                dhts: DoubleKadTree::new(peer_id, assist_id, default_socket),
                 stables: HashMap::new(),
+                owns: vec![],
             },
         }
     }
@@ -172,37 +177,27 @@ impl PeerList {
     }
 
     /// get in DHT help
-    pub fn help_dht(&self, peer_id: &PeerId) -> Vec<Peer> {
+    pub fn help_dht(&self, _peer_id: &PeerId) -> Vec<Peer> {
         // TODO better closest peers
 
-        let mut peers: HashMap<&PeerId, &Peer> = HashMap::new();
-        for key in self.dhts.keys().into_iter() {
-            if &key == peer_id {
-                continue;
-            }
-            if let Some((KadValue(_, _, peer), is_it)) = self.dhts.search(&key) {
-                if is_it {
-                    peers.insert(&peer.id, peer);
-                }
+        let mut peers = vec![];
+        for (_, (_, v)) in &self.dhts.values {
+            for va in v.iter() {
+                peers.push(va.2);
             }
         }
 
-        for (p, v) in self.stables.iter() {
-            if p != peer_id {
-                peers.insert(p, &(v.0).2);
-            }
+        for (_, v) in self.stables.iter() {
+            peers.push((v.0).2);
         }
 
-        peers.values().map(|v| *v.clone()).collect()
+        peers
     }
 
     /// Step:
     /// 1. remove from kad;
-    pub fn remove_peer(
-        &mut self,
-        peer_id: &PeerId,
-    ) -> Option<(Sender<SessionMessage>, Sender<EndpointMessage>, Peer)> {
-        self.dhts.remove(peer_id).map(|v| (v.0, v.1, v.2))
+    pub fn remove_peer(&mut self, peer_id: &PeerId, assist_id: &PeerId) {
+        self.dhts.remove(peer_id, assist_id);
     }
 
     /// Disconnect Step:
@@ -245,6 +240,14 @@ impl PeerList {
         }
     }
 
+    /// add inner-own device.
+    pub fn add_own(&mut self, assist_id: PeerId, v: KadValue, is_direct: bool) {
+        if !self.owns.contains(&assist_id) {
+            self.owns.push(assist_id);
+            self.add_stable(assist_id, v, is_direct);
+        }
+    }
+
     /// Peer stable connect ok Step:
     /// 1. add to bootstrap;
     /// 2. add to stables;
@@ -277,10 +280,13 @@ impl PeerList {
         Err(new_io_error("stable is closed"))
     }
 
-    pub fn dht_to_stable(&mut self, peer_id: &PeerId) -> Result<()> {
-        if let Some(v) = self.dhts.remove(peer_id) {
-            self.add_allow_peer(*peer_id);
-            self.stables.insert(*peer_id, (v, true));
+    pub fn dht_to_stable(&mut self, peer_id: &PeerId, a_id: &PeerId) -> Result<()> {
+        if let Some(mut v) = self.dhts.take(peer_id, a_id) {
+            // only use one in stable.
+            if let Some(va) = v.pop() {
+                self.add_allow_peer(*peer_id);
+                self.stables.insert(*peer_id, (va, true));
+            }
             Ok(())
         } else {
             Err(new_io_error("DHT is closed"))
@@ -290,6 +296,10 @@ impl PeerList {
 
 // Block and allow list.
 impl PeerList {
+    pub fn own(&self) -> &[PeerId] {
+        &self.owns
+    }
+
     pub fn bootstrap(&self) -> Vec<&Peer> {
         self.allows
             .iter()
