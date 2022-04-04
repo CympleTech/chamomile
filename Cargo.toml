@@ -32,7 +32,7 @@ serde = { version = "1.0", features = ["derive"] }
 rustls = { version = "0.20", features = ["dangerous_configuration"] }
 quinn = { version = "0.8", features = ["ring"], default-features = false }
 zeroize = { version = "1", features = ["zeroize_derive"] }
-chamomile_types = { version = "0.8", path = "./types" }
+chamomile_types = { version = "0.9", path = "./types" }
 
 [dev-dependencies]
 tracing-subscriber = "0.2"
