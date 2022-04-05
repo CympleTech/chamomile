@@ -51,11 +51,14 @@ pub enum ReceiveMessage {
     /// when network lost all DHT network and direct stables. will tell outside.
     NetworkLost,
     /// when same PeerId peer is connected.
+    /// this peer.id is assist_id.
     OwnConnect(Peer),
     /// when same PeerId is leaved.
+    /// this peer.id is assist_id.
     OwnLeave(Peer),
     /// when receive same PeerId message.
-    OwnEvent(Vec<u8>),
+    /// params is `assist_id` and `data_bytes`.
+    OwnEvent(PeerId, Vec<u8>),
 }
 
 /// main send message for outside channel, send from outside to chamomile.

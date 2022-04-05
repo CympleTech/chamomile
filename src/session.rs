@@ -371,6 +371,12 @@ impl Session {
         self.global.peer_id() != &p.id && !self.global.peer_list.read().await.contains(&p.id)
     }
 
+    fn remote_assist(&self) -> Peer {
+        let mut new_p = self.remote_peer.clone();
+        new_p.id = new_p.assist;
+        new_p
+    }
+
     async fn close(&mut self, is_leave: bool) -> Result<()> {
         let peer_id = &self.remote_peer.id;
         let assist_id = &self.remote_peer.assist;
@@ -378,7 +384,7 @@ impl Session {
         if self.is_stable {
             if self.is_own {
                 let _ = self
-                    .out_send(ReceiveMessage::OwnLeave(self.remote_peer))
+                    .out_send(ReceiveMessage::OwnLeave(self.remote_assist()))
                     .await;
             } else {
                 let _ = self
@@ -536,7 +542,11 @@ impl Session {
                             let delivery_data =
                                 delivery_split!(p_data, self.global.delivery_length);
                             if self.is_own {
-                                self.out_send(ReceiveMessage::OwnEvent(p_data)).await?;
+                                self.out_send(ReceiveMessage::OwnEvent(
+                                    self.remote_peer.assist,
+                                    p_data,
+                                ))
+                                .await?;
                             } else {
                                 self.out_send(ReceiveMessage::Data(self.remote_peer.id, p_data))
                                     .await?;
@@ -571,7 +581,7 @@ impl Session {
                     CoreData::StableConnect(tid, data) => {
                         let delivery_data = delivery_split!(data, self.global.delivery_length);
                         if self.is_own {
-                            self.out_send(ReceiveMessage::OwnConnect(self.remote_peer))
+                            self.out_send(ReceiveMessage::OwnConnect(self.remote_assist()))
                                 .await?;
                             self.send_core_data(CoreData::StableResult(0, true, data))
                                 .await?;
@@ -593,7 +603,7 @@ impl Session {
                     CoreData::StableResult(tid, is_ok, data) => {
                         let delivery_data = delivery_split!(data, self.global.delivery_length);
                         if self.is_own {
-                            self.out_send(ReceiveMessage::OwnConnect(self.remote_peer))
+                            self.out_send(ReceiveMessage::OwnConnect(self.remote_assist()))
                                 .await?;
                         } else {
                             self.out_send(ReceiveMessage::StableResult(
@@ -615,7 +625,7 @@ impl Session {
                     CoreData::ResultConnect(tid, data) => {
                         let delivery_data = delivery_split!(data, self.global.delivery_length);
                         if self.is_own {
-                            self.out_send(ReceiveMessage::OwnConnect(self.remote_peer))
+                            self.out_send(ReceiveMessage::OwnConnect(self.remote_assist()))
                                 .await?;
                             self.send_core_data(CoreData::StableResult(0, true, data))
                                 .await?;
