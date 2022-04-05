@@ -4,7 +4,8 @@
 //! 2. Run A at 127.0.0.1:0: `cargo run --example own 192.168.xx.xx:8000`
 //! 3. Run B at 127.0.0.1:0: `cargo run --example own 192.168.xx.xx:8000`
 
-use chamomile::prelude::{start_with_key, Config, Key, Peer, ReceiveMessage, SendMessage};
+use chamomile::prelude::*;
+use chamomile_types::types::TransportType;
 use std::{env::args, net::SocketAddr};
 
 #[tokio::main]
@@ -20,7 +21,9 @@ async fn main() {
         .parse()
         .expect("invalid addr");
 
-    let mut config = Config::default(Peer::socket("127.0.0.1:0".parse().unwrap()));
+    let mut peer = Peer::socket("127.0.0.1:0".parse().unwrap());
+    peer.transport = TransportType::TCP;
+    let mut config = Config::default(peer);
     config.permission = true;
 
     // default key to test own.
@@ -34,7 +37,9 @@ async fn main() {
 
     let (peer_id, send, mut recv) = start_with_key(config, key).await.unwrap();
     println!("peer id: {}", peer_id.to_hex());
-    let _ = send.send(SendMessage::Connect(Peer::socket(relay))).await;
+    let mut relay = Peer::socket(relay);
+    relay.transport = TransportType::TCP;
+    let _ = send.send(SendMessage::Connect(relay)).await;
 
     while let Some(message) = recv.recv().await {
         match message {

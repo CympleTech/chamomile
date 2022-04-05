@@ -178,17 +178,41 @@ impl DoubleKadTree {
     }
 
     pub fn id_next_closest(&self, key: &PeerId, prev: &PeerId) -> Option<&KadValue> {
-        self.peers
+        let p_v = self
+            .peers
             .next_closest(key, prev)
-            .map(|k| self.values.get(k))
+            .map(|(k, _p)| self.values.get(k))
             .flatten()
-            .map(|v| &(v.1)[0])
+            .map(|v| &(v.1)[0]);
+        let a_v = self
+            .assists
+            .next_closest(key, prev)
+            .map(|(k, p)| self.values.get(k).map(|v| (v, p)))
+            .flatten()
+            .map(|(v, p)| {
+                for va in &v.1 {
+                    if &va.2.assist == p {
+                        return va;
+                    }
+                }
+                &(v.1)[0]
+            });
+        match (p_v, a_v) {
+            (Some(_p), Some(a)) => {
+                if &a.2.assist == key {
+                    a_v
+                } else {
+                    p_v
+                }
+            }
+            _ => p_v.or(a_v),
+        }
     }
 
     pub fn _ip_next_closest(&self, key: &SocketAddr, prev: &SocketAddr) -> Option<&KadValue> {
         self.ips
             .next_closest(key, prev)
-            .map(|k| self.values.get(k))
+            .map(|(k, _)| self.values.get(k))
             .flatten()
             .map(|v| &(v.1)[0])
     }
@@ -298,9 +322,9 @@ impl<K: Key> KadTree<K> {
         }
     }
 
-    fn next_closest(&self, key: &K, prev: &K) -> Option<&u32> {
+    fn next_closest(&self, key: &K, prev: &K) -> Option<(&u32, &K)> {
         self.search(key)
-            .map(|v| if v.0 == prev { None } else { Some(v.1) })
+            .map(|v| if v.0 == prev { None } else { Some((v.1, v.0)) })
             .flatten()
     }
 

@@ -1,4 +1,5 @@
-use chamomile::prelude::{start, Config, Peer, PeerId, ReceiveMessage, SendMessage};
+use chamomile::prelude::*;
+use chamomile_types::types::TransportType;
 use std::{env::args, net::SocketAddr, time::Duration};
 
 #[tokio::main]
@@ -13,7 +14,9 @@ async fn main() {
 
     println!("START A PERMISSIONLESS PEER. socket: {}", self_addr);
 
-    let mut config = Config::default(Peer::socket(self_addr));
+    let mut peer = Peer::socket(self_addr);
+    peer.transport = TransportType::TCP;
+    let mut config = Config::default(peer);
     config.permission = false; // Permissionless.
     config.only_stable_data = true; // Only receive stable connected peer's data.
     config.db_dir = std::path::PathBuf::from(addr_str);
@@ -24,9 +27,9 @@ async fn main() {
     if args().nth(2).is_some() {
         let remote_addr: SocketAddr = args().nth(2).unwrap().parse().expect("invalid addr");
         println!("start DHT connect to remote: {}", remote_addr);
-        let _ = send
-            .send(SendMessage::Connect(Peer::socket(remote_addr)))
-            .await;
+        let mut relay = Peer::socket(remote_addr);
+        relay.transport = TransportType::TCP;
+        let _ = send.send(SendMessage::Connect(relay)).await;
 
         if args().nth(3).is_some() {
             println!("sleep 3s and then start stable connection...");

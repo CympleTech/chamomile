@@ -40,6 +40,7 @@ impl SessionKey {
         let alice_secret = DH_Secret::new(&mut rand::thread_rng());
         let alice_public = DH_Public::from(&alice_secret);
         let sign = key.sign(alice_public.as_bytes());
+        println!("Alice pk: {:?}", alice_public.as_bytes());
         let random_nonce = rand::thread_rng().gen::<[u8; 12]>();
 
         SessionKey {
@@ -69,6 +70,7 @@ impl SessionKey {
 
         let (tmp_pk, tmp_nonce_sign) = remote_dh.split_at(32);
         let (tmp_nonce, pk_sign) = tmp_nonce_sign.split_at(12);
+        println!("tmp_nonce: {:?}", tmp_nonce);
 
         if let Ok((remote_pk, sign)) = PublicKey::deserialize_pk_and_sign(pk_sign) {
             // check peer_id
@@ -78,10 +80,14 @@ impl SessionKey {
 
             if remote_pk.verify(tmp_pk, &sign).is_ok() {
                 let mut pk_bytes = [0u8; 32];
+                println!("bob pk: {:?}", tmp_pk);
                 pk_bytes.copy_from_slice(&tmp_pk);
                 let bob_public: DH_Public = pk_bytes.into();
+                let c_bytes = self.sk.diffie_hellman(&bob_public);
+                println!("c_bytes: {:?}", c_bytes.as_bytes());
                 self.cipher = Aes256Gcm::new(GenericArray::from_slice(
-                    self.sk.diffie_hellman(&bob_public).as_bytes(),
+                    //self.sk.diffie_hellman(&bob_public).as_bytes(),
+                    c_bytes.as_bytes(),
                 ));
                 let mut nonce_bytes = [0u8; 12];
                 nonce_bytes.copy_from_slice(tmp_nonce);

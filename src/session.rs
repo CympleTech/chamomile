@@ -24,7 +24,14 @@ use crate::transports::{
 /// To solve the tokio async cycle.
 fn own_spawn(p: Peer, global: Arc<Global>) {
     tokio::spawn(async move {
-        let _ = direct_stable(0, vec![], p, global, true).await;
+        // add to stable buffer.
+        let mut buffer_lock = global.buffer.write().await;
+        if buffer_lock.add_connect(p.assist, 0, vec![]) {
+            debug!("Outside: StableConnect is processing, save to buffer.");
+        }
+        drop(buffer_lock);
+
+        let _ = direct_stable(0, vec![], p, global, true, true).await;
     });
 }
 
@@ -35,6 +42,7 @@ pub(crate) async fn direct_stable(
     to: Peer,
     global: Arc<Global>,
     is_recv_data: bool,
+    is_own: bool,
 ) -> Result<()> {
     debug!("Session want to connect directly.");
     let (endpoint_sender, endpoint_receiver) = new_endpoint_channel(); // transpot's use.
@@ -84,10 +92,15 @@ pub(crate) async fn direct_stable(
             }
             is_own = true;
         }
+        let toid = if is_own {
+            remote_peer.assist
+        } else {
+            remote_peer.id
+        };
 
         // 3.1.2 check & update session key.
         if !session_key.complete(&remote_id, dh_key) {
-            global.buffer.write().await.remove_connect(&to.id);
+            global.buffer.write().await.remove_connect(&toid);
             return Err(new_io_error("session stable key failure."));
         }
 
@@ -97,7 +110,7 @@ pub(crate) async fn direct_stable(
         // 3.1.3 save to tmp buffer.
         let buffers = global
             .add_tmp(
-                remote_id,
+                toid,
                 KadValue(session_sender.clone(), stream_sender, remote_peer),
                 true,
             )
@@ -113,13 +126,6 @@ pub(crate) async fn direct_stable(
             is_recv_data,
             is_own,
         );
-
-        // 3.1.4.0 check if it is auto-own.
-        if buffers.len() == 0 && session.is_own {
-            session
-                .send_core_data(CoreData::StableConnect(0, vec![]))
-                .await?;
-        }
 
         // 3.1.4 send all connect info to remote.
         for buffer in buffers {
@@ -141,14 +147,15 @@ pub(crate) async fn direct_stable(
         drop(endpoint_sender);
 
         // 3.2.1 try start relay stable.
-        let ss = if let Some((s, _, _)) = global.peer_list.read().await.get(&to.id) {
+        let toid = if is_own { &to.assist } else { &to.id };
+        let ss = if let Some((s, _, _)) = global.peer_list.read().await.get(toid) {
             Some(s.clone())
         } else {
             None
         };
 
         if let Some(ss) = ss {
-            relay_stable(tid, delivery, to, ss, global, is_recv_data).await
+            relay_stable(tid, delivery, to, ss, global, is_recv_data, is_own).await
         } else {
             if tid != 0 {
                 global
@@ -160,7 +167,7 @@ pub(crate) async fn direct_stable(
                     ))
                     .await?;
             }
-            global.buffer.write().await.remove_connect(&to.id);
+            global.buffer.write().await.remove_connect(&toid);
             Err(new_io_error("no closest peer."))
         }
     }
@@ -173,6 +180,7 @@ pub(crate) async fn relay_stable(
     relay_sender: Sender<SessionMessage>,
     global: Arc<Global>,
     is_recv_data: bool,
+    is_own: bool,
 ) -> Result<()> {
     debug!("Session want to connect relay.");
 
@@ -183,17 +191,18 @@ pub(crate) async fn relay_stable(
     let (stream_sender, stream_receiver) = new_endpoint_channel(); // session's use.
     let (session_sender, mut session_receiver) = new_session_channel(); // server's use.
     let (mut session_key, remote_pk) = global.generate_remote();
+    let toid = if is_own { to.assist } else { to.id };
 
     let (connects, results) = global
         .add_all_tmp(
-            to.id,
+            toid,
             KadValue(session_sender.clone(), stream_sender, Peer::default()),
             false,
         )
         .await;
 
     relay_sender
-        .send(SessionMessage::RelayConnect(remote_pk, to.id))
+        .send(SessionMessage::RelayConnect(remote_pk, toid))
         .await
         .map_err(|_e| new_io_error("Session missing"))?;
     drop(relay_sender);
@@ -236,13 +245,14 @@ pub(crate) async fn relay_stable(
             }
             is_own = true;
         }
+        let toid = if is_own { to.assist } else { to.id };
 
         if !session_key.complete(&remote_id, dh_key) {
-            global.buffer.write().await.remove_tmp(&to.id);
+            global.buffer.write().await.remove_tmp(&toid);
             return Err(new_io_error("session stable key failure."));
         }
 
-        global.buffer.write().await.update_peer(&to.id, remote_peer);
+        global.buffer.write().await.update_peer(&toid, remote_peer);
         let mut session = Session::new(
             remote_peer,
             session_sender,
@@ -253,13 +263,6 @@ pub(crate) async fn relay_stable(
             is_recv_data,
             is_own,
         );
-
-        // 3.1.4.0 check if it is auto-own.
-        if connects.len() == 0 && session.is_own {
-            session
-                .send_core_data(CoreData::StableConnect(0, vec![]))
-                .await?;
-        }
 
         for buffer in connects {
             session
@@ -290,7 +293,7 @@ pub(crate) async fn relay_stable(
                 ))
                 .await?;
         }
-        global.buffer.write().await.remove_tmp(&to.id);
+        global.buffer.write().await.remove_tmp(&toid);
         debug!("Session clear stable buffer.");
         Err(new_io_error("session relay reach faiure."))
     }
@@ -646,7 +649,7 @@ impl Session {
         self.is_stable = true;
         self.is_recv_data = true;
         if self.is_own {
-            self.global.upgrade_own(&self.remote_peer.id).await;
+            self.global.upgrade_own(&self.remote_peer.assist).await;
             Ok(())
         } else {
             self.global
@@ -755,6 +758,7 @@ impl Session {
                 }
 
                 if self.is_direct() {
+                    debug!("SessionMessage RelayData directly send");
                     self.direct_send(EndpointMessage::RelayData(from, to, data))
                         .await?;
                 } else {
@@ -777,6 +781,10 @@ impl Session {
                 }
 
                 if self.is_direct() {
+                    println!(
+                        "SessionMessage RelayConnect to directly {}",
+                        self.remote_peer.assist.to_hex()
+                    );
                     self.direct_send(EndpointMessage::RelayHandshake(from_peer, to))
                         .await?;
                 } else {
@@ -856,7 +864,13 @@ impl Session {
                 self.handle_core_data(e_data).await?;
             }
             EndpointMessage::RelayData(from, to, data) => {
+                println!(
+                    "Endpoint RelayData from: {}, to: {}",
+                    from.to_hex(),
+                    to.to_hex()
+                );
                 if self.is_to_me(&to) {
+                    debug!("Got self RelayData");
                     if self.is_from_remote(&from) {
                         self.handle_core_data(data).await?;
                     } else {
@@ -898,7 +912,7 @@ impl Session {
                 debug!(
                     "Relay Handshake to: {:?}, is me: {}",
                     to.short_show(),
-                    &to == self.global.peer_id()
+                    self.is_to_me(&to),
                 );
                 if self.is_to_me(&to) {
                     let mut remote_peer_id = from_peer.id().clone();
@@ -912,6 +926,7 @@ impl Session {
                         is_own = true;
                     }
 
+                    println!("remote_peer_id: {}", remote_peer_id.to_hex());
                     if let Some(sender) = self
                         .global
                         .buffer

@@ -82,6 +82,7 @@ async fn start_boot_strap_peers(
 
     peer.id = peer_id;
     peer.gen_assist(&mut rand::thread_rng());
+    println!("**** Self: {} - {}", peer.id.to_hex(), peer.assist.to_hex());
 
     let mut peer_list_path = db_dir;
     peer_list_path.push(STORAGE_PEER_LIST_KEY);
@@ -365,12 +366,13 @@ pub async fn start_with_key(
                         if to.effective_socket() {
                             debug!("Outside: StableConnect start new connection with IP.");
                             tokio::spawn(async move {
-                                let _ = direct_stable(tid, delivery, to, g, recv_data).await;
+                                let _ = direct_stable(tid, delivery, to, g, recv_data, false).await;
                             });
                         } else {
                             debug!("Outside: StableConnect start new connection with ID.");
                             tokio::spawn(async move {
-                                let _ = relay_stable(tid, delivery, to, ss, g, recv_data).await;
+                                let _ =
+                                    relay_stable(tid, delivery, to, ss, g, recv_data, false).await;
                             });
                         }
                     }
@@ -460,11 +462,12 @@ pub async fn start_with_key(
                         debug!("Outside: StableResult start new connection with ID.");
                         if to.effective_socket() {
                             tokio::spawn(async move {
-                                let _ = direct_stable(tid, delivery, to, g, recv_data).await;
+                                let _ = direct_stable(tid, delivery, to, g, recv_data, false).await;
                             });
                         } else {
                             tokio::spawn(async move {
-                                let _ = relay_stable(tid, delivery, to, ss, g, recv_data).await;
+                                let _ =
+                                    relay_stable(tid, delivery, to, ss, g, recv_data, false).await;
                             });
                         }
                     }
