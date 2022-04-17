@@ -47,7 +47,7 @@ async fn main() {
                 println!("Own connected, assist: {}", peer.assist.to_hex());
                 let _ = send.send(SendMessage::OwnEvent(vec![1, 2, 3, 4])).await;
             }
-            ReceiveMessage::OwnEvent(data) => {
+            ReceiveMessage::OwnEvent(_pid, data) => {
                 println!("Receive data: {:?}", data);
             }
             ReceiveMessage::OwnLeave(peer) => {
