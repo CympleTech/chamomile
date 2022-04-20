@@ -19,5 +19,4 @@ tokio = { version = "1", features = ["sync"] }
 
 [dependencies.ed25519-dalek]
 git = "https://github.com/cympletech/ed25519-dalek"
-version = '1.0'
 features = ["serde"]
