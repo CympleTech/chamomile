@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use rand::RngCore;
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::{
     fs,
     io::Result,
@@ -12,7 +12,7 @@ use chamomile_types::{
     delivery_split,
     key::Key,
     message::{DeliveryType, ReceiveMessage, SendMessage, StateRequest, StateResponse},
-    types::{Broadcast, PeerId, TransportType},
+    types::{Broadcast, PeerId, TransportType, PEER_ID_LENGTH},
     Peer,
 };
 
@@ -22,7 +22,7 @@ use crate::global::Global;
 use crate::hole_punching::{nat, DHT};
 use crate::kad::KadValue;
 use crate::peer_list::PeerList;
-use crate::primitives::{STORAGE_KEY_KEY, STORAGE_PEER_LIST_KEY};
+use crate::primitives::{STORAGE_ASSIST, STORAGE_KEY_KEY, STORAGE_PEER_LIST_KEY};
 use crate::session::{
     direct_stable, new_session_channel, relay_stable, session_spawn, ConnectType, Session,
     SessionMessage,
@@ -32,8 +32,7 @@ use crate::transports::{
     TransportSendMessage,
 };
 
-async fn get_keypair(config: Config) -> Key {
-    let mut key_path = config.db_dir.clone();
+async fn get_keypair(mut key_path: PathBuf) -> Key {
     key_path.push(STORAGE_KEY_KEY);
 
     let key_bytes = fs::read(&key_path).await.unwrap_or(vec![]); // safe.
@@ -50,16 +49,32 @@ async fn get_keypair(config: Config) -> Key {
     key
 }
 
+async fn get_assist(mut path: PathBuf) -> PeerId {
+    path.push(STORAGE_ASSIST);
+    let bytes = fs::read(&path).await.unwrap_or(vec![]); // safe.
+    let mut id_bytes = [0u8; PEER_ID_LENGTH];
+
+    if bytes.len() == PEER_ID_LENGTH {
+        id_bytes.copy_from_slice(&bytes);
+        PeerId(id_bytes)
+    } else {
+        let rng = &mut rand::thread_rng();
+        rng.fill_bytes(&mut id_bytes);
+        let _ = fs::write(path, id_bytes).await;
+        PeerId(id_bytes)
+    }
+}
+
 pub async fn start(
     config: Config,
     out_sender: Sender<ReceiveMessage>,
     self_receiver: Receiver<SendMessage>,
 ) -> Result<PeerId> {
-    let key = get_keypair(config.clone()).await;
+    let key = get_keypair(config.db_dir.clone()).await;
     start_with_key(config, out_sender, self_receiver, key).await
 }
 
-async fn start_boot_strap_peers(
+async fn start_bootstrap_peers(
     config: Config,
     out_sender: Sender<ReceiveMessage>,
     key: Key,
@@ -81,8 +96,8 @@ async fn start_boot_strap_peers(
     allowlist.extend(allow_peer_list.iter().map(|pid| Peer::peer(*pid)));
 
     peer.id = peer_id;
-    peer.gen_assist(&mut rand::thread_rng());
-    println!("**** Self: {} - {}", peer.id.to_hex(), peer.assist.to_hex());
+    peer.assist = get_assist(db_dir.clone()).await;
+    debug!("P2P ID: {} - {}", peer.id.to_hex(), peer.assist.to_hex());
 
     let mut peer_list_path = db_dir;
     peer_list_path.push(STORAGE_PEER_LIST_KEY);
@@ -140,7 +155,7 @@ pub async fn start_with_key(
 ) -> Result<PeerId> {
     let peer_id = key.peer_id();
 
-    let (global, mut trans_recv) = start_boot_strap_peers(config.clone(), out_sender, key).await;
+    let (global, mut trans_recv) = start_bootstrap_peers(config.clone(), out_sender, key).await;
 
     let only_stable_data = config.only_stable_data;
     let delivery_length = config.delivery_length;
