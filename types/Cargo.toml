@@ -11,9 +11,13 @@ edition = "2021"
 
 [dependencies]
 hex = "0.4"
-ed25519-dalek = { version = "1.0", features = ["serde"] }
 ripemd = "0.1"
-rand_core = "0.5"
+rand_core = "0.6"
 sha3 = "0.10"
 serde = { version = "1.0", default-features = false, features = ["alloc", "derive"]}
 tokio = { version = "1", features = ["sync"] }
+
+[dependencies.ed25519-dalek]
+git = "https://github.com/cympletech/ed25519-dalek"
+version = '1.0'
+features = ["serde"]

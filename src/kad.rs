@@ -1,6 +1,9 @@
 use bit_vec::BitVec;
 use core::cmp::Ordering;
-use rand::Rng;
+use rand_chacha::{
+    rand_core::{RngCore, SeedableRng},
+    ChaChaRng,
+};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use tokio::sync::mpsc::Sender;
@@ -91,9 +94,9 @@ impl DoubleKadTree {
     }
 
     fn gen_index() -> u32 {
-        let mut rng = rand::thread_rng();
+        let mut rng = ChaChaRng::from_entropy();
         loop {
-            let v = rng.gen::<u32>();
+            let v = rng.next_u32();
             if v > 0 {
                 return v;
             }

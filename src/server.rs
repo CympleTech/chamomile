@@ -1,4 +1,7 @@
-use rand::RngCore;
+use rand_chacha::{
+    rand_core::{RngCore, SeedableRng},
+    ChaChaRng,
+};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::{
     fs,
@@ -39,7 +42,7 @@ async fn get_keypair(mut key_path: PathBuf) -> Key {
     let key = match Key::from_db_bytes(&key_bytes) {
         Ok(keypair) => keypair,
         Err(_) => {
-            let key = Key::generate(&mut rand::thread_rng());
+            let key = Key::generate(&mut ChaChaRng::from_entropy());
             let key_bytes = key.to_db_bytes();
             let _ = fs::write(key_path, key_bytes).await;
             key
@@ -58,7 +61,7 @@ async fn get_assist(mut path: PathBuf) -> PeerId {
         id_bytes.copy_from_slice(&bytes);
         PeerId(id_bytes)
     } else {
-        let rng = &mut rand::thread_rng();
+        let rng = &mut ChaChaRng::from_entropy();
         rng.fill_bytes(&mut id_bytes);
         let _ = fs::write(path, id_bytes).await;
         PeerId(id_bytes)

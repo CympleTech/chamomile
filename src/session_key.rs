@@ -3,7 +3,10 @@ use aes_gcm::aead::{
     Aead, NewAead,
 };
 use aes_gcm::Aes256Gcm;
-use rand::Rng;
+use rand_chacha::{
+    rand_core::{RngCore, SeedableRng},
+    ChaChaRng,
+};
 
 use std::io::Result;
 use x25519_dalek::{PublicKey as DH_Public, StaticSecret as DH_Secret};
@@ -37,11 +40,13 @@ impl SessionKey {
     }
 
     pub fn generate(key: &Key) -> SessionKey {
-        let alice_secret = DH_Secret::new(&mut rand::thread_rng());
+        let mut rng = ChaChaRng::from_entropy();
+        let alice_secret = DH_Secret::new(&mut rng);
         let alice_public = DH_Public::from(&alice_secret);
         let sign = key.sign(alice_public.as_bytes());
         println!("Alice pk: {:?}", alice_public.as_bytes());
-        let random_nonce = rand::thread_rng().gen::<[u8; 12]>();
+        let mut random_nonce = [0u8; 12];
+        rng.fill_bytes(&mut random_nonce);
 
         SessionKey {
             sk: alice_secret,
