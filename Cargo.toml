@@ -15,7 +15,7 @@ members = [
 ]
 
 [dependencies]
-aes-gcm = "0.9"
+aes-gcm = "0.10"
 bit-vec = "0.6"
 bytes = {version = "1.1", features = ["serde"] }
 futures-util = { version = "0.3", default-features = false }
