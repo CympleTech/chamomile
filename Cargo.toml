@@ -19,7 +19,7 @@ aes-gcm = "0.9"
 bit-vec = "0.6"
 bytes = {version = "1.1", features = ["serde"] }
 futures-util = { version = "0.3", default-features = false }
-quinn = { version = "0.8", features = ["ring"], default-features = false }
+quinn = { version = "0.9", features = ["ring"], default-features = false }
 quinn-proto = "0.8"
 rand_chacha = "0.3"
 rcgen = "0.9"
