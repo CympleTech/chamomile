@@ -1,8 +1,8 @@
 use aes_gcm::aead::{
     generic_array::{typenum::U12, GenericArray},
-    Aead, NewAead,
+    Aead,
 };
-use aes_gcm::Aes256Gcm;
+use aes_gcm::{Aes256Gcm, KeyInit};
 use rand_chacha::{
     rand_core::{RngCore, SeedableRng},
     ChaChaRng,
