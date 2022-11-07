@@ -3,8 +3,8 @@ use std::{env::args, net::SocketAddr, time::Duration};
 
 #[tokio::main]
 async fn main() {
+    //console_subscriber::init();
     tracing_subscriber::fmt::init();
-    console_subscriber::init();
 
     let addr_str = args().nth(1).expect("missing path");
     let self_addr: SocketAddr = addr_str.parse().expect("invalid addr");

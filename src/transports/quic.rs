@@ -1,4 +1,3 @@
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::{sync::Arc, time::Duration};
@@ -26,15 +25,16 @@ pub async fn start(
 ) -> tokio::io::Result<SocketAddr> {
     let config = InternalConfig::try_from_config(Default::default()).unwrap();
 
-    let (endpoint, mut incoming) = quinn::Endpoint::server(config.server.clone(), bind_addr)?;
+    let endpoint = quinn::Endpoint::server(config.server.clone(), bind_addr).unwrap();
     let addr = endpoint.local_addr()?;
     info!("QUIC listening at: {:?}", addr);
 
     // QUIC listen incoming.
     let out_send = send.clone();
+    let incoming = endpoint.clone();
     let task = tokio::spawn(async move {
         loop {
-            match incoming.next().await {
+            match incoming.accept().await {
                 Some(quinn_conn) => match quinn_conn.await {
                     Ok(conn) => {
                         if both {
@@ -70,11 +70,11 @@ pub async fn start(
 async fn connect_to(
     connect: std::result::Result<quinn::Connecting, quinn::ConnectError>,
     remote_pk: RemotePublic,
-) -> Result<quinn::NewConnection> {
+) -> Result<quinn::Connection> {
     let conn = connect
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "connecting failure."))?
         .await?;
-    let mut stream = conn.connection.open_uni().await?;
+    let mut stream = conn.open_uni().await?;
     stream
         .write_all(&EndpointMessage::Handshake(remote_pk).to_bytes())
         .await?;
@@ -167,50 +167,41 @@ enum OutType {
 }
 
 async fn process_stream(
-    conn: quinn::NewConnection,
+    conn: quinn::Connection,
     out_sender: Sender<EndpointMessage>,
     mut self_receiver: Receiver<EndpointMessage>,
     out_type: OutType,
     has_session: Option<SessionKey>,
 ) -> tokio::io::Result<()> {
-    let quinn::NewConnection {
-        connection,
-        mut uni_streams,
-        ..
-    } = conn;
-    let addr = connection.remote_address();
+    let addr = conn.remote_address();
 
     let handshake: std::result::Result<RemotePublic, ()> = select! {
         v = async {
-            if let Some(result) = uni_streams.next().await {
-                match result {
-                    Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
-                        debug!("Connection terminated by peer {:?}.", addr);
-                        Err(())
-                    }
-                    Err(err) => {
-                        debug!(
-                            "Failed to read incoming message on uni-stream for peer {:?} with error: {:?}",
-                            addr, err
-                        );
-                        Err(())
-                    }
-                    Ok(recv) => {
-                        if let Ok(bytes) = recv.read_to_end(SIZE_LIMIT).await {
-                            if let Ok(EndpointMessage::Handshake(remote_pk)) =
-                                EndpointMessage::from_bytes(bytes)
-                            {
-                                return Ok(remote_pk);
-                            } else {
-                                Err(())
-                            }
+            match conn.accept_uni().await {
+                Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
+                    debug!("Connection terminated by peer {:?}.", addr);
+                    Err(())
+                }
+                Err(err) => {
+                    debug!(
+                        "Failed to read incoming message on uni-stream for peer {:?} with error: {:?}",
+                        addr, err
+                    );
+                    Err(())
+                }
+                Ok(recv) => {
+                    if let Ok(bytes) = recv.read_to_end(SIZE_LIMIT).await {
+                        if let Ok(EndpointMessage::Handshake(remote_pk)) =
+                            EndpointMessage::from_bytes(bytes)
+                        {
+                            return Ok(remote_pk);
                         } else {
                             Err(())
                         }
+                    } else {
+                        Err(())
                     }
                 }
-            } else {
-                Err(())
             }
         } => v,
         v = async {
@@ -253,11 +244,12 @@ async fn process_stream(
         }
     }
 
+    let conn_send = conn.clone();
     let a = async move {
         loop {
             match self_receiver.recv().await {
                 Some(msg) => {
-                    let mut writer = connection.open_uni().await.map_err(|_e| ())?;
+                    let mut writer = conn_send.open_uni().await.map_err(|_e| ())?;
                     let is_close = match msg {
                         EndpointMessage::Close => true,
                         _ => false,
@@ -279,32 +271,27 @@ async fn process_stream(
 
     let b = async {
         loop {
-            match uni_streams.next().await {
-                Some(result) => match result {
-                    Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
-                        debug!("Connection terminated by peer {:?}.", addr);
-                        break;
-                    }
-                    Err(err) => {
-                        debug!(
-                            "Failed to read incoming message on uni-stream for peer {:?} with error: {:?}",
-                            addr, err
-                        );
-                        break;
-                    }
-                    Ok(recv) => {
-                        if let Ok(bytes) = recv.read_to_end(SIZE_LIMIT).await {
-                            if let Ok(msg) = EndpointMessage::from_bytes(bytes) {
-                                let _ = out_sender.send(msg).await;
-                            }
+            match conn.accept_uni().await {
+                Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
+                    debug!("Connection terminated by peer {:?}.", addr);
+                    break;
+                }
+                Err(err) => {
+                    debug!(
+                        "Failed to read incoming message on uni-stream for peer {:?} with error: {:?}",
+                        addr, err
+                    );
+                    break;
+                }
+                Ok(recv) => {
+                    if let Ok(bytes) = recv.read_to_end(SIZE_LIMIT).await {
+                        if let Ok(msg) = EndpointMessage::from_bytes(bytes) {
+                            let _ = out_sender.send(msg).await;
                         }
                     }
-                },
-                None => break,
+                }
             }
         }
-
-        Err::<(), ()>(())
     };
 
     let _ = join!(a, b);
@@ -401,7 +388,7 @@ impl InternalConfig {
             .set_certificate_verifier(Arc::new(SkipCertificateVerification));
 
         let mut config = quinn::ClientConfig::new(Arc::new(client_crypto));
-        config.transport = transport;
+        config.transport_config(transport);
         config
     }
 
