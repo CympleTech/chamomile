@@ -1,6 +1,6 @@
 [package]
 name = "chamomile"
-version = "0.9.0"
+version = "0.10.0"
 authors = ["Dev <dev@cympletech.com>"]
 readme = "README.md"
 description = "Another P2P Library. Support IoT devices."
@@ -31,7 +31,7 @@ tokio = { version = "1", features = ["full"] }
 webpki = "0.22"
 zeroize = { version = "1", features = ["zeroize_derive"] }
 
-chamomile_types = { version = "0.9", path = "./types" }
+chamomile_types = { version = "0.10", path = "./types" }
 
 [dependencies.x25519-dalek]
 git = "https://github.com/cympletech/x25519-dalek"

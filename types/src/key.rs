@@ -5,6 +5,8 @@ use secp256k1::{
 };
 use sha3::{Digest, Keccak256};
 
+pub use secp256k1;
+
 use crate::types::{new_io_error, PeerId, PEER_ID_LENGTH};
 
 pub const SECRET_KEY_LENGTH: usize = 32;
