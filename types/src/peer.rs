@@ -48,7 +48,7 @@ pub struct Peer {
     pub is_pub: bool,
 }
 
-// PEER_ID_LENGTH + ASSIST + SOCKET_ADDR_LENGTH + 2 = 20 + 20 + 18 + 2 = 40
+// PEER_ID_LENGTH + ASSIST + SOCKET_ADDR_LENGTH + 2 = 20 + 20 + 18 + 2 = 60
 pub const PEER_LENGTH: usize = 60;
 
 impl Peer {

@@ -44,7 +44,7 @@ impl Global {
     #[inline]
     pub fn generate_remote(&self) -> (SessionKey, RemotePublic) {
         let session_key = SessionKey::generate(&self.key);
-        let remote_pk = RemotePublic(self.peer.clone(), session_key.out_bytes(&self.key.public()));
+        let remote_pk = RemotePublic(self.peer.clone(), session_key.out_bytes());
         (session_key, remote_pk)
     }
 
@@ -55,8 +55,7 @@ impl Global {
         dh_bytes: Vec<u8>,
     ) -> Option<(SessionKey, RemotePublic)> {
         if let Some(session_key) = SessionKey::generate_complete(&self.key, remote_id, dh_bytes) {
-            let remote_pk =
-                RemotePublic(self.peer.clone(), session_key.out_bytes(&self.key.public()));
+            let remote_pk = RemotePublic(self.peer.clone(), session_key.out_bytes());
             Some((session_key, remote_pk))
         } else {
             None

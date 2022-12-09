@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha3::{Digest, Keccak256};
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::io::Result;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -16,10 +17,9 @@ pub const PEER_ID_LENGTH: usize = 20;
 
 impl PeerId {
     pub fn short_show(&self) -> String {
+        let s = self.to_hex();
         let mut new_hex = String::new();
-        let s = hex::encode(&self.0);
-        new_hex.push_str("0x");
-        new_hex.push_str(&s[0..4]);
+        new_hex.push_str(&s[0..6]);
         new_hex.push_str("...");
         new_hex.push_str(&s[s.len() - 5..]);
         new_hex
@@ -42,24 +42,41 @@ impl PeerId {
         self.0.to_vec()
     }
 
-    pub fn from_hex<S: AsRef<[u8]>>(s: S) -> Result<PeerId> {
-        let bytes = hex::decode(s).map_err(|_e| new_io_error("peer id hex failure."))?;
+    pub fn from_hex(s: &str) -> Result<PeerId> {
+        let raw = if s.starts_with("0x") { &s[2..] } else { s };
+        let bytes = hex::decode(raw).map_err(|_| new_io_error("Invalid hex string"))?;
         if bytes.len() != PEER_ID_LENGTH {
-            return Err(new_io_error("peer id hex failure."));
+            return Err(new_io_error("Invalid address length"));
         }
-        let mut value = [0u8; PEER_ID_LENGTH];
-        value.copy_from_slice(&bytes);
-        Ok(PeerId(value))
+        let mut fixed_bytes = [0u8; PEER_ID_LENGTH];
+        fixed_bytes.copy_from_slice(&bytes);
+        Ok(PeerId(fixed_bytes))
     }
 
     pub fn to_hex(&self) -> String {
-        hex::encode(&self.0)
+        // with checksum encode
+        let hex = hex::encode(self.0);
+
+        let mut hasher = Keccak256::new();
+        hasher.update(hex.as_bytes());
+        let hash = hasher.finalize();
+        let check_hash = hex::encode(&hash);
+
+        let mut res = String::from("0x");
+        for (index, byte) in hex[..PEER_ID_LENGTH * 2].chars().enumerate() {
+            if check_hash.chars().nth(index).unwrap().to_digit(16).unwrap() > 7 {
+                res += &byte.to_uppercase().to_string();
+            } else {
+                res += &byte.to_string();
+            }
+        }
+        res
     }
 }
 
 impl Debug for PeerId {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        write!(f, "0x{}", hex::encode(&self.0))
+        write!(f, "{}", self.to_hex())
     }
 }
 
