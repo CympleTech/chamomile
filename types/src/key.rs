@@ -83,6 +83,10 @@ impl Key {
 }
 
 impl PublicKey {
+    pub fn new(pk: SecpPublicKey) -> Self {
+        Self(pk)
+    }
+
     pub fn peer_id(&self) -> PeerId {
         let public_key = self.0.serialize_uncompressed();
         let mut hasher = Keccak256::new();
@@ -91,6 +95,12 @@ impl PublicKey {
         let mut bytes = [0u8; PEER_ID_LENGTH];
         bytes.copy_from_slice(&result[12..]);
         PeerId(bytes)
+    }
+}
+
+impl SecretKey {
+    pub fn new(sk: SecpSecretKey) -> Self {
+        Self(sk)
     }
 }
 
