@@ -112,6 +112,19 @@ impl Signature {
             .map(Signature)
             .map_err(|_| new_io_error("Invalid signature value"))
     }
+
+    pub fn peer_id(&self, msg: &[u8]) -> std::io::Result<PeerId> {
+        let mut hasher = Keccak256::new();
+        hasher.update(msg);
+        let result = hasher.finalize();
+        let msg = SecpMessage::from_slice(&result).unwrap();
+
+        let secp = Secp256k1::new();
+        let pk = secp
+            .recover_ecdsa(&msg, &self.0)
+            .map_err(|_| new_io_error("Invalid signature"))?;
+        Ok(PublicKey(pk).peer_id())
+    }
 }
 
 impl TryFrom<&str> for PublicKey {

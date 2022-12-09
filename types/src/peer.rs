@@ -1,3 +1,4 @@
+use rand_core::{CryptoRng, RngCore};
 use std::{
     fmt::{Debug, Formatter, Result as FmtResult},
     io::Result,
@@ -41,15 +42,23 @@ fn socket_addr_from_bytes(bytes: &[u8]) -> Result<SocketAddr> {
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub struct Peer {
     pub id: PeerId,
+    pub assist: PeerId,
     pub socket: SocketAddr,
     pub transport: TransportType,
     pub is_pub: bool,
 }
 
-// PEER_ID_LENGTH + SOCKET_ADDR_LENGTH + 2 = 20 + 18 + 2 = 40
-pub const PEER_LENGTH: usize = 40;
+// PEER_ID_LENGTH + ASSIST + SOCKET_ADDR_LENGTH + 2 = 20 + 20 + 18 + 2 = 60
+pub const PEER_LENGTH: usize = 60;
 
 impl Peer {
+    /// generate assist peer id for DHT.
+    pub fn gen_assist<R: CryptoRng + RngCore>(&mut self, rng: &mut R) {
+        let mut bytes = [0u8; 20];
+        rng.fill_bytes(&mut bytes);
+        self.assist = PeerId(bytes);
+    }
+
     /// create peer.
     pub fn new(id: PeerId, socket: SocketAddr, transport: TransportType, is_pub: bool) -> Self {
         Self {
@@ -57,6 +66,7 @@ impl Peer {
             socket,
             transport,
             is_pub,
+            assist: PeerId::default(),
         }
     }
 
@@ -67,6 +77,7 @@ impl Peer {
             id: Default::default(),
             transport: TransportType::QUIC,
             is_pub: true,
+            assist: PeerId::default(),
         }
     }
 
@@ -77,6 +88,7 @@ impl Peer {
             socket: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0),
             transport: TransportType::QUIC,
             is_pub: true,
+            assist: PeerId::default(),
         }
     }
 
@@ -105,11 +117,13 @@ impl Peer {
         }
 
         let id = PeerId::from_bytes(&bytes[0..20])?;
-        let socket = socket_addr_from_bytes(&bytes[20..38])?;
-        let transport = TransportType::from_byte(bytes[38])?;
-        let is_pub = bytes[39] == 1u8;
+        let assist = PeerId::from_bytes(&bytes[20..40])?;
+        let socket = socket_addr_from_bytes(&bytes[40..58])?;
+        let transport = TransportType::from_byte(bytes[58])?;
+        let is_pub = bytes[59] == 1u8;
         Ok(Self {
             id,
+            assist,
             socket,
             transport,
             is_pub,
@@ -118,6 +132,7 @@ impl Peer {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = vec![];
         bytes.append(&mut self.id.to_bytes()); // 20-bytes
+        bytes.append(&mut self.assist.to_bytes()); // 20-bytes
         bytes.append(&mut socket_addr_to_bytes(&self.socket)); // 18-bytes
         bytes.push(self.transport.to_byte()); // 1-bytes
         bytes.push(if self.is_pub { 1u8 } else { 0u8 }); // 1-bytes
@@ -174,6 +189,7 @@ impl Peer {
             is_pub,
             socket,
             transport,
+            assist: PeerId::default(),
         })
     }
 
@@ -200,6 +216,7 @@ impl Peer {
             transport,
             id: Default::default(),
             is_pub: true,
+            assist: PeerId::default(),
         })
     }
 
@@ -229,6 +246,7 @@ impl Default for Peer {
             socket: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0),
             transport: TransportType::TCP,
             is_pub: true,
+            assist: PeerId::default(),
         }
     }
 }

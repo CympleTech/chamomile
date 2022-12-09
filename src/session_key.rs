@@ -12,7 +12,7 @@ use std::io::Result;
 use x25519_dalek::{PublicKey as DH_Public, StaticSecret as DH_Secret};
 
 use chamomile_types::{
-    key::{Key, PublicKey},
+    key::{Key, Signature},
     types::{new_io_error, PeerId},
 };
 
@@ -43,7 +43,7 @@ impl SessionKey {
         let mut rng = ChaChaRng::from_entropy();
         let alice_secret = DH_Secret::new(&mut rng);
         let alice_public = DH_Public::from(&alice_secret);
-        let sign = key.sign(alice_public.as_bytes());
+        let sign = key.sign(alice_public.as_bytes()).to_bytes();
         println!("Alice pk: {:?}", alice_public.as_bytes());
         let mut random_nonce = [0u8; 12];
         rng.fill_bytes(&mut random_nonce);
@@ -51,7 +51,7 @@ impl SessionKey {
         SessionKey {
             sk: alice_secret,
             pk: alice_public,
-            sign: sign,
+            sign,
             is_ok: false,
             cipher: Aes256Gcm::new(GenericArray::from_slice(&[0u8; 32])),
             nonce: random_nonce.into(),
@@ -77,13 +77,12 @@ impl SessionKey {
         let (tmp_nonce, pk_sign) = tmp_nonce_sign.split_at(12);
         println!("tmp_nonce: {:?}", tmp_nonce);
 
-        if let Ok((remote_pk, sign)) = PublicKey::deserialize_pk_and_sign(pk_sign) {
-            // check peer_id
-            if remote_pk.peer_id() != *id {
-                return false;
-            }
+        if let Ok(sign) = Signature::from_bytes(pk_sign) {
+            if let Ok(sid) = sign.peer_id(tmp_pk) {
+                if sid != *id {
+                    return false;
+                }
 
-            if remote_pk.verify(tmp_pk, &sign).is_ok() {
                 let mut pk_bytes = [0u8; 32];
                 println!("bob pk: {:?}", tmp_pk);
                 pk_bytes.copy_from_slice(&tmp_pk);
@@ -106,10 +105,10 @@ impl SessionKey {
         false
     }
 
-    pub fn out_bytes(&self, pk: &PublicKey) -> Vec<u8> {
+    pub fn out_bytes(&self) -> Vec<u8> {
         let mut vec = self.pk.as_bytes().to_vec();
         vec.extend(&self.nonce);
-        vec.extend(&pk.serialize_pk_and_sign(&self.sign));
+        vec.extend(&self.sign);
         vec
     }
 
