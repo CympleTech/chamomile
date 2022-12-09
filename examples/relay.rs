@@ -35,7 +35,7 @@ async fn main() {
             println!("sleep 3s and then start stable connection...");
             tokio::time::sleep(Duration::from_secs(2)).await;
             let peer_id_str = args().nth(3).unwrap();
-            let peer_id = PeerId::from_hex(peer_id_str).unwrap(); // test peer_id
+            let peer_id = PeerId::from_hex(&peer_id_str).unwrap(); // test peer_id
 
             let mut bytes = vec![];
             for i in 0..10u8 {
