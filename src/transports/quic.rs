@@ -149,6 +149,7 @@ async fn run_self_recv(
             }
             TransportSendMessage::Stop => {
                 task.abort();
+                endpoint.close(0u8.into(), &[]);
                 break;
             }
         }
