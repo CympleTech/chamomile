@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
+use socket2::Socket;
+use std::net::{SocketAddr, UdpSocket};
 use std::{sync::Arc, time::Duration};
 use structopt::StructOpt;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -25,7 +26,18 @@ pub async fn start(
 ) -> tokio::io::Result<SocketAddr> {
     let config = InternalConfig::try_from_config(Default::default()).unwrap();
 
-    let endpoint = quinn::Endpoint::server(config.server.clone(), bind_addr).unwrap();
+    let udp_socket = UdpSocket::bind(&bind_addr)?;
+    let socket = Socket::from(udp_socket);
+    socket.set_reuse_address(true)?;
+    let new_udp_socket: UdpSocket = socket.into();
+
+    let endpoint = quinn::Endpoint::new(
+        Default::default(),
+        Some(config.server.clone()),
+        new_udp_socket,
+        quinn::TokioRuntime,
+    )
+    .unwrap();
     let addr = endpoint.local_addr()?;
     info!("QUIC listening at: {:?}", addr);
 
@@ -89,7 +101,6 @@ async fn dht_connect_to(
     session_key: SessionKey,
 ) -> Result<()> {
     let conn = connect_to(connect, remote_pk).await?;
-
     let (self_sender, self_receiver) = new_endpoint_channel();
     let (out_sender, out_receiver) = new_endpoint_channel();
 
