@@ -1,5 +1,6 @@
 use rand_core::{CryptoRng, RngCore};
 use secp256k1::{
+    constants::ONE,
     ecdsa::{RecoverableSignature, RecoveryId},
     Message as SecpMessage, PublicKey as SecpPublicKey, Secp256k1, SecretKey as SecpSecretKey,
 };
@@ -37,7 +38,7 @@ impl Key {
     }
 
     pub fn default() -> Self {
-        let sec_key = SecretKey(secp256k1::ONE_KEY);
+        let sec_key = SecretKey(SecpSecretKey::from_slice(&ONE).unwrap());
         Self::from_sec_key(sec_key)
     }
 
