@@ -15,6 +15,7 @@ members = [
 ]
 
 [dependencies]
+chamomile_types = { version = "0.10", path = "./types" }
 aes-gcm = "0.10"
 bit-vec = "0.6"
 bytes = {version = "1.1", features = ["serde"] }
@@ -30,11 +31,6 @@ tracing = "0.1"
 tokio = { version = "1", features = ["full"] }
 webpki = "0.22"
 zeroize = { version = "1", features = ["zeroize_derive"] }
-
-chamomile_types = { version = "0.10", path = "./types" }
-
-[dependencies.x25519-dalek]
-git = "https://github.com/cympletech/x25519-dalek"
 
 [dev-dependencies]
 console-subscriber = "0.1"

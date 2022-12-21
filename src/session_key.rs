@@ -1,31 +1,21 @@
-use aes_gcm::aead::{
-    generic_array::{typenum::U12, GenericArray},
-    Aead,
-};
+use aes_gcm::aead::{generic_array::GenericArray, Aead};
 use aes_gcm::{Aes256Gcm, KeyInit};
-use rand_chacha::{
-    rand_core::{RngCore, SeedableRng},
-    ChaChaRng,
-};
-
-use std::io::Result;
-use x25519_dalek::{PublicKey as DH_Public, StaticSecret as DH_Secret};
-
 use chamomile_types::{
-    key::{Key, Signature},
+    key::secp256k1::{PublicKey, Secp256k1, SecretKey},
+    key::{Key, Signature, PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH},
     types::{new_io_error, PeerId},
 };
+use rand_chacha::{rand_core::SeedableRng, ChaChaRng};
+use std::io::Result;
 
 //#[derive(Zeroize)]
 pub struct SessionKey {
-    sk: DH_Secret,
-    pk: DH_Public,
-    sign: Vec<u8>,
+    /// Random secret key for this session
+    sk: SecretKey,
+    /// The session key is success
     is_ok: bool,
     /// 256-bit key (random key from DH key)
     cipher: Aes256Gcm,
-    /// 96-bit nonce (random key, when first handshake. only use this session.)
-    nonce: GenericArray<u8, U12>,
 }
 
 /// Simple DH on 25519 to get AES-256 session key.
@@ -39,88 +29,76 @@ impl SessionKey {
         self.is_ok
     }
 
-    pub fn generate(key: &Key) -> SessionKey {
+    pub fn generate(key: &Key) -> (SessionKey, Vec<u8>) {
         let mut rng = ChaChaRng::from_entropy();
-        let alice_secret = DH_Secret::new(&mut rng);
-        let alice_public = DH_Public::from(&alice_secret);
-        let sign = key.sign(alice_public.as_bytes()).to_bytes();
-        println!("Alice pk: {:?}", alice_public.as_bytes());
-        let mut random_nonce = [0u8; 12];
-        rng.fill_bytes(&mut random_nonce);
+        let sk = SecretKey::new(&mut rng);
+        let pk = sk.public_key(&Secp256k1::new());
+        let mut pk_bytes = pk.serialize().to_vec();
+        let sign = key.sign(&pk_bytes);
+        pk_bytes.extend(sign.to_bytes());
 
-        SessionKey {
-            sk: alice_secret,
-            pk: alice_public,
-            sign,
-            is_ok: false,
-            cipher: Aes256Gcm::new(GenericArray::from_slice(&[0u8; 32])),
-            nonce: random_nonce.into(),
-        }
+        (
+            SessionKey {
+                sk,
+                is_ok: false,
+                cipher: Aes256Gcm::new(GenericArray::from_slice(&[0u8; 32])),
+            },
+            pk_bytes,
+        )
     }
 
-    pub fn generate_complete(key: &Key, id: &PeerId, dh_bytes: Vec<u8>) -> Option<SessionKey> {
-        let mut session = Self::generate(key);
+    pub fn generate_complete(
+        key: &Key,
+        id: &PeerId,
+        dh_bytes: Vec<u8>,
+    ) -> Option<(SessionKey, Vec<u8>)> {
+        let (mut session, bytes) = Self::generate(key);
         if session.complete(id, dh_bytes) {
-            Some(session)
+            Some((session, bytes))
         } else {
             None
         }
     }
 
     pub fn complete(&mut self, id: &PeerId, remote_dh: Vec<u8>) -> bool {
-        // pk_sign_len + 32 (dh_pub) + 12 (nonce)
-        if remote_dh.len() < 45 {
+        // pk_bytes (33) + sign_bytes (68)
+        if remote_dh.len() != PUBLIC_KEY_LENGTH + SIGNATURE_LENGTH {
             return false;
         }
 
-        let (tmp_pk, tmp_nonce_sign) = remote_dh.split_at(32);
-        let (tmp_nonce, pk_sign) = tmp_nonce_sign.split_at(12);
-        println!("tmp_nonce: {:?}", tmp_nonce);
-
-        if let Ok(sign) = Signature::from_bytes(pk_sign) {
-            if let Ok(sid) = sign.peer_id(tmp_pk) {
-                if sid != *id {
-                    return false;
+        let (tmp_pk, tmp_sign) = remote_dh.split_at(PUBLIC_KEY_LENGTH);
+        match (
+            PublicKey::from_slice(tmp_pk),
+            Signature::from_bytes(tmp_sign),
+        ) {
+            (Ok(pk), Ok(sign)) => {
+                if let Ok(new_id) = sign.peer_id(tmp_pk) {
+                    if new_id != *id {
+                        return false;
+                    }
+                    if let Ok(dh) = pk.mul_tweak(&Secp256k1::new(), &self.sk.into()) {
+                        self.cipher =
+                            Aes256Gcm::new(GenericArray::from_slice(&dh.serialize()[0..32]));
+                        self.is_ok = true;
+                        return true;
+                    }
                 }
-
-                let mut pk_bytes = [0u8; 32];
-                println!("bob pk: {:?}", tmp_pk);
-                pk_bytes.copy_from_slice(&tmp_pk);
-                let bob_public: DH_Public = pk_bytes.into();
-                let c_bytes = self.sk.diffie_hellman(&bob_public);
-                println!("c_bytes: {:?}", c_bytes.as_bytes());
-                self.cipher = Aes256Gcm::new(GenericArray::from_slice(
-                    //self.sk.diffie_hellman(&bob_public).as_bytes(),
-                    c_bytes.as_bytes(),
-                ));
-                let mut nonce_bytes = [0u8; 12];
-                nonce_bytes.copy_from_slice(tmp_nonce);
-                self.nonce = nonce_bytes.into();
-                self.is_ok = true;
-
-                return true;
             }
+            _ => {}
         }
 
         false
     }
 
-    pub fn out_bytes(&self) -> Vec<u8> {
-        let mut vec = self.pk.as_bytes().to_vec();
-        vec.extend(&self.nonce);
-        vec.extend(&self.sign);
-        vec
-    }
-
     pub fn encrypt(&self, msg: Vec<u8>) -> Vec<u8> {
-        self.cipher
-            .encrypt(&self.nonce, msg.as_ref())
-            .unwrap_or(vec![])
+        let nonce = GenericArray::from_slice(&[0u8; 12]);
+        self.cipher.encrypt(&nonce, msg.as_ref()).unwrap_or(vec![])
     }
 
     pub fn decrypt(&self, msg: Vec<u8>) -> Result<Vec<u8>> {
+        let nonce = GenericArray::from_slice(&[0u8; 12]);
         self.cipher
-            .decrypt(&self.nonce, msg.as_ref())
+            .decrypt(&nonce, msg.as_ref())
             .map_err(|_e| new_io_error("decrypt failure."))
     }
 }
