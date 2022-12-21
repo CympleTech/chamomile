@@ -339,16 +339,25 @@ pub async fn start_with_key(
                     let results = peer_list_lock.get(&to.id);
                     if results.is_none() {
                         drop(peer_list_lock);
-                        warn!("CHAMOMILE: CANNOT REACH NETWORK.");
-                        if tid != 0 {
-                            let _ = global
-                                .out_send(ReceiveMessage::Delivery(
-                                    DeliveryType::StableConnect,
-                                    tid,
-                                    false,
-                                    delivery_split!(data, delivery_length),
-                                ))
-                                .await;
+                        if to.effective_socket() {
+                            debug!("Outside: StableConnect start new connection with IP.");
+                            let delivery = delivery_split!(data, global.delivery_length);
+                            let g = global.clone();
+                            tokio::spawn(async move {
+                                let _ = direct_stable(tid, delivery, to, g, recv_data, false).await;
+                            });
+                        } else {
+                            warn!("CHAMOMILE: CANNOT REACH NETWORK.");
+                            if tid != 0 {
+                                let _ = global
+                                    .out_send(ReceiveMessage::Delivery(
+                                        DeliveryType::StableConnect,
+                                        tid,
+                                        false,
+                                        delivery_split!(data, delivery_length),
+                                    ))
+                                    .await;
+                            }
                         }
                         continue;
                     }
