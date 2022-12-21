@@ -68,7 +68,7 @@ pub(crate) async fn direct_stable(
     {
         // 3.1.1 if ok connected. keep it and update to stable.
         let remote_id = remote_peer.id;
-        if !to.effective_id() && remote_id != to.id {
+        if to.effective_id() && remote_id != to.id {
             warn!("CHAMOMILE: STABLE CONNECT FAILURE UNKNOWN PEER.");
             return Err(new_io_error("session stable unknown peer."));
         }
