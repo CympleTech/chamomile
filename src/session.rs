@@ -847,7 +847,6 @@ impl Session {
             EndpointMessage::DHT(DHT(peers)) => {
                 if peers.len() > 0 {
                     for p in peers {
-                        println!("=== SYNC DHT: {} - {}", p.id.to_hex(), p.assist.to_hex());
                         if self.is_own_remote(&p) {
                             let new_g = self.global.clone();
                             own_spawn(p, new_g);

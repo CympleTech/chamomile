@@ -1,18 +1,23 @@
+//! Test the permissioned message.
+//! Runing 3-node: 1 (relay - S), 2 (stable - A, B)
+//! A: `cargo run --example permissioned 127.0.0.1:8000`
+//! B: `cargo run --example permissioned 127.0.0.1:8001 127.0.0.1:8000`
+//! C: `cargo run --example permissioned 127.0.0.1:8002 127.0.0.1:8000`
+
 use chamomile::prelude::{start, Config, Peer, ReceiveMessage, SendMessage};
 use std::{env::args, net::SocketAddr};
 
 #[tokio::main]
 async fn main() {
+    std::env::set_var("RUST_LOG", "debug");
     tracing_subscriber::fmt::init();
 
-    let self_addr: SocketAddr = args()
-        .nth(1)
-        .expect("missing path")
-        .parse()
-        .expect("invalid addr");
+    let addr_str = args().nth(1).expect("missing path");
+    let self_addr: SocketAddr = addr_str.parse().expect("invalid addr");
 
     let mut config = Config::default(Peer::socket(self_addr));
     config.permission = true;
+    config.db_dir = std::path::PathBuf::from(format!(".data/permissioned/{}", addr_str));
 
     let (peer_id, send, mut recv) = start(config).await.unwrap();
     println!("peer id: {}", peer_id.to_hex());

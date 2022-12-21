@@ -1,7 +1,5 @@
 /target
 **/*.rs.bk
 Cargo.lock
-tmp
 p2p
-demos
-log.txt
+.data

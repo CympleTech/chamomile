@@ -1,9 +1,16 @@
+//! Test the permissionless message.
+//! Runing 3-node: 1 (relay - S), 2 (dht - A, B)
+//! A: `cargo run --example permissionless 127.0.0.1:8000`
+//! B: `cargo run --example permissionless 127.0.0.1:8001 127.0.0.1:8000`
+//! C: `cargo run --example permissionless 127.0.0.1:8002 127.0.0.1:8000`
+
 use chamomile::prelude::{start, Broadcast, Config, Peer, ReceiveMessage, SendMessage};
 use std::{env::args, net::SocketAddr, time::Duration};
 
 #[tokio::main]
 async fn main() {
     std::env::set_var("RUST_LOG", "debug");
+
     //console_subscriber::init();
     tracing_subscriber::fmt::init();
 
@@ -18,7 +25,7 @@ async fn main() {
     let mut config = Config::default(peer);
     config.permission = false; // Permissionless.
     config.only_stable_data = false; // Receive all peer's data.
-    config.db_dir = std::path::PathBuf::from(addr_str);
+    config.db_dir = std::path::PathBuf::from(format!(".data/permissionless/{}", addr_str));
 
     let (peer_id, send, mut recv) = start(config).await.unwrap();
     println!("peer id: {}", peer_id.to_hex());
