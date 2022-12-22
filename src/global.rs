@@ -12,7 +12,7 @@ use chamomile_types::{
     Peer, PeerId,
 };
 
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, BufferKey};
 use crate::kad::KadValue;
 use crate::peer_list::PeerList;
 use crate::session_key::SessionKey;
@@ -106,9 +106,15 @@ impl Global {
             .map_err(|_e| new_io_error("Outside missing"))
     }
 
-    pub async fn add_tmp(&self, p: PeerId, k: KadValue, d: bool) -> Vec<(u64, Vec<u8>)> {
+    pub async fn add_tmp(
+        &self,
+        p: PeerId,
+        buffer: BufferKey,
+        k: KadValue,
+        d: bool,
+    ) -> Vec<(u64, Vec<u8>)> {
         let mut buffer_lock = self.buffer.write().await;
-        let stables = buffer_lock.remove_connect(&p);
+        let stables = buffer_lock.remove_connect(buffer);
         buffer_lock.add_tmp(p, k, d);
         drop(buffer_lock);
         stables
@@ -121,7 +127,7 @@ impl Global {
         is_direct: bool,
     ) -> (Vec<(u64, Vec<u8>)>, Vec<(u64, Vec<u8>)>) {
         let mut buffer_lock = self.buffer.write().await;
-        let connects = buffer_lock.remove_connect(&peer_id);
+        let connects = buffer_lock.remove_connect(BufferKey::Peer(peer_id));
         let results = buffer_lock.remove_result(&peer_id);
         buffer_lock.add_tmp(peer_id, kv, is_direct);
         drop(buffer_lock);

@@ -8,11 +8,17 @@ use crate::kad::KadValue;
 use crate::session::SessionMessage;
 use crate::transports::EndpointMessage;
 
+#[derive(Hash, Eq, PartialEq, Clone)]
+pub enum BufferKey {
+    Peer(PeerId),
+    Addr(SocketAddr),
+}
+
 pub(crate) struct Buffer {
     /// queue for connect to ip addr. if has one, not send aggin.
     dhts: HashMap<SocketAddr, bool>,
     /// queue for stable connect to peer id. if has one, add to queue buffer.
-    connects: HashMap<PeerId, (bool, Vec<(u64, Vec<u8>)>)>,
+    connects: HashMap<BufferKey, (bool, Vec<(u64, Vec<u8>)>)>,
     /// queue for stable result to peer id. if has one, add to queue buffer.
     results: HashMap<PeerId, (bool, Vec<(u64, Vec<u8>)>)>,
     /// tmp stable waiting outside to stable result. 60s if no-ok, close it.
@@ -42,18 +48,19 @@ impl Buffer {
         self.dhts.remove(ip);
     }
 
-    pub fn add_connect(&mut self, peer_id: PeerId, tid: u64, data: Vec<u8>) -> bool {
-        if let Some(v) = self.connects.get_mut(&peer_id) {
+    /// Result is already had or none.
+    pub fn add_connect(&mut self, key: BufferKey, tid: u64, data: Vec<u8>) -> bool {
+        if let Some(v) = self.connects.get_mut(&key) {
             v.1.push((tid, data));
             true
         } else {
-            self.connects.insert(peer_id, (false, vec![(tid, data)]));
+            self.connects.insert(key, (false, vec![(tid, data)]));
             false
         }
     }
 
-    pub fn remove_connect(&mut self, peer_id: &PeerId) -> Vec<(u64, Vec<u8>)> {
-        self.connects.remove(peer_id).map(|v| v.1).unwrap_or(vec![])
+    pub fn remove_connect(&mut self, key: BufferKey) -> Vec<(u64, Vec<u8>)> {
+        self.connects.remove(&key).map(|v| v.1).unwrap_or(vec![])
     }
 
     pub fn add_result(&mut self, peer_id: PeerId, tid: u64, data: Vec<u8>) -> bool {
@@ -71,7 +78,7 @@ impl Buffer {
     }
 
     pub fn remove_stable(&mut self, peer_id: &PeerId) {
-        self.connects.remove(peer_id);
+        self.connects.remove(&BufferKey::Peer(*peer_id));
         self.results.remove(peer_id);
     }
 
@@ -111,7 +118,7 @@ impl Buffer {
         let mut connect_deletes = vec![];
         for (id, (t, _)) in self.connects.iter_mut() {
             if *t {
-                connect_deletes.push(*id);
+                connect_deletes.push(id.clone());
             } else {
                 *t = true; // checked.
             }
