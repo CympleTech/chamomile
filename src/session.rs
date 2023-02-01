@@ -922,7 +922,7 @@ impl Session {
                             .peer_list
                             .read()
                             .await
-                            .next_closest(&to, &self.remote_peer.id)
+                            .next_closest(&to, &[self.remote_peer.id, self.remote_peer.assist])
                         {
                             let _ = sender.send(SessionMessage::RelayData(from, to, data)).await;
                         } else {
@@ -1011,7 +1011,7 @@ impl Session {
                             .peer_list
                             .read()
                             .await
-                            .next_closest(&to, &self.remote_peer.id)
+                            .next_closest(&to, &[self.remote_peer.id, self.remote_peer.assist])
                         {
                             let _ = sender
                                 .send(SessionMessage::RelayConnect(from_peer, to))
