@@ -13,6 +13,6 @@ edition = "2021"
 hex = "0.4"
 rand_core = "0.6"
 sha3 = "0.10"
-secp256k1 = { version = "0.26", features = ["recovery", "rand"] }
+secp256k1 = { version = "0.27", features = ["recovery", "rand"] }
 serde = { version = "1.0", default-features = false, features = ["alloc", "derive"]}
 tokio = { version = "1", features = ["sync"] }
