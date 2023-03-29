@@ -23,7 +23,7 @@ quinn = "0.9"
 quinn-proto = "0.9"
 rand_chacha = "0.3"
 rcgen = "0.10"
-rustls = { version = "0.20", features = ["dangerous_configuration"] }
+rustls = { version = "0.21", features = ["dangerous_configuration"] }
 serde = { version = "1.0", features = ["derive"] }
 socket2 = "0.5"
 structopt = "0.3"
