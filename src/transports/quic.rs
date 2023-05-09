@@ -309,6 +309,7 @@ async fn process_stream(
     let _ = join!(a, b);
 
     info!("close stream: {}", addr);
+    conn.close(0u8.into(), &[]);
     Ok(())
 }
 
