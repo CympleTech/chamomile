@@ -35,7 +35,7 @@ pub async fn start(
         Default::default(),
         Some(config.server.clone()),
         new_udp_socket,
-        quinn::TokioRuntime,
+        Arc::new(quinn::TokioRuntime),
     )
     .unwrap();
     let addr = endpoint.local_addr()?;
@@ -201,7 +201,7 @@ async fn process_stream(
                     );
                     Err(())
                 }
-                Ok(recv) => {
+                Ok(mut recv) => {
                     if let Ok(bytes) = recv.read_to_end(SIZE_LIMIT).await {
                         if let Ok(EndpointMessage::Handshake(remote_pk)) =
                             EndpointMessage::from_bytes(bytes)
@@ -295,7 +295,7 @@ async fn process_stream(
                     );
                     break;
                 }
-                Ok(recv) => {
+                Ok(mut recv) => {
                     if let Ok(bytes) = recv.read_to_end(SIZE_LIMIT).await {
                         if let Ok(msg) = EndpointMessage::from_bytes(bytes) {
                             let _ = out_sender.send(msg).await;
