@@ -19,7 +19,7 @@ chamomile_types = { version = "0.10", path = "./types" }
 aes-gcm = "0.10"
 bit-vec = "0.6"
 bytes = {version = "1.1", features = ["serde"] }
-quinn = "0.9"
+quinn = "0.10"
 quinn-proto = "0.10"
 rand_chacha = "0.3"
 rcgen = "0.10"
