@@ -16,6 +16,9 @@ mod udt;
 use crate::hole_punching::{Hole, DHT};
 use crate::session_key::SessionKey;
 
+/// waiting for connect time
+pub const CONNECTING_WAITING: u64 = 20; // 20s
+
 /// new a channel for send TransportSendMessage.
 pub fn new_transport_send_channel() -> (Sender<TransportSendMessage>, Receiver<TransportSendMessage>)
 {

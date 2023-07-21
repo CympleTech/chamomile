@@ -1,15 +1,20 @@
 use serde::{Deserialize, Serialize};
 use socket2::Socket;
-use std::net::{SocketAddr, UdpSocket};
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    net::{SocketAddr, UdpSocket},
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use structopt::StructOpt;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::{io::Result, join, select, task::JoinHandle};
+use tokio::{io::Result, join, select, sync::RwLock, task::JoinHandle};
 
 use crate::session_key::SessionKey;
 
 use super::{
-    new_endpoint_channel, EndpointMessage, RemotePublic, TransportRecvMessage, TransportSendMessage,
+    new_endpoint_channel, EndpointMessage, RemotePublic, TransportRecvMessage,
+    TransportSendMessage, CONNECTING_WAITING,
 };
 
 const DOMAIN: &str = "chamomile.quic";
@@ -59,6 +64,7 @@ pub async fn start(
                                 self_receiver,
                                 OutType::DHT(out_send.clone(), self_sender, out_receiver),
                                 None,
+                                None,
                             ));
                         }
                     }
@@ -99,6 +105,7 @@ async fn dht_connect_to(
     out_send: Sender<TransportRecvMessage>,
     remote_pk: RemotePublic,
     session_key: SessionKey,
+    connectiongs: Arc<RwLock<HashMap<SocketAddr, Instant>>>,
 ) -> Result<()> {
     let conn = connect_to(connect, remote_pk).await?;
     let (self_sender, self_receiver) = new_endpoint_channel();
@@ -110,6 +117,7 @@ async fn dht_connect_to(
         self_receiver,
         OutType::DHT(out_send, self_sender, out_receiver),
         Some(session_key),
+        Some(connectiongs),
     )
     .await
 }
@@ -119,9 +127,20 @@ async fn stable_connect_to(
     out_sender: Sender<EndpointMessage>,
     self_receiver: Receiver<EndpointMessage>,
     remote_pk: RemotePublic,
+    connectiongs: Arc<RwLock<HashMap<SocketAddr, Instant>>>,
 ) -> Result<()> {
     match connect_to(connect, remote_pk).await {
-        Ok(conn) => process_stream(conn, out_sender, self_receiver, OutType::Stable, None).await,
+        Ok(conn) => {
+            process_stream(
+                conn,
+                out_sender,
+                self_receiver,
+                OutType::Stable,
+                None,
+                Some(connectiongs),
+            )
+            .await
+        }
         Err(_) => {
             let _ = out_sender.send(EndpointMessage::Close).await;
             Ok(())
@@ -136,9 +155,23 @@ async fn run_self_recv(
     out_send: Sender<TransportRecvMessage>,
     task: JoinHandle<()>,
 ) -> Result<()> {
+    let connecting: Arc<RwLock<HashMap<SocketAddr, Instant>>> =
+        Arc::new(RwLock::new(HashMap::new()));
     while let Some(m) = recv.recv().await {
         match m {
             TransportSendMessage::Connect(addr, remote_pk, session_key) => {
+                let read_lock = connecting.read().await;
+                if let Some(time) = read_lock.get(&addr) {
+                    if time.elapsed().as_secs() < CONNECTING_WAITING {
+                        drop(read_lock);
+                        continue;
+                    }
+                }
+                drop(read_lock);
+                let mut lock = connecting.write().await;
+                lock.insert(addr, Instant::now());
+                drop(lock);
+
                 let connect = endpoint.connect_with(client_cfg.clone(), addr, DOMAIN);
                 info!("QUIC dht connect to: {:?}", addr);
                 tokio::spawn(dht_connect_to(
@@ -146,9 +179,22 @@ async fn run_self_recv(
                     out_send.clone(),
                     remote_pk,
                     session_key,
+                    connecting.clone(),
                 ));
             }
             TransportSendMessage::StableConnect(out_sender, self_receiver, addr, remote_pk) => {
+                let read_lock = connecting.read().await;
+                if let Some(time) = read_lock.get(&addr) {
+                    if time.elapsed().as_secs() < CONNECTING_WAITING {
+                        drop(read_lock);
+                        continue;
+                    }
+                }
+                drop(read_lock);
+                let mut lock = connecting.write().await;
+                lock.insert(addr, Instant::now());
+                drop(lock);
+
                 let connect = endpoint.connect_with(client_cfg.clone(), addr, DOMAIN);
                 info!("QUIC stable connect to: {:?}", addr);
                 tokio::spawn(stable_connect_to(
@@ -156,6 +202,7 @@ async fn run_self_recv(
                     out_sender,
                     self_receiver,
                     remote_pk,
+                    connecting.clone(),
                 ));
             }
             TransportSendMessage::Stop => {
@@ -184,6 +231,7 @@ async fn process_stream(
     mut self_receiver: Receiver<EndpointMessage>,
     out_type: OutType,
     has_session: Option<SessionKey>,
+    connectiongs: Option<Arc<RwLock<HashMap<SocketAddr, Instant>>>>,
 ) -> tokio::io::Result<()> {
     let addr = conn.remote_address();
 
@@ -254,6 +302,13 @@ async fn process_stream(
                     std::io::Error::new(std::io::ErrorKind::Other, "server channel missing")
                 })?;
         }
+    }
+
+    if let Some(connectiongs) = connectiongs {
+        let mut lock = connectiongs.write().await;
+        lock.remove(&addr);
+        drop(lock);
+        drop(connectiongs);
     }
 
     let conn_send = conn.clone();
