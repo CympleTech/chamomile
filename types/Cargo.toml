@@ -1,6 +1,6 @@
 [package]
 name = "chamomile_types"
-version = "0.10.5"
+version = "0.10.6"
 authors = ["Dev <dev@cympletech.com>"]
 readme = "README.md"
 description = "Another P2P Library. Support IoT devices."
