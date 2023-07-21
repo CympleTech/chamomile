@@ -1,17 +1,21 @@
-use std::net::SocketAddr;
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Instant};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, Result},
     join,
     net::{TcpListener, TcpStream},
     select,
-    sync::mpsc::{Receiver, Sender},
+    sync::{
+        mpsc::{Receiver, Sender},
+        RwLock,
+    },
     task::JoinHandle,
 };
 
 use crate::session_key::SessionKey;
 
 use super::{
-    new_endpoint_channel, EndpointMessage, RemotePublic, TransportRecvMessage, TransportSendMessage,
+    new_endpoint_channel, EndpointMessage, RemotePublic, TransportRecvMessage,
+    TransportSendMessage, CONNECTING_WAITING,
 };
 
 /// Init and run a TcpEndpoint object.
@@ -56,6 +60,7 @@ async fn run_listen(listener: TcpListener, out_send: Sender<TransportRecvMessage
             self_receiver,
             OutType::DHT(out_send.clone(), self_sender, out_receiver),
             None,
+            None,
         ));
     }
 }
@@ -65,9 +70,25 @@ async fn run_self_recv(
     out_send: Sender<TransportRecvMessage>,
     task: Option<JoinHandle<Result<()>>>,
 ) -> Result<()> {
+    let connecting: Arc<RwLock<HashMap<SocketAddr, Instant>>> =
+        Arc::new(RwLock::new(HashMap::new()));
+
     while let Some(m) = recv.recv().await {
         match m {
             TransportSendMessage::Connect(addr, remote_pk, session_key) => {
+                let read_lock = connecting.read().await;
+                if let Some(time) = read_lock.get(&addr) {
+                    if time.elapsed().as_secs() < CONNECTING_WAITING {
+                        drop(read_lock);
+                        continue;
+                    }
+                }
+                drop(read_lock);
+                let mut lock = connecting.write().await;
+                lock.insert(addr, Instant::now());
+                drop(lock);
+                let new_connecting = connecting.clone();
+
                 let server_send = out_send.clone();
                 tokio::spawn(async move {
                     if let Ok(mut stream) = TcpStream::connect(addr).await {
@@ -85,6 +106,7 @@ async fn run_self_recv(
                             self_receiver,
                             OutType::DHT(server_send, self_sender, out_receiver),
                             Some(session_key),
+                            Some(new_connecting),
                         )
                         .await;
                     } else {
@@ -93,6 +115,19 @@ async fn run_self_recv(
                 });
             }
             TransportSendMessage::StableConnect(out_sender, self_receiver, addr, remote_pk) => {
+                let read_lock = connecting.read().await;
+                if let Some(time) = read_lock.get(&addr) {
+                    if time.elapsed().as_secs() < CONNECTING_WAITING {
+                        drop(read_lock);
+                        continue;
+                    }
+                }
+                drop(read_lock);
+                let mut lock = connecting.write().await;
+                lock.insert(addr, Instant::now());
+                drop(lock);
+                let new_connecting = connecting.clone();
+
                 tokio::spawn(async move {
                     if let Ok(mut stream) = TcpStream::connect(addr).await {
                         info!("TCP stable connect to {:?}", addr);
@@ -106,6 +141,7 @@ async fn run_self_recv(
                             self_receiver,
                             OutType::Stable,
                             None,
+                            Some(new_connecting),
                         )
                         .await;
                     } else {
@@ -141,6 +177,7 @@ async fn process_stream(
     mut self_receiver: Receiver<EndpointMessage>,
     out_type: OutType,
     has_session: Option<SessionKey>,
+    connectiongs: Option<Arc<RwLock<HashMap<SocketAddr, Instant>>>>,
 ) -> Result<()> {
     let addr = stream.peer_addr()?;
     let (mut reader, mut writer) = stream.split();
@@ -194,6 +231,13 @@ async fn process_stream(
     }
 
     let remote_pk = handshake.unwrap(); // safe. checked.
+
+    if let Some(connectiongs) = connectiongs {
+        let mut lock = connectiongs.write().await;
+        lock.remove(&addr);
+        drop(lock);
+        drop(connectiongs);
+    }
 
     match out_type {
         OutType::Stable => {

@@ -157,6 +157,7 @@ async fn run_self_recv(
 ) -> Result<()> {
     let connecting: Arc<RwLock<HashMap<SocketAddr, Instant>>> =
         Arc::new(RwLock::new(HashMap::new()));
+
     while let Some(m) = recv.recv().await {
         match m {
             TransportSendMessage::Connect(addr, remote_pk, session_key) => {
