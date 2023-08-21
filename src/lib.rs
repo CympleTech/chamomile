@@ -92,7 +92,7 @@ pub mod prelude {
     pub use chamomile_types::message::{
         DeliveryType, ReceiveMessage, SendMessage, StateRequest, StateResponse, StreamType,
     };
-    pub use chamomile_types::types::{Broadcast, PeerId};
+    pub use chamomile_types::types::{Broadcast, PeerId, TransportType};
     pub use chamomile_types::Peer;
 
     use tokio::{

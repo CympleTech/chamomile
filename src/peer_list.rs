@@ -30,7 +30,9 @@ impl PeerList {
     pub async fn save(&self) {
         let mut file_string = String::new();
         for addr in &self.allows {
-            file_string = format!("{}\n{}", file_string, addr.to_multiaddr_string());
+            if addr.effective_socket() {
+                file_string = format!("{}\n{}", file_string, addr.to_multiaddr_string());
+            }
         }
         let _ = fs::write(&self.save_path, file_string).await;
     }

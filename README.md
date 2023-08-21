@@ -1,4 +1,4 @@
-[![crate](https://img.shields.io/badge/crates.io-v0.10.6-green.svg)](https://crates.io/crates/chamomile) [![doc](https://img.shields.io/badge/docs.rs-v0.10.6-blue.svg)](https://docs.rs/chamomile)
+[![crate](https://img.shields.io/badge/crates.io-v0.10.7-green.svg)](https://crates.io/crates/chamomile) [![doc](https://img.shields.io/badge/docs.rs-v0.10.7-blue.svg)](https://docs.rs/chamomile)
 
 # Chamomile
 *Build a robust stable connection on p2p network*
