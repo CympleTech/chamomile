@@ -1,6 +1,6 @@
 [package]
 name = "chamomile"
-version = "0.10.7"
+version = "0.12.0"
 authors = ["Dev <dev@cympletech.com>"]
 readme = "README.md"
 description = "Another P2P Library. Support IoT devices."
@@ -14,24 +14,29 @@ members = [
     "types",
 ]
 
+[features]
+default = []
+quic = ["quinn", "quinn-proto", "rcgen", "rustls", "structopt"]
+rtp = []
+udt = []
+
 [dependencies]
-chamomile_types = { version = "0.10", path = "./types" }
+chamomile_types = { version = "0.12", path = "./types" }
 aes-gcm = "0.10"
 bit-vec = "0.6"
-bytes = {version = "1.1", features = ["serde"] }
-quinn = "0.10"
-quinn-proto = "0.10"
+bytes = { version = "1.1", features = ["serde"] }
 rand_chacha = "0.3"
-rcgen = "0.11"
-rustls = { version = "0.21", features = ["dangerous_configuration"] }
 serde = { version = "1.0", features = ["derive"] }
 socket2 = "0.5"
-structopt = "0.3"
-thiserror = "1.0"
 tracing = "0.1"
 tokio = { version = "1", features = ["full"] }
-webpki = "0.22"
 zeroize = { version = "1", features = ["zeroize_derive"] }
+
+quinn = { version = "0.10", optional = true }
+quinn-proto = { version = "0.10", optional = true }
+rcgen = { version = "0.11", optional = true }
+rustls = { version = "0.21", features = ["dangerous_configuration"], optional = true }
+structopt = { version = "0.3", optional = true }
 
 [dev-dependencies]
 console-subscriber = "0.2"

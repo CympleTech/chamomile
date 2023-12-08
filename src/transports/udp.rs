@@ -1,15 +1,10 @@
 use rand::{thread_rng, RngCore};
-use smol::{
-    channel::{Receiver, Sender},
-    io::{BufReader, Result},
-    lock::Mutex,
-    net::UdpSocket,
-    prelude::*,
-};
+
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::select;
+use tokio::{net::UdpSocket, sync::mpsc};
 
 use super::{new_channel, new_stream_channel, EndpointMessage, StreamMessage};
 
@@ -25,31 +20,27 @@ pub struct UdpEndpoint {
     streams: HashMap<SocketAddr, Sender<StreamMessage>>,
 }
 
-// TODO how to connected
-// TODO how to connected verify
+/// Init and run a UdpEndpoint object.
+/// You need send a socketaddr str and udp send message's addr,
+/// and receiver outside message addr.
+async fn start(
+    bind_addr: SocketAddr,
+    send: Sender<TransportRecvMessage>,
+    recv: Receiver<TransportSendMessage>,
+    both: bool,
+) -> Result<Sender<EndpointMessage>> {
+    let socket: Arc<UdpSocket> = Arc::new(UdpSocket::bind(bind_addr).await?);
+    let (send, recv) = new_channel();
+    let endpoint = UdpEndpoint {
+        streams: HashMap::new(),
+    };
 
-#[async_trait]
-impl UdpEndpoint {
-    /// Init and run a UdpEndpoint object.
-    /// You need send a socketaddr str and udp send message's addr,
-    /// and receiver outside message addr.
-    async fn start(
-        socket_addr: SocketAddr,
-        out_send: Sender<EndpointMessage>,
-    ) -> Result<Sender<EndpointMessage>> {
-        let socket: Arc<UdpSocket> = Arc::new(UdpSocket::bind(socket_addr).await?);
-        let (send, recv) = new_channel();
-        let endpoint = UdpEndpoint {
-            streams: HashMap::new(),
-        };
+    let m1 = Arc::new(Mutex::new(endpoint));
+    let m2 = m1.clone();
 
-        let m1 = Arc::new(Mutex::new(endpoint));
-        let m2 = m1.clone();
-
-        smol::spawn(run_self_recv(socket.clone(), recv));
-        smol::spawn(run_listen(socket, out_send, m2));
-        Ok(send)
-    }
+    smol::spawn(run_self_recv(socket.clone(), recv));
+    smol::spawn(run_listen(socket, out_send, m2));
+    Ok(send)
 }
 
 /// Listen for outside send job.

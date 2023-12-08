@@ -59,7 +59,7 @@ impl Key {
         let mut hasher = Keccak256::new();
         hasher.update(msg);
         let result = hasher.finalize();
-        let msg = SecpMessage::from_slice(&result).unwrap();
+        let msg = SecpMessage::from_digest_slice(&result).unwrap();
         let secp = Secp256k1::new();
         let sign = secp.sign_ecdsa_recoverable(&msg, &self.sec_key.0);
         Signature(sign)
@@ -138,7 +138,7 @@ impl Signature {
         let mut hasher = Keccak256::new();
         hasher.update(msg);
         let result = hasher.finalize();
-        let msg = SecpMessage::from_slice(&result).unwrap();
+        let msg = SecpMessage::from_digest_slice(&result).unwrap();
 
         let secp = Secp256k1::new();
         let pk = secp

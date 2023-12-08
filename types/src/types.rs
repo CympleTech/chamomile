@@ -90,28 +90,31 @@ pub enum Broadcast {
 /// Transports types support by Endpoint.
 #[derive(Debug, Copy, Clone, Hash, Deserialize, Serialize, Eq, PartialEq)]
 pub enum TransportType {
-    QUIC, // 0u8
-    TCP,  // 1u8
-    RTP,  // 2u8
-    UDT,  // 3u8
+    TCP,  // 0u8
+    UDP,  // 1u8
+    QUIC, // 2u8
+    RTP,  // 3u8
+    UDT,  // 4u8
 }
 
 impl TransportType {
     /// transports from parse from str.
     pub fn from_str(s: &str) -> Self {
         match s {
-            "quic" => TransportType::QUIC,
             "tcp" => TransportType::TCP,
+            "udp" => TransportType::UDP,
+            "quic" => TransportType::QUIC,
             "rtp" => TransportType::RTP,
             "udt" => TransportType::UDT,
-            _ => TransportType::QUIC,
+            _ => TransportType::TCP,
         }
     }
 
     pub fn to_str<'a>(&self) -> &'a str {
         match self {
-            TransportType::QUIC => "quic",
+            TransportType::UDP => "udp",
             TransportType::TCP => "tcp",
+            TransportType::QUIC => "quic",
             TransportType::RTP => "rtp",
             TransportType::UDT => "udt",
         }
@@ -119,20 +122,22 @@ impl TransportType {
 
     pub fn from_byte(b: u8) -> Result<Self> {
         match b {
-            0u8 => Ok(TransportType::QUIC),
-            1u8 => Ok(TransportType::TCP),
-            2u8 => Ok(TransportType::RTP),
-            3u8 => Ok(TransportType::UDT),
+            0u8 => Ok(TransportType::TCP),
+            1u8 => Ok(TransportType::UDP),
+            2u8 => Ok(TransportType::QUIC),
+            3u8 => Ok(TransportType::RTP),
+            4u8 => Ok(TransportType::UDT),
             _ => Err(new_io_error("transport bytes failure.")),
         }
     }
 
     pub fn to_byte(&self) -> u8 {
         match self {
-            TransportType::QUIC => 0u8,
-            TransportType::TCP => 1u8,
-            TransportType::RTP => 2u8,
-            TransportType::UDT => 3u8,
+            TransportType::TCP => 0u8,
+            TransportType::UDP => 1u8,
+            TransportType::QUIC => 2u8,
+            TransportType::RTP => 3u8,
+            TransportType::UDT => 4u8,
         }
     }
 }

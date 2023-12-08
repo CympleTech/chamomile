@@ -7,10 +7,16 @@ use chamomile_types::{
     types::{new_io_error, PeerId, TransportType, PEER_ID_LENGTH},
 };
 
-mod rtp;
 mod tcp;
 //mod udp;
+
+#[cfg(feature = "quic")]
 mod quic;
+
+#[cfg(feature = "rtp")]
+mod rtp;
+
+#[cfg(feature = "udt")]
 mod udt;
 
 use crate::hole_punching::{Hole, DHT};
@@ -104,8 +110,9 @@ pub async fn start(
     };
 
     let local_addr = match peer.transport {
-        //&TransportType::UDP => udp::UdpEndpoint::start(addr, recv_send, send_recv).await?,
         TransportType::TCP => tcp::start(peer.socket, recv_send, send_recv, both).await?,
+        // &TransportType::UDP => udp::UdpEndpoint::start(addr, recv_send, send_recv).await?,
+        #[cfg(feature = "quic")]
         TransportType::QUIC => quic::start(peer.socket, recv_send, send_recv, both).await?,
         _ => panic!("Not suppert, waiting"),
     };
