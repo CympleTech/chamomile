@@ -106,12 +106,12 @@ pub mod prelude {
 
     /// new a channel for send message to the chamomile.
     pub fn new_send_channel() -> (Sender<SendMessage>, Receiver<SendMessage>) {
-        mpsc::channel(128)
+        mpsc::channel(1024)
     }
 
     /// new a channel for receive the chamomile message.
     pub fn new_receive_channel() -> (Sender<ReceiveMessage>, Receiver<ReceiveMessage>) {
-        mpsc::channel(128)
+        mpsc::channel(1024)
     }
 
     /// main function. start a p2p service.

@@ -1073,7 +1073,7 @@ pub(crate) enum SessionMessage {
 
 /// new a channel for send message to session.
 pub(crate) fn new_session_channel() -> (Sender<SessionMessage>, Receiver<SessionMessage>) {
-    mpsc::channel(128)
+    mpsc::channel(1024)
 }
 
 /// core data transfer and encrypted.
