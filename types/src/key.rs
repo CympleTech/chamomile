@@ -137,7 +137,7 @@ impl Signature {
             RecoveryId::Three => 3u8,
         };
         let mut bytes = fixed.to_vec();
-        bytes.push(id);
+        bytes.push(id + 27); // Compatible with eth
         bytes
     }
 
@@ -194,7 +194,7 @@ impl TryFrom<&str> for PublicKey {
     type Error = std::io::Error;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        let bytes = hex::decode(s).map_err(|_| new_io_error("Invalid public key hex"))?;
+        let bytes = hex::decode(s.trim_start_matches("0x")).map_err(|_| new_io_error("Invalid public key hex"))?;
         if bytes.len() != PUBLIC_KEY_LENGTH {
             return Err(new_io_error("Invalid public key length"));
         }
@@ -207,7 +207,7 @@ impl TryFrom<&str> for PublicKey {
 
 impl ToString for PublicKey {
     fn to_string(&self) -> String {
-        hex::encode(self.0.serialize())
+        format!("0x{}", hex::encode(self.0.serialize()))
     }
 }
 
@@ -215,7 +215,7 @@ impl TryFrom<&str> for SecretKey {
     type Error = std::io::Error;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        let bytes = hex::decode(s).map_err(|_| new_io_error("Invalid secret key hex"))?;
+        let bytes = hex::decode(s.trim_start_matches("0x")).map_err(|_| new_io_error("Invalid secret key hex"))?;
         if bytes.len() != SECRET_KEY_LENGTH {
             return Err(new_io_error("Invalid secret key length"));
         }
@@ -228,6 +228,60 @@ impl TryFrom<&str> for SecretKey {
 
 impl ToString for SecretKey {
     fn to_string(&self) -> String {
-        hex::encode(self.0.secret_bytes())
+        format!("0x{}", hex::encode(self.0.secret_bytes()))
+    }
+}
+
+impl TryFrom<&str> for Signature {
+    type Error = std::io::Error;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        let bytes = hex::decode(s.trim_start_matches("0x")).map_err(|_| new_io_error("Invalid secret key hex"))?;
+        if bytes.len() != SIGNATURE_LENGTH {
+            return Err(new_io_error("Invalid secret key length"));
+        }
+        Signature::from_bytes(&bytes)
+    }
+}
+
+impl ToString for Signature {
+    fn to_string(&self) -> String {
+        format!("0x{}", hex::encode(self.to_bytes()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SK_HEX: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+    const PEER_ID_HEX: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+    const MESSAGE: &str = "thisismessage";
+    const SIGN_HEX: &str = "0xff68207a1c9ea9446d77e727d230ee8e591df27d7eac17807b5231a57a44ec46213a2cb25520c51ff0b6de68914d9828ab5ee762014e92866e9e1cc8fdfe25721b";
+
+    #[test]
+    fn test_key() {
+        let peer_id1 = PeerId::from_hex(PEER_ID_HEX).unwrap().to_bytes();
+        let sk = SecretKey::try_from(SK_HEX).unwrap();
+        assert_eq!(sk.to_string().as_str(), SK_HEX);
+        let key = Key::from_sec_key(sk);
+        let peer_id = key.peer_id().to_bytes();
+        assert_eq!(peer_id1, peer_id);
+    }
+
+    #[test]
+    fn test_signature() {
+        let peer_id = PeerId::from_hex(PEER_ID_HEX).unwrap();
+        let key = Key::from_sec_key(SecretKey::try_from(SK_HEX).unwrap());
+        let sign = key.sign_eth(MESSAGE.as_bytes());
+        let sign_bytes = sign.to_bytes();
+        let sign2 = Signature::from_bytes(&sign_bytes).unwrap();
+        let peer_id2 = sign2.peer_id_eth(MESSAGE.as_bytes()).unwrap();
+        assert_eq!(peer_id, peer_id2);
+
+        let sign3 = Signature::try_from(SIGN_HEX).unwrap();
+        assert_eq!(sign3.to_string().as_str(), SIGN_HEX);
+        let peer_id3 = sign3.peer_id_eth(MESSAGE.as_bytes()).unwrap();
+        assert_eq!(peer_id, peer_id3);
     }
 }
