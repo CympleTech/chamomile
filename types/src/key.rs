@@ -12,7 +12,7 @@ use crate::types::{new_io_error, PeerId, PEER_ID_LENGTH};
 
 pub const SECRET_KEY_LENGTH: usize = 32;
 pub const PUBLIC_KEY_LENGTH: usize = 33;
-pub const SIGNATURE_LENGTH: usize = 68;
+pub const SIGNATURE_LENGTH: usize = 65;
 
 /// Public Key
 #[derive(Clone)]
@@ -59,10 +59,24 @@ impl Key {
         let mut hasher = Keccak256::new();
         hasher.update(msg);
         let result = hasher.finalize();
-        let msg = SecpMessage::from_slice(&result).unwrap();
+        let msg = SecpMessage::from_digest(result.into());
         let secp = Secp256k1::new();
         let sign = secp.sign_ecdsa_recoverable(&msg, &self.sec_key.0);
         Signature(sign)
+    }
+
+    pub fn sign_eth(&self, message: &[u8]) -> Signature {
+        const PREFIX: &str = "\x19Ethereum Signed Message:\n";
+
+        let len = message.len();
+        let len_string = len.to_string();
+
+        let mut eth_message = Vec::with_capacity(PREFIX.len() + len_string.len() + len);
+        eth_message.extend_from_slice(PREFIX.as_bytes());
+        eth_message.extend_from_slice(len_string.as_bytes());
+        eth_message.extend_from_slice(message);
+
+        self.sign(&eth_message)
     }
 
     pub fn to_db_bytes(&self) -> Vec<u8> {
@@ -116,20 +130,34 @@ impl SecretKey {
 impl Signature {
     pub fn to_bytes(&self) -> Vec<u8> {
         let (recv, fixed) = self.0.serialize_compact();
-        let mut bytes = recv.to_i32().to_le_bytes().to_vec();
-        bytes.extend(&fixed);
+        let id = match recv {
+            RecoveryId::Zero => 0u8,
+            RecoveryId::One => 1u8,
+            RecoveryId::Two => 2u8,
+            RecoveryId::Three => 3u8,
+        };
+        let mut bytes = fixed.to_vec();
+        bytes.push(id);
         bytes
     }
 
     pub fn from_bytes(bytes: &[u8]) -> std::io::Result<Signature> {
-        if bytes.len() != SIGNATURE_LENGTH {
+        let bytes_len = bytes.len();
+        if bytes_len != SIGNATURE_LENGTH {
             return Err(new_io_error("Invalid signature length"));
         }
-        let mut fixed = [0u8; 4];
-        fixed.copy_from_slice(&bytes[..4]);
-        let id = i32::from_le_bytes(fixed);
-        let recv = RecoveryId::from_i32(id).map_err(|_| new_io_error("Invalid signature value"))?;
-        RecoverableSignature::from_compact(&bytes[4..], recv)
+
+        let id = match bytes[64] {
+            // Case 0: raw/bare
+            v @ 0..=26 => v % 4,
+            // Case 2: non-eip155 v value
+            v @ 27..=34 => (v - 27) % 4,
+            // Case 3: eip155 V value
+            v @ 35.. => (v - 1) % 2,
+        };
+
+        let recv = RecoveryId::try_from(id as i32).map_err(|_| new_io_error("Invalid signature value"))?;
+        RecoverableSignature::from_compact(&bytes[..64], recv)
             .map(Signature)
             .map_err(|_| new_io_error("Invalid signature value"))
     }
@@ -138,13 +166,27 @@ impl Signature {
         let mut hasher = Keccak256::new();
         hasher.update(msg);
         let result = hasher.finalize();
-        let msg = SecpMessage::from_slice(&result).unwrap();
+        let msg = SecpMessage::from_digest(result.into());
 
         let secp = Secp256k1::new();
         let pk = secp
             .recover_ecdsa(&msg, &self.0)
             .map_err(|_| new_io_error("Invalid signature"))?;
         Ok(PublicKey(pk).peer_id())
+    }
+
+    pub fn peer_id_eth(self, message: &[u8]) -> std::io::Result<PeerId> {
+        const PREFIX: &str = "\x19Ethereum Signed Message:\n";
+
+        let len = message.len();
+        let len_string = len.to_string();
+
+        let mut eth_message = Vec::with_capacity(PREFIX.len() + len_string.len() + len);
+        eth_message.extend_from_slice(PREFIX.as_bytes());
+        eth_message.extend_from_slice(len_string.as_bytes());
+        eth_message.extend_from_slice(message);
+
+        self.peer_id(&eth_message)
     }
 }
 
