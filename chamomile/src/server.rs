@@ -2,13 +2,14 @@ use rand_chacha::{
     rand_core::{RngCore, SeedableRng},
     ChaChaRng,
 };
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
     fs,
     io::Result,
     select,
     sync::mpsc::{Receiver, Sender},
     sync::RwLock,
+    time::interval,
 };
 
 use chamomile_types::{
@@ -171,19 +172,24 @@ pub async fn start_with_key(
             Clear,
             Check,
         }
+
+        // Check Timer: every 10s to check network. (read only).
+        let mut check_interval = interval(Duration::from_secs(10));
+
+        // Clear Timer: every 60s to check buffer.
+        let mut clear_interval = interval(Duration::from_secs(60));
+
         loop {
             let futres = select! {
                 v = async {
                     trans_recv.recv().await.map(|msg| FutureResult::Trans(msg))
                 } => v,
                 v = async {
-                    // Check Timer: every 10s to check network. (read only).
-                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    check_interval.tick().await;
                     Some(FutureResult::Check)
                 } => v,
                 v = async {
-                    // Clear Timer: every 60s to check buffer.
-                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    clear_interval.tick().await;
                     Some(FutureResult::Clear)
                 } => v,
             };

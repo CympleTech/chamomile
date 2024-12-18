@@ -1,9 +1,9 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
     io::Result,
     select,
     sync::mpsc::{self, Receiver, Sender},
+    time::{interval, sleep},
 };
 
 use chamomile_types::{
@@ -225,7 +225,7 @@ pub(crate) async fn relay_stable(
         v = session_receiver
             .recv() => v,
         v = async {
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(10)).await;
             None
         } => v
     };
@@ -683,6 +683,12 @@ impl Session {
     }
 
     async fn forever(&mut self, mut session_receiver: Receiver<SessionMessage>) -> Result<()> {
+        // 2s to check connection is actived
+        let mut heatbeat_interval = interval(Duration::from_secs(2));
+
+        // 60s to check all connection channels is ok.
+        let mut robust_interval = interval(Duration::from_secs(60));
+
         loop {
             let res = select! {
                 v = async {
@@ -699,12 +705,11 @@ impl Session {
                 } => v,
 
                 v = async {
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    heatbeat_interval.tick().await;
                     Some(FutureResult::HeartBeat)
                 } => v,
                 v = async {
-                    // 60s to check all connection channels is ok.
-                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    robust_interval.tick().await;
                     Some(FutureResult::Robust)
                 } => v,
             };
